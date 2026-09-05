@@ -22,6 +22,7 @@ from backend.domain import (
     ToolSpec,
     UserMessage,
 )
+from backend.domain.runtime_state import RuntimeState as TurnState
 from backend.planning.context_management import ContextManager
 from backend.planning.llm import LLMPlanner
 from backend.planning.llm.requests import COMPACTION_INSTRUCTION
@@ -32,6 +33,7 @@ from backend.runtime.core.config import RunnerSettings
 from backend.runtime.core.context import AgentRuntime, PreparedResponse
 from backend.runtime.core.events import CHECKPOINT_EVENT_KINDS, RuntimeEvent
 from backend.storage.sqlite import SQLiteSessionStore
+from backend.storage.todo_list import MemoryTodoListStore
 from backend.tools import ToolRegistry
 
 STRUCTURED_CHECKPOINT = """## Primary Request and Intent
@@ -174,6 +176,47 @@ def test_automatic_compaction_keeps_active_message_unchanged() -> None:
     assert runtime.state.active_message is active
     assert active.tool_messages[0].status == "pending"
     assert runtime.state.messages[-1] == UserMessage(content="current")
+
+
+def test_automatic_compaction_includes_current_todo_snapshot_in_the_triggering_request() -> None:
+    original = [
+        UserMessage(content="old"),
+        AssistantMessage(content="answer"),
+        UserMessage(content="current"),
+    ]
+    runtime = runtime_for(original, turn_start_index=2)
+    turn = TurnState.create(
+        session_id=runtime.state.session_id,
+        thread_id=runtime.state.session_id,
+        id="turn-current",
+        user_content="current",
+    )
+    runtime.run.turn_id = turn.id
+    runtime.services.runtime_node_context = lambda: [turn]
+    todo_store = MemoryTodoListStore()
+    runtime.services.todo_store = todo_store
+    added = todo_store.update(
+        session_id=runtime.state.session_id,
+        turn_id=turn.id,
+        call_id="todo-add",
+        expected_revision=0,
+        operations=[{"op": "add", "content": "continue after compaction", "status": "in_progress"}],
+    )
+
+    messages = ContextManager(FakeEstimator([100, 20])).prepare(
+        runtime,
+        SystemMessage(content="system"),
+        history=original,
+        summarize=lambda _transcript: "summary",
+    )
+
+    completed = next(event for event in runtime_events(runtime) if event.kind == "context_compaction_completed")
+    target_turn_id = completed.data["target_turn_id"]
+    assert completed.data["todo_revision"] == added.snapshot.revision
+    assert isinstance(messages[1], SystemMessage)
+    assert "continue after compaction" in (messages[1].content or "")
+    assert added.snapshot.todos[0].id in (messages[1].content or "")
+    assert target_turn_id in (messages[1].content or "")
 
 
 def test_summary_failure_keeps_original_history_and_records_failure() -> None:

@@ -13,6 +13,7 @@ from backend.domain import (
     RunState,
     SkillSnapshot,
     SystemMessage,
+    TodoStateError,
     ToolSpec,
     TracePersistenceError,
     UserMessage,
@@ -24,6 +25,7 @@ from backend.runtime import AgentRunner, ConversationService
 from backend.runtime.core.context import AgentRuntime, PreparedResponse
 from backend.runtime.core.events import RuntimeEvent
 from backend.runtime.node_bridge import RuntimeEventNodeBridge
+from backend.storage.todo_list import MemoryTodoListStore
 from backend.tools import ToolRegistry
 from tests.local_store import session_store
 
@@ -94,6 +96,217 @@ def bound_bridge(runtime: AgentRuntime, store: object, turn: TurnState) -> Runti
     bridge.bind_runtime(runtime)
     bridge.start()
     return bridge
+
+
+def test_automatic_compaction_moves_runtime_and_todo_to_the_compaction_turn(tmp_path: Path) -> None:
+    runtime, store, turn = bound_runtime(tmp_path, user_content="continue")
+    todo_store = MemoryTodoListStore()
+    runtime.services.todo_store = todo_store
+    added = todo_store.update(
+        session_id=turn.session_id,
+        turn_id=turn.id,
+        call_id="todo-add",
+        expected_revision=0,
+        operations=[{"op": "add", "content": "finish after compaction", "status": "in_progress"}],
+    )
+    assert todo_store.claim_finalization(turn.session_id, turn.id) is True
+    bridge = bound_bridge(runtime, store, turn)
+
+    bridge.handle(
+        RuntimeEvent(
+            "context_compaction_completed",
+            "Conversation context compacted automatically",
+            {
+                "trigger": "automatic",
+                "summary": "checkpoint",
+                "target_turn_id": "turn-compacted",
+                "todo_revision": added.snapshot.revision,
+            },
+        )
+    )
+
+    compacted = store.find_node("turn-compacted")
+    assert isinstance(compacted, TurnState)
+    assert runtime.run.turn_id == compacted.id
+    assert runtime.run.data_idx == compacted.current_data_idx
+    assert runtime.services.turn_trace_initialized is False
+    assert todo_store.snapshot(turn.session_id, compacted.id) == added.snapshot
+    assert todo_store.finalization_claimed(turn.session_id, compacted.id) is True
+    assert [item["type"] for item in compacted.assistant_items[:2]] == ["compaction", "todo_snapshot"]
+    todo_item = compacted.assistant_items[1]
+    assert todo_item["source_turn_id"] == turn.id
+    assert todo_item["target_turn_id"] == compacted.id
+    assert todo_item["todos"] == [todo.to_dict() for todo in added.snapshot.todos]
+    projected = runtime.model_messages()
+    assert any(
+        isinstance(message, UserMessage)
+        and added.snapshot.todos[0].id in (message.content or "")
+        and "finish after compaction" in (message.content or "")
+        for message in projected
+    )
+    persisted_runtime = store.load_runtime(turn.session_id)
+    assert persisted_runtime is not None and persisted_runtime.current_run is not None
+    assert persisted_runtime.current_run.turn_id == compacted.id
+
+    bridge.handle(
+        RuntimeEvent(
+            "context_compaction_completed",
+            "Conversation context compacted automatically",
+            {
+                "trigger": "automatic",
+                "summary": "second checkpoint",
+                "target_turn_id": "turn-compacted-again",
+                "todo_revision": added.snapshot.revision,
+            },
+        )
+    )
+
+    compacted_again = store.find_node("turn-compacted-again")
+    assert isinstance(compacted_again, TurnState)
+    assert [item["type"] for item in compacted_again.assistant_items].count("todo_snapshot") == 1
+    assert compacted_again.assistant_items[1]["type"] == "todo_snapshot"
+    assert todo_store.snapshot(turn.session_id, compacted_again.id) == added.snapshot
+
+
+def test_automatic_compaction_expires_copied_todo_when_node_creation_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TrackingTodoStore(MemoryTodoListStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.expired: list[tuple[str, str]] = []
+
+        def expire_turn(self, session_id: str, turn_id: str) -> None:
+            self.expired.append((session_id, turn_id))
+
+    runtime, store, turn = bound_runtime(tmp_path, user_content="continue")
+    todo_store = TrackingTodoStore()
+    runtime.services.todo_store = todo_store
+    added = todo_store.update(
+        session_id=turn.session_id,
+        turn_id=turn.id,
+        call_id="todo-add",
+        expected_revision=0,
+        operations=[{"op": "add", "content": "preserve source", "status": "pending"}],
+    )
+    bridge = bound_bridge(runtime, store, turn)
+
+    def fail_create(*_args, **_kwargs):
+        raise RuntimeError("node persistence failed")
+
+    monkeypatch.setattr(store, "create_compact_turn", fail_create)
+
+    with pytest.raises(RuntimeError, match="node persistence failed"):
+        bridge.handle(
+            RuntimeEvent(
+                "context_compaction_completed",
+                "Conversation context compacted automatically",
+                {
+                    "trigger": "automatic",
+                    "summary": "checkpoint",
+                    "target_turn_id": "turn-failed-target",
+                    "todo_revision": added.snapshot.revision,
+                },
+            )
+        )
+
+    assert runtime.run.turn_id == turn.id
+    assert store.find_node("turn-failed-target") is None
+    assert todo_store.snapshot(turn.session_id, turn.id) == added.snapshot
+    assert todo_store.expired == [(turn.session_id, "turn-failed-target")]
+
+
+def test_automatic_compaction_copy_failure_keeps_the_source_turn_and_todo(tmp_path: Path) -> None:
+    class FailingCopyTodoStore(MemoryTodoListStore):
+        def copy_for_compaction(self, *_args, **_kwargs):
+            raise TodoStateError("storage_unavailable", "copy failed")
+
+    runtime, store, turn = bound_runtime(tmp_path, user_content="continue")
+    todo_store = FailingCopyTodoStore()
+    runtime.services.todo_store = todo_store
+    added = todo_store.update(
+        session_id=turn.session_id,
+        turn_id=turn.id,
+        call_id="todo-add",
+        expected_revision=0,
+        operations=[{"op": "add", "content": "preserve source", "status": "pending"}],
+    )
+    bridge = bound_bridge(runtime, store, turn)
+
+    with pytest.raises(TodoStateError, match="copy failed"):
+        bridge.handle(
+            RuntimeEvent(
+                "context_compaction_completed",
+                "Conversation context compacted automatically",
+                {
+                    "trigger": "automatic",
+                    "summary": "checkpoint",
+                    "target_turn_id": "turn-copy-failed",
+                    "todo_revision": added.snapshot.revision,
+                },
+            )
+        )
+
+    assert runtime.run.turn_id == turn.id
+    assert store.find_node("turn-copy-failed") is None
+    assert todo_store.snapshot(turn.session_id, turn.id) == added.snapshot
+    assert todo_store.snapshot(turn.session_id, "turn-copy-failed").revision == 0
+
+
+def test_manual_compaction_does_not_copy_or_switch_the_active_todo_turn(tmp_path: Path) -> None:
+    runtime, store, turn = bound_runtime(tmp_path, user_content="continue")
+    todo_store = MemoryTodoListStore()
+    runtime.services.todo_store = todo_store
+    added = todo_store.update(
+        session_id=turn.session_id,
+        turn_id=turn.id,
+        call_id="todo-add",
+        expected_revision=0,
+        operations=[{"op": "add", "content": "stay on the source Turn", "status": "pending"}],
+    )
+    bridge = bound_bridge(runtime, store, turn)
+
+    bridge.handle(
+        RuntimeEvent(
+            "context_compaction_completed",
+            "Conversation context compacted manually",
+            {"trigger": "manual", "summary": "manual checkpoint"},
+        )
+    )
+
+    compacted = bridge.last_node
+    assert isinstance(compacted, TurnState)
+    assert compacted.id != turn.id
+    assert all(item["type"] != "todo_snapshot" for item in compacted.assistant_items)
+    assert runtime.run.turn_id == turn.id
+    assert todo_store.snapshot(turn.session_id, turn.id) == added.snapshot
+    assert todo_store.snapshot(turn.session_id, compacted.id).revision == 0
+
+
+def test_automatic_compaction_without_initialized_todo_does_not_insert_snapshot(tmp_path: Path) -> None:
+    runtime, store, turn = bound_runtime(tmp_path, user_content="continue")
+    todo_store = MemoryTodoListStore()
+    runtime.services.todo_store = todo_store
+    bridge = bound_bridge(runtime, store, turn)
+
+    bridge.handle(
+        RuntimeEvent(
+            "context_compaction_completed",
+            "Conversation context compacted automatically",
+            {
+                "trigger": "automatic",
+                "summary": "checkpoint without Todo",
+                "target_turn_id": "turn-without-todo",
+            },
+        )
+    )
+
+    compacted = store.find_node("turn-without-todo")
+    assert isinstance(compacted, TurnState)
+    assert all(item["type"] != "todo_snapshot" for item in compacted.assistant_items)
+    assert runtime.run.turn_id == compacted.id
+    assert todo_store.snapshot(turn.session_id, compacted.id).revision == 0
 
 
 def test_first_decision_initializes_one_redacted_context_and_current_user_item(tmp_path: Path) -> None:

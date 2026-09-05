@@ -25,7 +25,7 @@ from backend.api.session_files.routes import _store_for as session_file_store  #
 from backend.api.session_store import session_store  # noqa: E402
 from backend.api.state import WebAppState  # noqa: E402
 from backend.domain import AssistantMessage, ToolMessage, TurnTrace, TurnTraceContext, TurnTraceItem  # noqa: E402
-from backend.domain.runtime_state import NodeWriter, RuntimeState, terminal_error_payload  # noqa: E402
+from backend.domain.runtime_state import NodeWriter, RuntimeState, new_node_id, terminal_error_payload  # noqa: E402
 from backend.mcp.client import start_external_tools  # noqa: E402
 from backend.mcp.config import McpServerConfig  # noqa: E402
 from backend.planning import LLMPlanner, RuleBasedPlanner  # noqa: E402
@@ -33,6 +33,7 @@ from backend.providers import LLMClient, ModelConfig  # noqa: E402
 from backend.runtime import AgentRunner, build_application  # noqa: E402
 from backend.runtime.application import factory as application_factory  # noqa: E402
 from backend.runtime.core.context import PreparedResponse  # noqa: E402
+from backend.runtime.core.events import RuntimeEvent  # noqa: E402
 from backend.runtime.planning.review import REQUEST_PLAN_REVIEW_NAME  # noqa: E402
 from backend.sandbox import BrokerStatus  # noqa: E402
 from backend.tools import Tool, ToolRegistry, delegation_tools  # noqa: E402
@@ -838,6 +839,56 @@ class CooperativePausePlanner(LLMPlanner):
                 )
             sleep(1.0)
             return AssistantMessage(content="The Todo list completed normally.")
+        if task == "todo automatic compaction":
+            if runtime.run.model_turns == 1:
+                return AssistantMessage(
+                    tool_messages=[
+                        ToolMessage(
+                            name="update_todo_list",
+                            call_id="todo_compaction_running",
+                            arguments={
+                                "expected_revision": 0,
+                                "operations": [
+                                    {
+                                        "op": "add",
+                                        "content": "Continue across automatic compaction",
+                                        "status": "in_progress",
+                                    }
+                                ],
+                            },
+                        )
+                    ]
+                )
+            if runtime.run.model_turns == 2:
+                snapshot = runtime.services.todo_store.snapshot(runtime.state.session_id, runtime.run.turn_id)
+                publish = runtime.services.publish or (lambda _event: None)
+                publish(
+                    RuntimeEvent(
+                        "context_compaction_completed",
+                        "Conversation context compacted automatically",
+                        {
+                            "trigger": "automatic",
+                            "summary": "Todo automatic compaction browser checkpoint",
+                            "target_turn_id": new_node_id(),
+                            "todo_revision": snapshot.revision,
+                        },
+                    )
+                )
+                copied = runtime.services.todo_store.snapshot(runtime.state.session_id, runtime.run.turn_id)
+                sleep(3.0)
+                return AssistantMessage(
+                    tool_messages=[
+                        ToolMessage(
+                            name="update_todo_list",
+                            call_id="todo_compaction_complete",
+                            arguments={
+                                "expected_revision": copied.revision,
+                                "operations": [{"op": "update", "id": copied.todos[0].id, "status": "completed"}],
+                            },
+                        )
+                    ]
+                )
+            return AssistantMessage(content="The Todo survived automatic compaction.")
         if task != "pause and resume":
             return self._rule_planner.decide(runtime)
         if runtime.run.provenance.attempt > 1:

@@ -1,14 +1,28 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChatMessage, TodoItem, ToolEvent } from "../../types";
+import type { ChatMessage, TodoItem, ToolEvent, TurnItem } from "../../types";
 import { SessionTodoPanel, latestTodoList } from "./todoPanel";
 
 const TURN_ID = "turn-current";
 const TODO_ONE = "todo_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TODO_TWO = "todo_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-function message(events: ToolEvent[], sourceNodeId = TURN_ID): ChatMessage {
-  return { id: crypto.randomUUID(), role: "assistant", content: "", events, sourceNodeId };
+function message(events: ToolEvent[], sourceNodeId = TURN_ID, items: TurnItem[] = []): ChatMessage {
+  return { id: crypto.randomUUID(), role: "assistant", content: "", events, items, sourceNodeId };
+}
+
+function todoSnapshot(todos: TodoItem[], targetTurnId = TURN_ID): TurnItem {
+  const counts = { pending: 0, in_progress: 0, completed: 0 };
+  for (const todo of todos) counts[todo.status] += 1;
+  return {
+    type: "todo_snapshot",
+    source_turn_id: "turn-source",
+    target_turn_id: targetTurnId,
+    revision: 2,
+    todos,
+    counts,
+    status: "success",
+  };
 }
 
 function todoCall(callId: string, status = "success"): ToolEvent {
@@ -61,6 +75,18 @@ describe("latestTodoList", () => {
     ];
 
     expect(latestTodoList(messages, TURN_ID)).toEqual(second);
+  });
+
+  it("initializes from a compaction snapshot and lets later authoritative results replace it", () => {
+    const copied: TodoItem[] = [{ id: TODO_ONE, content: "压缩前任务", status: "in_progress" }];
+    const updated: TodoItem[] = [{ id: TODO_ONE, content: "压缩后任务", status: "completed" }];
+    const messages = [
+      message([], TURN_ID, [todoSnapshot(copied)]),
+      message([todoCall("call-2"), todoResult("call-2", updated)]),
+    ];
+
+    expect(latestTodoList(messages, TURN_ID)).toEqual(updated);
+    expect(latestTodoList([message([], TURN_ID, [todoSnapshot(copied, "turn-other")])], TURN_ID)).toBeNull();
   });
 
   it("ignores call arguments, failed results, missing pairs, and ancestor Turns", () => {

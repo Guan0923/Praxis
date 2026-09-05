@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -52,6 +53,19 @@ class TodoSnapshot:
             revision=int(data.get("revision", 0)),
             todos=tuple(TodoItem.from_dict(todo) for todo in raw_todos if isinstance(todo, Mapping)),
         )
+
+
+def todo_snapshot_context(source_turn_id: str, target_turn_id: str, snapshot: TodoSnapshot) -> str:
+    payload = {
+        "source_turn_id": source_turn_id,
+        "target_turn_id": target_turn_id,
+        **snapshot.to_dict(),
+    }
+    return "Current Todo list after automatic context compaction:\n" + json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +128,15 @@ class TodoListStore(Protocol):
     def snapshot(self, session_id: str, turn_id: str) -> TodoSnapshot: ...
 
     def receipt(self, session_id: str, turn_id: str, call_id: str) -> TodoUpdateResult | None: ...
+
+    def copy_for_compaction(
+        self,
+        session_id: str,
+        source_turn_id: str,
+        target_turn_id: str,
+        *,
+        expected_revision: int,
+    ) -> TodoSnapshot | None: ...
 
     def claim_finalization(self, session_id: str, turn_id: str) -> bool: ...
 
@@ -257,4 +280,5 @@ __all__ = [
     "TodoStatus",
     "TodoUpdateResult",
     "apply_todo_operations",
+    "todo_snapshot_context",
 ]

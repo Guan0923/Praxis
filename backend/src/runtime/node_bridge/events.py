@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from math import isfinite
 from typing import Any
 
-from backend.domain import redact_sensitive_text
+from backend.domain import redact_sensitive_text, todo_snapshot_payload
 from backend.domain.runtime_state import RuntimeState, RuntimeStateTree, TerminalErrorCategory
 
 _NETWORK_ERROR_TYPES = frozenset(
@@ -286,7 +286,7 @@ class _EventProjectionMixin:
         elif kind.startswith("subagent_"):
             self._event_item("subagent", kind, message, data)
         elif kind == "context_compaction_completed":
-            self._begin_compact_turn(str(data.get("summary") or message or ""))
+            self._begin_compact_turn(str(data.get("summary") or message or ""), data)
         elif kind in {"cancelled", "run_suspended"}:
             self.finish("paused", message or "Paused by user.", category="user")
         elif kind == "error":
@@ -297,35 +297,86 @@ class _EventProjectionMixin:
                 code=str(data.get("error_type") or self.abort_code),
             )
 
-    def _begin_compact_turn(self, summary: str) -> RuntimeState:
+    def _begin_compact_turn(self, summary: str, data: Mapping[str, Any]) -> RuntimeState:
         source = self.assistant or self.last_node
         if source is None:
             raise RuntimeError("Compaction requires an active Turn.")
         if source.status == "running":
             source = self.writer.finalize(source, "success")
-        creator = getattr(self.store, "create_compact_turn", None)
-        if callable(creator):
-            compacted = creator(source.id, summary, new_turn_id=self.compaction_turn_id)
-            compacted = self.writer.snapshot(compacted)
-        else:
-            compacted = self.writer.create(
-                RuntimeStateTree(self.store.load_nodes(source.session_id)).compact(
-                    source,
-                    summary,
-                    id=self.compaction_turn_id,
+        automatic = data.get("trigger") == "automatic"
+        requested_target = data.get("target_turn_id") if automatic else self.compaction_turn_id
+        target_turn_id = str(requested_target or self.writer.id_factory())
+        todo_store = self.runtime.services.todo_store if self.runtime is not None else None
+        copied_todo = False
+        snapshot_item: dict[str, Any] | None = None
+        try:
+            if automatic and "todo_revision" in data:
+                expected_revision = data.get("todo_revision")
+                if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
+                    raise RuntimeError("Automatic compaction Todo revision is invalid.")
+                if todo_store is None:
+                    raise RuntimeError("Automatic compaction requires the active Todo store.")
+                snapshot = todo_store.copy_for_compaction(
+                    source.session_id,
+                    source.id,
+                    target_turn_id,
+                    expected_revision=expected_revision,
                 )
-            )
-        self.assistant = compacted
-        self.last_node = compacted
-        self.turn_id = compacted.id
-        self.assistant_blocks = compacted.assistant_items
-        self.assistant_message_idx = len(compacted.data[compacted.current_data_idx]) - 1
-        self.protected_item_count = len(self.assistant_blocks)
-        self._stream_item_index = None
-        self._stream_item_type = None
-        self._stream_text = ""
-        self.produced_item = bool(self.assistant_blocks)
-        return compacted
+                if snapshot is None:
+                    raise RuntimeError("Automatic compaction Todo state disappeared before it could be copied.")
+                snapshot_item = todo_snapshot_payload(
+                    source.id,
+                    target_turn_id,
+                    snapshot.to_dict(),
+                )
+                copied_todo = True
+
+            creator = getattr(self.store, "create_compact_turn", None)
+            if callable(creator):
+                create_options: dict[str, Any] = {"new_turn_id": target_turn_id}
+                if snapshot_item is not None:
+                    create_options["todo_snapshot"] = snapshot_item
+                compacted = creator(source.id, summary, **create_options)
+                compacted = self.writer.snapshot(compacted)
+            else:
+                compacted = self.writer.create(
+                    RuntimeStateTree(self.store.load_nodes(source.session_id)).compact(
+                        source,
+                        summary,
+                        id=target_turn_id,
+                        todo_snapshot=snapshot_item,
+                    )
+                )
+
+            self.assistant = compacted
+            self.last_node = compacted
+            self.turn_id = compacted.id
+            self.compaction_turn_id = compacted.id
+            self.assistant_blocks = compacted.assistant_items
+            self.assistant_message_idx = len(compacted.data[compacted.current_data_idx]) - 1
+            self.protected_item_count = len(self.assistant_blocks)
+            self._stream_item_index = None
+            self._stream_item_type = None
+            self._stream_text = ""
+            self.produced_item = bool(self.assistant_blocks)
+
+            if automatic and self.runtime is not None:
+                run = self.runtime.run
+                run.turn_id = compacted.id
+                run.thread_id = compacted.thread_id
+                run.data_idx = compacted.current_data_idx
+                self.runtime.services.turn_trace_initialized = False
+                self.runtime.save()
+                if copied_todo and todo_store is not None:
+                    todo_store.expire_turn(source.session_id, source.id)
+            return compacted
+        except BaseException:
+            if copied_todo and todo_store is not None:
+                try:
+                    todo_store.expire_turn(source.session_id, target_turn_id)
+                except BaseException:
+                    pass
+            raise
 
     def handle_input(self, payload: Mapping[str, Any]) -> None:
         kind = str(payload.get("kind") or "approval")

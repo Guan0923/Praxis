@@ -72,6 +72,7 @@ from .runtime_state import (
     runtime_node_from_dict,
     terminal_error_payload,
     terminal_error_text,
+    todo_snapshot_payload,
     turn_payload,
     utc_iso,
     validate_data,
@@ -120,6 +121,7 @@ from .todo import (
     TodoStatus,
     TodoUpdateResult,
     apply_todo_operations,
+    todo_snapshot_context,
 )
 from .turn_trace import TurnTrace, TurnTraceContext, TurnTraceItem
 
@@ -228,6 +230,8 @@ __all__ = [
     "recoverable",
     "terminal_error_payload",
     "terminal_error_text",
+    "todo_snapshot_payload",
+    "todo_snapshot_context",
     "utc_iso",
     "turn_payload",
     "validate_data",

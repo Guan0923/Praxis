@@ -13,9 +13,11 @@ from backend.domain import (
     CHECKPOINT_PREAMBLE,
     AssistantMessage,
     ChatMessage,
+    TodoSnapshot,
     ToolMessage,
     ToolSpec,
     UserMessage,
+    todo_snapshot_context,
 )
 from backend.domain.file_paths import is_reference_path
 from backend.domain.runtime_state import RuntimeState as RuntimeTreeNode
@@ -162,8 +164,19 @@ def _chat_messages_from_nodes(nodes: Sequence[RuntimeTreeNode]) -> list[ChatMess
 
             blocks = _assistant_items(message.get("content", []))
             summary = next((str(item.get("summary") or "") for item in blocks if item.get("type") == "compaction"), "")
-            if summary:
-                result.append(UserMessage(content=f"{CHECKPOINT_PREAMBLE}\n\n{summary}"))
+            checkpoint_parts = [f"{CHECKPOINT_PREAMBLE}\n\n{summary}"] if summary else []
+            for item in blocks:
+                if item.get("type") != "todo_snapshot":
+                    continue
+                checkpoint_parts.append(
+                    todo_snapshot_context(
+                        str(item.get("source_turn_id") or ""),
+                        str(item.get("target_turn_id") or ""),
+                        TodoSnapshot.from_dict(item),
+                    )
+                )
+            if checkpoint_parts:
+                result.append(UserMessage(content="\n\n".join(checkpoint_parts)))
             text_parts = [str(item.get("text") or "") for item in blocks if item.get("type") in {"text", "bash"}]
             reasoning_parts = [str(item.get("text") or "") for item in blocks if item.get("type") == "reasoning"]
             calls: dict[str, ToolMessage] = {}

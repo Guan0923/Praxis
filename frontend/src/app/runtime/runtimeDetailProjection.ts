@@ -53,7 +53,9 @@ function visibleAssistantItems(turn: RuntimeStateNode, messageIdx = assistantMes
   const items = selected?.[messageIdx]?.role === "assistant" ? selected[messageIdx].content : [];
   if (items[0]?.type !== "compaction") return items;
   const kept = Number(items[0].kept_item_count ?? 0);
-  return items.slice(1 + Math.max(0, kept));
+  const keptEnd = 1 + Math.max(0, kept);
+  if (items[1]?.type !== "todo_snapshot") return items.slice(keptEnd);
+  return [items[1], ...items.slice(keptEnd + 1)];
 }
 
 function isToolApproval(item: TurnItem): boolean {

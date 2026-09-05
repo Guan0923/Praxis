@@ -15,7 +15,9 @@ from backend.domain import (
     SystemMessage,
     ToolSpec,
     UserMessage,
+    new_node_id,
     safe_error_message,
+    todo_snapshot_context,
 )
 from backend.runtime.core.context import AgentRuntime
 from backend.runtime.core.events import RuntimeEvent
@@ -145,6 +147,22 @@ class ContextManager:
             runtime.exchange.context["estimated_input_tokens"] = estimated_before
             return messages
 
+        compaction_turn_id: str | None = None
+        todo_revision: int | None = None
+        checkpoint_suffix = ""
+        if history is not None and runtime.model_nodes():
+            compaction_turn_id = new_node_id()
+            todo_store = runtime.services.todo_store
+            if todo_store is not None and runtime.run.turn_id:
+                snapshot = todo_store.snapshot(runtime.state.session_id, runtime.run.turn_id)
+                if snapshot.revision > 0:
+                    todo_revision = snapshot.revision
+                    checkpoint_suffix = todo_snapshot_context(
+                        runtime.run.turn_id,
+                        compaction_turn_id,
+                        snapshot,
+                    )
+
         summary, compressed, estimated_after = self._summarize_candidate(
             runtime,
             source=completed_history,
@@ -152,6 +170,7 @@ class ContextManager:
             summarize=summarize,
             trigger="automatic",
             estimated_before=estimated_before,
+            checkpoint_suffix=checkpoint_suffix,
             estimate_candidate=lambda candidate: self._estimate_input_tokens(
                 [system, *candidate, *suffix], exposed_tools, parameters
             ),
@@ -183,6 +202,8 @@ class ContextManager:
                 "estimated_tokens_after": estimated_after,
                 "target_tokens": self.target_tokens,
                 "summary": summary,
+                **({"target_turn_id": compaction_turn_id} if compaction_turn_id else {}),
+                **({"todo_revision": todo_revision} if todo_revision is not None else {}),
             },
         )
         runtime.save()
@@ -200,6 +221,7 @@ class ContextManager:
         trigger: str,
         estimated_before: int,
         estimate_candidate: Callable[[list[ChatMessage]], int],
+        checkpoint_suffix: str = "",
     ) -> tuple[str, list[ChatMessage], int]:
         self._record(
             runtime,
@@ -218,10 +240,10 @@ class ContextManager:
             summary = summarize(self._transcript(source)).strip()
             if not summary:
                 raise PlanningError("Context summarization returned no content.")
-            compressed = [
-                SystemMessage(name=_CONTEXT_SUMMARY_NAME, content=f"{CHECKPOINT_PREAMBLE}\n\n{summary}"),
-                *retained,
-            ]
+            checkpoint = f"{CHECKPOINT_PREAMBLE}\n\n{summary}"
+            if checkpoint_suffix:
+                checkpoint = f"{checkpoint}\n\n{checkpoint_suffix}"
+            compressed = [SystemMessage(name=_CONTEXT_SUMMARY_NAME, content=checkpoint), *retained]
             estimated_after = estimate_candidate(compressed)
             if estimated_after > self.target_tokens:
                 raise PlanningError(

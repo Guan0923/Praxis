@@ -485,12 +485,22 @@ class SQLiteNodeMixin:
         anchor.timestamp = utc_iso()
         return TreeRuntimeState.from_dict(anchor.to_dict())
 
-    def create_compact_turn(self, turn_id: str, summary: str, *, new_turn_id: str | None = None) -> TreeRuntimeState:
+    def create_compact_turn(
+        self,
+        turn_id: str,
+        summary: str,
+        *,
+        new_turn_id: str | None = None,
+        todo_snapshot: dict[str, object] | None = None,
+    ) -> TreeRuntimeState:
         source = _require_runtime_turn(self.find_node(turn_id), turn_id)
         if source.status != "success":
             raise ValueError("Only a successful Turn can be compacted.")
         compacted = RuntimeStateTree(self.load_nodes(source.session_id)).compact(
-            source, summary, id=new_turn_id or new_node_id()
+            source,
+            summary,
+            id=new_turn_id or new_node_id(),
+            todo_snapshot=todo_snapshot,
         )
         self.create_node(compacted)
         return compacted

@@ -11,7 +11,7 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
-from backend.domain import CHECKPOINT_PREAMBLE
+from backend.domain import CHECKPOINT_PREAMBLE, TodoSnapshot, todo_snapshot_context
 from backend.domain.runtime_state import (
     RuntimeState,
     RuntimeStateValidationError,
@@ -60,6 +60,17 @@ def _messages(values: Iterable[RuntimeState | Mapping[str, Any]]) -> list[Mappin
             for block in blocks:
                 if block.get("type") == "compaction":
                     rendered.append({"type": "text", "text": f"{CHECKPOINT_PREAMBLE}\n\n{block.get('summary', '')}"})
+                elif block.get("type") == "todo_snapshot":
+                    rendered.append(
+                        {
+                            "type": "text",
+                            "text": todo_snapshot_context(
+                                str(block.get("source_turn_id") or ""),
+                                str(block.get("target_turn_id") or ""),
+                                TodoSnapshot.from_dict(block),
+                            ),
+                        }
+                    )
                 elif block.get("type") == "error":
                     rendered.append({"type": "text", "text": str(block.get("message") or "Execution failed.")})
                 else:

@@ -165,16 +165,25 @@ class RuntimeStateTree:
             raise RuntimeStateValidationError("compactionId is not an ancestor of the Turn.")
         return [turn.clone() for turn in path[matches[-1] :] if isinstance(turn, RuntimeState)]
 
-    def compact(self, source: RuntimeState, summary: str, *, id: str | None = None) -> RuntimeState:
+    def compact(
+        self,
+        source: RuntimeState,
+        summary: str,
+        *,
+        id: str | None = None,
+        todo_snapshot: dict[str, Any] | None = None,
+    ) -> RuntimeState:
         path = self.ancestors(source)
         starts = [index for index, turn in enumerate(path) if turn.id == source.compaction_id]
         if not starts:
             raise RuntimeStateValidationError("compactionId is not an ancestor of the source Turn.")
-        items = self._items(path[starts[-1] :])
+        items = [item for item in self._items(path[starts[-1] :]) if item.get("type") != "todo_snapshot"]
         kept = items[-source.first_kept_item_size :] if source.first_kept_item_size else []
-        data = [
-            [source.user_message, message_payload("assistant", [compaction_payload(summary, kept_items=kept), *kept])]
-        ]
+        compact_items = [compaction_payload(summary, kept_items=kept)]
+        if todo_snapshot is not None:
+            compact_items.append(_clone(todo_snapshot))
+        compact_items.extend(kept)
+        data = [[source.user_message, message_payload("assistant", compact_items)]]
         result = RuntimeState.create(
             session_id=source.session_id,
             thread_id=source.thread_id,

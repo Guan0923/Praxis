@@ -91,6 +91,37 @@ function parseSnapshot(event: ToolEvent, activeTurnId: string): TodoItem[] | nul
   }
 }
 
+function parseCompactionSnapshot(raw: unknown, activeTurnId: string): TodoItem[] | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const snapshot = raw as Record<string, unknown>;
+  if (!hasExactKeys(snapshot, [
+    "type",
+    "source_turn_id",
+    "target_turn_id",
+    "revision",
+    "todos",
+    "counts",
+    "status",
+  ])) return null;
+  if (snapshot.type !== "todo_snapshot" || snapshot.status !== "success") return null;
+  if (snapshot.target_turn_id !== activeTurnId || typeof snapshot.source_turn_id !== "string") return null;
+  if (!Number.isInteger(snapshot.revision) || Number(snapshot.revision) < 1) return null;
+  if (!Array.isArray(snapshot.todos) || snapshot.todos.length > 100) return null;
+  const todos = snapshot.todos.map(parseTodoItem);
+  if (todos.some((todo) => todo === null)) return null;
+  const normalized = todos as TodoItem[];
+  if (new Set(normalized.map((todo) => todo.id)).size !== normalized.length) return null;
+  const counts = snapshot.counts;
+  if (!counts || typeof counts !== "object" || Array.isArray(counts)) return null;
+  const countRecord = counts as Record<string, unknown>;
+  if (!hasExactKeys(countRecord, [...TODO_STATUSES])) return null;
+  for (const status of TODO_STATUSES) {
+    if (!Number.isInteger(countRecord[status])
+      || countRecord[status] !== normalized.filter((todo) => todo.status === status).length) return null;
+  }
+  return normalized;
+}
+
 /** Return only the latest successful authoritative snapshot from the active Turn. */
 export function latestTodoList(messages: ChatMessage[], activeTurnId?: string): TodoItem[] | null {
   if (!activeTurnId) return null;
@@ -98,6 +129,11 @@ export function latestTodoList(messages: ChatMessage[], activeTurnId?: string): 
   let latest: TodoItem[] | null = null;
   for (const message of messages) {
     if (message.role !== "assistant" || message.sourceNodeId !== activeTurnId) continue;
+    for (const item of message.items ?? []) {
+      if (item.type !== "todo_snapshot") continue;
+      const snapshot = parseCompactionSnapshot(item, activeTurnId);
+      if (snapshot !== null) latest = snapshot;
+    }
     for (const event of message.events ?? []) {
       const callId = eventCallId(event);
       if (

@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from math import isfinite
@@ -22,6 +23,7 @@ from uuid import uuid4
 APP_VERSION = "0.0.2"
 DEFAULT_FIRST_KEPT_ITEM_SIZE = 8
 DEFAULT_COMPACTION_RETENTION = DEFAULT_FIRST_KEPT_ITEM_SIZE
+_TODO_ID_PATTERN = re.compile(r"^todo_[0-9a-f]{32}$")
 
 NodeStatus: TypeAlias = Literal["running", "success", "paused", "failed"]
 ItemStatus: TypeAlias = Literal["running", "failed", "success"]
@@ -42,6 +44,7 @@ ContentBlockType: TypeAlias = Literal[
     "subagent",
     "skill_snapshot",
     "compaction",
+    "todo_snapshot",
     "retry",
     "error",
 ]
@@ -67,6 +70,7 @@ CONTENT_BLOCK_TYPES = frozenset(
         "subagent",
         "skill_snapshot",
         "compaction",
+        "todo_snapshot",
         "retry",
         "error",
     }
@@ -216,6 +220,46 @@ def normalize_content(content: str | Mapping[str, Any] | Sequence[Mapping[str, A
             count = item.get("kept_item_count")
             if isinstance(count, bool) or not isinstance(count, int) or count < 0:
                 raise RuntimeStateValidationError("compaction.kept_item_count must be non-negative.")
+        if kind == "todo_snapshot":
+            for field in ("source_turn_id", "target_turn_id"):
+                if not isinstance(item.get(field), str) or not item[field]:
+                    raise RuntimeStateValidationError(f"todo_snapshot.{field} must be a non-empty string.")
+            if item["source_turn_id"] == item["target_turn_id"]:
+                raise RuntimeStateValidationError("todo_snapshot source and target Turns must differ.")
+            revision = item.get("revision")
+            if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+                raise RuntimeStateValidationError("todo_snapshot.revision must be a positive integer.")
+            todos = item.get("todos")
+            if not isinstance(todos, list) or len(todos) > 100:
+                raise RuntimeStateValidationError("todo_snapshot.todos must be an array with at most 100 items.")
+            counts = item.get("counts")
+            if not isinstance(counts, Mapping) or set(counts) != {"pending", "in_progress", "completed"}:
+                raise RuntimeStateValidationError("todo_snapshot.counts must contain every Todo status.")
+            actual_counts = {status: 0 for status in ("pending", "in_progress", "completed")}
+            seen_ids: set[str] = set()
+            for todo in todos:
+                if not isinstance(todo, Mapping):
+                    raise RuntimeStateValidationError("todo_snapshot.todos entries must be objects.")
+                if set(todo) != {"id", "content", "status"}:
+                    raise RuntimeStateValidationError("todo_snapshot Todo entries have unsupported fields.")
+                todo_id = todo.get("id")
+                content_value = todo.get("content")
+                todo_status = todo.get("status")
+                if not isinstance(todo_id, str) or _TODO_ID_PATTERN.fullmatch(todo_id) is None or todo_id in seen_ids:
+                    raise RuntimeStateValidationError("todo_snapshot Todo ids must be unique Todo identifiers.")
+                if not isinstance(content_value, str) or not content_value.strip() or len(content_value) > 500:
+                    raise RuntimeStateValidationError("todo_snapshot Todo content must be non-blank.")
+                if todo_status not in actual_counts:
+                    raise RuntimeStateValidationError("todo_snapshot Todo status is invalid.")
+                seen_ids.add(todo_id)
+                actual_counts[str(todo_status)] += 1
+            if any(
+                isinstance(counts[status], bool)
+                or not isinstance(counts[status], int)
+                or counts[status] != actual_counts[status]
+                for status in actual_counts
+            ):
+                raise RuntimeStateValidationError("todo_snapshot.counts does not match its Todo items.")
         if kind == "retry":
             if item.get("event") != "model_retry":
                 raise RuntimeStateValidationError("retry.event must be model_retry.")
@@ -274,6 +318,23 @@ def compaction_payload(summary: str, *, kept_items: Sequence[Mapping[str, Any]] 
         "kept_item_count": len(kept_items),
         "status": "success",
     }
+
+
+def todo_snapshot_payload(
+    source_turn_id: str,
+    target_turn_id: str,
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = {
+        "type": "todo_snapshot",
+        "source_turn_id": source_turn_id,
+        "target_turn_id": target_turn_id,
+        "revision": snapshot.get("revision"),
+        "todos": snapshot.get("todos"),
+        "counts": snapshot.get("counts"),
+        "status": "success",
+    }
+    return normalize_content(payload)[0]
 
 
 def terminal_error_payload(

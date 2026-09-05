@@ -1114,7 +1114,10 @@ test("Todo panel auto-finishes and offers cleanup only for an incomplete termina
   expect(sidebar.ok(), `${sidebar.status()} ${await sidebar.text()}`).toBeTruthy();
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Todo Lifecycle", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Todo Lifecycle", exact: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
   const editor = page.getByLabel("聊天输入");
 
   await editor.fill("todo abnormal close");
@@ -1158,6 +1161,38 @@ test("Todo panel auto-finishes and offers cleanup only for an incomplete termina
   await expect(page.getByText("The rejected Todo update was not applied.")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("Must never render")).toHaveCount(0);
   await expect(todoPanel).toHaveCount(0);
+});
+
+test("Todo panel survives automatic compaction and refresh", async ({ page }) => {
+  test.slow();
+  const sidebar = await page.request.post("/api/sidebar-threads", { data: { title: "Todo Compaction" } });
+  expect(sidebar.ok(), `${sidebar.status()} ${await sidebar.text()}`).toBeTruthy();
+
+  await page.goto("/app");
+  await expect(page.getByRole("button", { name: "Todo Compaction", exact: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  const editor = page.getByLabel("聊天输入");
+  await editor.fill("todo automatic compaction");
+  const turnResponse = page.waitForResponse((response) =>
+    response.request().method() === "POST" && response.url().endsWith("/api/turns"),
+  );
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  expect((await turnResponse).ok()).toBeTruthy();
+
+  const todoPanel = page.locator(".todo-panel");
+  await expect(page.getByText("Continue across automatic compaction")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("上下文已压缩")).toBeVisible({ timeout: 15_000 });
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Todo Compaction", exact: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(page.getByText("Continue across automatic compaction")).toBeVisible({ timeout: 15_000 });
+  await expect(todoPanel).toBeVisible();
+  await expect(page.getByText("The Todo survived automatic compaction.")).toBeVisible({ timeout: 15_000 });
+  await expect(todoPanel).toHaveCount(0, { timeout: 15_000 });
 });
 
 test("real Turn SSE flow supports tools, rewind versions, fork, and compact", async ({ page }) => {

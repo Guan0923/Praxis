@@ -348,7 +348,7 @@ function RetryItem({ item, active }: { item: TurnItem; active: boolean }) {
   );
 }
 
-const HIDDEN_ASSISTANT_ITEM_TYPES = new Set(["skill_snapshot"]);
+const HIDDEN_ASSISTANT_ITEM_TYPES = new Set(["skill_snapshot", "todo_snapshot"]);
 
 function visibleAssistantItems(items: TurnItem[] | undefined): TurnItem[] {
   return (items ?? []).filter((item) => !HIDDEN_ASSISTANT_ITEM_TYPES.has(item.type));

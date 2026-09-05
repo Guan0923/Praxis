@@ -139,6 +139,61 @@ class RedisTodoListStore:
         except (RedisError, KeyError, TypeError, ValueError) as exc:
             raise self._unavailable(exc) from exc
 
+    def copy_for_compaction(
+        self,
+        session_id: str,
+        source_turn_id: str,
+        target_turn_id: str,
+        *,
+        expected_revision: int,
+    ) -> TodoSnapshot | None:
+        source_key = self._key(session_id, source_turn_id)
+        target_key = self._key(session_id, target_turn_id)
+        try:
+            with self.client.pipeline() as pipe:
+                for _attempt in range(_MAX_TRANSACTION_RETRIES):
+                    try:
+                        pipe.watch(source_key, target_key)
+                        source_raw = pipe.hgetall(source_key)
+                        if "snapshot" not in source_raw:
+                            return None
+                        source = self._snapshot(source_raw)
+                        if source.revision != expected_revision:
+                            raise TodoStateError(
+                                "revision_conflict",
+                                f"Expected revision {expected_revision}, current revision is {source.revision}.",
+                                snapshot=source,
+                            )
+                        target_raw = pipe.hgetall(target_key)
+                        if "snapshot" in target_raw:
+                            if target_raw.get("compaction_source_turn_id") != source_turn_id:
+                                raise TodoStateError(
+                                    "target_conflict",
+                                    f"Target Turn {target_turn_id!r} already has unrelated Todo state.",
+                                )
+                            return self._snapshot(target_raw)
+                        mapping: dict[str, object] = {
+                            "session_id": session_id,
+                            "turn_id": target_turn_id,
+                            "compaction_source_turn_id": source_turn_id,
+                            "revision": source.revision,
+                            "snapshot": _json(source.to_dict()),
+                        }
+                        if source_raw.get("finalization_claimed") == "1":
+                            mapping["finalization_claimed"] = "1"
+                        pipe.multi()
+                        pipe.hset(target_key, mapping=mapping)
+                        pipe.persist(target_key)
+                        pipe.execute()
+                        return source
+                    except WatchError:
+                        continue
+                raise TodoStateError("concurrent_update", "Todo list changed too frequently during context compaction.")
+        except TodoStateError:
+            raise
+        except (RedisError, TypeError, ValueError) as exc:
+            raise self._unavailable(exc) from exc
+
     def claim_finalization(self, session_id: str, turn_id: str) -> bool:
         key = self._key(session_id, turn_id)
         try:
@@ -189,6 +244,7 @@ class MemoryTodoListStore:
         self._states: dict[tuple[str, str], TodoSnapshot] = {}
         self._receipts: dict[tuple[str, str, str], tuple[str, TodoUpdateResult]] = {}
         self._finalization: set[tuple[str, str]] = set()
+        self._compaction_sources: dict[tuple[str, str], str] = {}
         self._lock = RLock()
 
     def update(
@@ -232,6 +288,40 @@ class MemoryTodoListStore:
         with self._lock:
             receipt = self._receipts.get((session_id, turn_id, call_id))
             return receipt[1] if receipt is not None else None
+
+    def copy_for_compaction(
+        self,
+        session_id: str,
+        source_turn_id: str,
+        target_turn_id: str,
+        *,
+        expected_revision: int,
+    ) -> TodoSnapshot | None:
+        source_key = (session_id, source_turn_id)
+        target_key = (session_id, target_turn_id)
+        with self._lock:
+            source = self._states.get(source_key)
+            if source is None:
+                return None
+            if source.revision != expected_revision:
+                raise TodoStateError(
+                    "revision_conflict",
+                    f"Expected revision {expected_revision}, current revision is {source.revision}.",
+                    snapshot=source,
+                )
+            existing = self._states.get(target_key)
+            if existing is not None:
+                if self._compaction_sources.get(target_key) != source_turn_id:
+                    raise TodoStateError(
+                        "target_conflict",
+                        f"Target Turn {target_turn_id!r} already has unrelated Todo state.",
+                    )
+                return existing
+            self._states[target_key] = source
+            self._compaction_sources[target_key] = source_turn_id
+            if source_key in self._finalization:
+                self._finalization.add(target_key)
+            return source
 
     def claim_finalization(self, session_id: str, turn_id: str) -> bool:
         key = (session_id, turn_id)
