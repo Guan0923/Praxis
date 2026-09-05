@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.app import create_app
 from backend.api.state import WebAppState
-from backend.domain.runtime_state import NodeWriter, RuntimeRootState, RuntimeState
+from backend.domain.runtime_state import NodeWriter, RuntimeNode, RuntimeRootState, RuntimeState
 from backend.storage import MemoryMessageQueue, SQLiteSessionStore
 
 
@@ -185,3 +189,66 @@ def test_sidebar_summary_crud_responses_keep_the_same_contract(tmp_path: Path) -
         assert [item["thread_id"] for item in client.get("/api/sidebar-threads?state=all").json()] == [
             created["thread_id"]
         ]
+
+
+@pytest.mark.parametrize("has_previous_turn", [False, True])
+def test_sidebar_refresh_keeps_one_snapshot_during_turn_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, has_previous_turn: bool
+) -> None:
+    state = WebAppState(tmp_path / ".mini_agent", message_queue=MemoryMessageQueue())
+    with TestClient(create_app(state)) as client:
+        sidebar = client.post("/api/sidebar-threads", json={}).json()
+        session_id, thread_id = sidebar["session_id"], sidebar["thread_id"]
+        store = _store(state)
+        parent = store.ensure_root_node(session_id, id="snapshot-root")
+        if has_previous_turn:
+            parent = _turn(
+                store, session_id=session_id, thread_id=thread_id, turn_id="previous", parent=parent, prompt="previous"
+            )
+        previous = _summary(client, thread_id)
+
+        # Only this test database uses WAL so the writer can commit while the reader is paused.
+        with sqlite3.connect(state.paths.session_db(session_id)) as connection:
+            assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        nodes_read, writer_done = Event(), Event()
+        original_objects = SQLiteSessionStore._objects
+
+        def read_objects(connection: sqlite3.Connection, selected_session_id: str, namespace: str) -> list[RuntimeNode]:
+            objects = original_objects(connection, selected_session_id, namespace)
+            if selected_session_id == session_id and namespace == "runtime_node" and not nodes_read.is_set():
+                nodes_read.set()
+                if not writer_done.wait(timeout=10):
+                    raise TimeoutError("Concurrent Turn creation did not finish")
+            return objects
+
+        monkeypatch.setattr(SQLiteSessionStore, "_objects", staticmethod(read_objects))
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            refresh = executor.submit(client.get, "/api/sidebar-threads", params={"state": "all"})
+            try:
+                assert nodes_read.wait(timeout=10), "Sidebar did not read the node snapshot"
+                _turn(store, session_id=session_id, thread_id=thread_id, turn_id="new", parent=parent, prompt="new")
+            finally:
+                writer_done.set()
+            response = refresh.result(timeout=10)
+        assert response.status_code == 200
+        current = next(item for item in response.json() if item["thread_id"] == thread_id)
+        assert current["message_count"] == previous["message_count"]
+        assert current["conversation_updated_at"] == previous["conversation_updated_at"]
+        following = _summary(client, thread_id)
+        assert following["message_count"] == previous["message_count"] + 2
+        assert following["conversation_updated_at"] > previous["conversation_updated_at"]
+
+
+def test_sidebar_summary_does_not_hide_a_broken_turn_reference(tmp_path: Path) -> None:
+    state = WebAppState(tmp_path / ".mini_agent", message_queue=MemoryMessageQueue())
+    with TestClient(create_app(state)) as client:
+        sidebar = client.post("/api/sidebar-threads", json={}).json()
+        store = _store(state)
+        store.ensure_root_node(sidebar["session_id"], id="broken-reference-root")
+        with sqlite3.connect(state.paths.session_db(sidebar["session_id"])) as connection:
+            connection.execute(
+                "UPDATE runtime_threads SET current_turn_id=? WHERE thread_id=?",
+                ("missing-turn", sidebar["thread_id"]),
+            )
+        with pytest.raises(KeyError, match="Unknown Turn"):
+            store.list_sidebar_thread_summaries()

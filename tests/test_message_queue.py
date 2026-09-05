@@ -275,7 +275,7 @@ def redis_queue() -> RedisMessageQueue:
 
 def test_real_redis_dispatch_claim_ack_and_receipt_replay(redis_queue: RedisMessageQueue) -> None:
     thread_id = "thread-real"
-    reference = {"source": "project", "path": "C:/workspace/a", "display_path": "a"}
+    reference = {"source": "project", "path": "project:a", "display_path": "a"}
     redis_queue.create(QueuedMessage("one", thread_id, "one", (reference,)))
     redis_queue.create(QueuedMessage("two", thread_id, "two", (reference,)))
     redis_queue.create(QueuedMessage("three", thread_id, "three"))

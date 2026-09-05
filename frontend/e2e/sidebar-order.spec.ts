@@ -43,19 +43,40 @@ async function historyTitles(scope: Locator): Promise<string[]> {
   ));
 }
 
+async function waitForSidebarMotion(page: Page): Promise<void> {
+  await page.locator(".sidebar-reveal-shell").evaluate(async (element) => {
+    await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished.catch(() => undefined)));
+  });
+}
+
+async function stableBox(locator: Locator): Promise<NonNullable<Awaited<ReturnType<Locator["boundingBox"]>>>> {
+  await expect(locator).toBeVisible();
+  let previous = "";
+  let resolved: Awaited<ReturnType<Locator["boundingBox"]>> = null;
+  await expect.poll(async () => {
+    resolved = await locator.boundingBox();
+    if (resolved === null) return false;
+    const current = `${resolved.x}:${resolved.y}:${resolved.width}:${resolved.height}`;
+    const stable = current === previous;
+    previous = current;
+    return stable;
+  }).toBe(true);
+  return resolved!;
+}
+
 async function dragRow(page: Page, source: Locator, target: Locator): Promise<void> {
-  const sourceBox = await source.boundingBox();
-  expect(sourceBox).not.toBeNull();
-  const startX = sourceBox!.x + 16;
-  const startY = sourceBox!.y + sourceBox!.height / 2;
+  await source.scrollIntoViewIfNeeded();
+  await target.scrollIntoViewIfNeeded();
+  const sourceBox = await stableBox(source);
+  const startX = sourceBox.x + sourceBox.width / 2;
+  const startY = sourceBox.y + sourceBox.height / 2;
   await page.mouse.move(startX, startY);
   await page.mouse.down();
-  await page.mouse.move(startX + 12, startY, { steps: 2 });
+  await page.mouse.move(startX, startY + 12, { steps: 6 });
   await expect(source).toHaveClass(/is-dragging/);
-  const targetBox = await target.boundingBox();
-  expect(targetBox).not.toBeNull();
-  const targetX = targetBox!.x + 16;
-  const targetY = targetBox!.y + targetBox!.height / 2;
+  const targetBox = await stableBox(target);
+  const targetX = targetBox.x + targetBox.width / 2;
+  const targetY = targetBox.y + targetBox.height / 2;
   await page.mouse.move(targetX, targetY, { steps: 10 });
   await page.mouse.up();
 }
@@ -77,6 +98,10 @@ async function chooseSort(
 }
 
 async function sendMessage(page: Page, text: string): Promise<void> {
+  const users = page.locator(".message.user");
+  const assistants = page.locator(".message.assistant");
+  const userCount = await users.count();
+  const assistantCount = await assistants.count();
   await page.getByLabel("聊天输入").fill(text);
   const responsePromise = page.waitForResponse((response) => (
     response.request().method() === "POST" && response.url().endsWith("/api/turns")
@@ -84,7 +109,10 @@ async function sendMessage(page: Page, text: string): Promise<void> {
   await page.getByRole("button", { name: "发送", exact: true }).click();
   const response = await responsePromise;
   expect(response.ok(), `${response.status()} ${await response.text()}`).toBeTruthy();
-  const assistant = page.locator(".message.assistant").last().locator(".assistant-run-frame");
+  await expect(users).toHaveCount(userCount + 1, { timeout: 15_000 });
+  await expect(users.nth(userCount)).toContainText(text);
+  await expect(assistants).toHaveCount(assistantCount + 1, { timeout: 15_000 });
+  const assistant = assistants.nth(assistantCount).locator(".assistant-run-frame");
   await expect(assistant).toBeVisible({ timeout: 15_000 });
   await expect(assistant).not.toHaveClass(/is-running/, { timeout: 15_000 });
 }
@@ -97,6 +125,7 @@ test("sidebar groups drag and apply one-time sorts with persisted order", async 
   const projectResult = await createProjectConversations(page, "排序验收项目", projectTitles);
 
   await page.goto("/app");
+  await waitForSidebarMotion(page);
   const ordinaryScope = page.locator(".sidebar-ordinary-history");
   const projectItem = page.locator(".ant-collapse-item").filter({ hasText: projectResult.project.name });
   if (!await projectItem.evaluate((item) => item.classList.contains("ant-collapse-item-active"))) {

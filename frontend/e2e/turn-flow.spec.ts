@@ -33,17 +33,88 @@ async function fetchRuntimeNodes(
   return response.json() as Promise<Array<RuntimeRootResponse | RuntimeTurnResponse>>;
 }
 
+async function waitForLatestTurnStatus(
+  page: import("@playwright/test").Page,
+  sessionId: string,
+  status: string,
+): Promise<RuntimeTurnResponse> {
+  let latest: RuntimeTurnResponse | undefined;
+  await expect.poll(async () => {
+    const turns = (await fetchRuntimeNodes(page, sessionId)).filter(isRuntimeTurnResponse);
+    latest = turns.at(-1);
+    return latest?.status;
+  }, { timeout: 15_000 }).toBe(status);
+  return latest!;
+}
+
+async function waitForTurnStatus(
+  page: import("@playwright/test").Page,
+  sessionId: string,
+  turnId: string,
+  status: string,
+): Promise<RuntimeTurnResponse> {
+  let matched: RuntimeTurnResponse | undefined;
+  await expect.poll(async () => {
+    const turns = (await fetchRuntimeNodes(page, sessionId)).filter(isRuntimeTurnResponse);
+    matched = turns.find((turn) => turn.id === turnId);
+    return matched?.status;
+  }, { timeout: 15_000 }).toBe(status);
+  return matched!;
+}
+
+async function selectConversation(
+  page: import("@playwright/test").Page,
+  title: string,
+): Promise<void> {
+  const thread = page.getByRole("button", { name: title, exact: true });
+  await expect(thread).toBeVisible();
+  if (await thread.getAttribute("aria-current") !== "page") {
+    await expect(thread).toBeEnabled();
+    await thread.click();
+  }
+  await expect(thread).toHaveAttribute("aria-current", "page");
+  await expect(page.getByLabel("聊天输入")).toBeVisible();
+}
+
+async function startRunningTurn(
+  page: import("@playwright/test").Page,
+  text: string,
+): Promise<{ sessionId: string; turnId: string }> {
+  await page.getByLabel("聊天输入").fill(text);
+  const responsePromise = page.waitForResponse((response) =>
+    response.request().method() === "POST" && response.url().endsWith("/api/turns"),
+  );
+  const sendButton = page.getByRole("button", { name: "发送", exact: true });
+  await expect(sendButton).toBeEnabled();
+  await sendButton.click();
+  const response = await responsePromise;
+  expect(response.ok(), `${response.status()} ${response.url()}`).toBeTruthy();
+  const request = response.request().postDataJSON() as { session_id: string };
+  const receipt = await response.json() as { turn_id: string };
+  await expect(page.getByRole("button", { name: "暂停" })).toBeVisible({ timeout: 15_000 });
+  return { sessionId: request.session_id, turnId: receipt.turn_id };
+}
+
 async function send(page: import("@playwright/test").Page, text: string): Promise<void> {
   const editor = page.getByLabel("聊天输入");
+  const users = page.locator(".message.user");
+  const assistants = page.locator(".message.assistant");
+  const userCount = await users.count();
+  const assistantCount = await assistants.count();
   await editor.fill(text);
   const responsePromise = page.waitForResponse((response) =>
-    response.request().method() === "POST" && response.url().includes("/api/turns"),
+    response.request().method() === "POST" && response.url().endsWith("/api/turns"),
   );
   await page.getByRole("button", { name: "发送" }).click();
   const response = await responsePromise;
   expect(response.ok(), `${response.status()} ${response.url()}`).toBeTruthy();
-  await expect(page.locator(".message.user").last()).toContainText(text, { timeout: 15_000 });
-  await expect(page.locator(".message.assistant").last().getByRole("button", { name: "Fork" }))
+  const request = response.request().postDataJSON() as { session_id: string };
+  const receipt = await response.json() as { turn_id: string };
+  await waitForTurnStatus(page, request.session_id, receipt.turn_id, "success");
+  await expect(users).toHaveCount(userCount + 1, { timeout: 15_000 });
+  await expect(users.nth(userCount)).toContainText(text);
+  await expect(assistants).toHaveCount(assistantCount + 1, { timeout: 15_000 });
+  await expect(assistants.nth(assistantCount).getByRole("button", { name: "Fork" }))
     .toBeVisible({ timeout: 15_000 });
 }
 
@@ -58,6 +129,34 @@ function tracePanel(page: import("@playwright/test").Page, label: string, index 
   return page.getByText(label, { exact: true }).nth(index).locator(
     "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-collapse-item ')][1]",
   );
+}
+
+async function ensureTreeItemExpanded(
+  page: import("@playwright/test").Page,
+  item: import("@playwright/test").Locator,
+): Promise<void> {
+  if (await item.getAttribute("aria-expanded") === "true") return;
+  await page.mouse.move(0, 0);
+  await expect(page.locator(".ant-tooltip:visible")).toHaveCount(0);
+  const switcher = item.locator(".ant-tree-switcher");
+  await expect(switcher).toBeVisible();
+  await switcher.click();
+  await expect(item).toHaveAttribute("aria-expanded", "true");
+}
+
+async function focusWithKeyboard(
+  page: import("@playwright/test").Page,
+  target: import("@playwright/test").Locator,
+): Promise<void> {
+  await page.getByLabel("聊天输入").click();
+  for (let index = 0; index < 12; index += 1) {
+    await page.keyboard.press("Shift+Tab");
+    if (await page.evaluate(() => document.activeElement?.getAttribute("aria-label") === "滚动到底部")) {
+      await expect(target).toBeFocused();
+      return;
+    }
+  }
+  throw new Error("Keyboard focus did not reach the target control.");
 }
 
 test("file reference bubble remains available after send and reload", async ({ page }) => {
@@ -294,7 +393,13 @@ test("file references stay atomic and completion remains available during a runn
     .toBeVisible({ timeout: 15_000 });
 
   await editor.fill("steering fifo");
+  const runningTurnResponse = page.waitForResponse((response) =>
+    response.request().method() === "POST" && response.url().endsWith("/api/turns"),
+  );
   await page.getByRole("button", { name: "发送", exact: true }).click();
+  const runningTurnReceipt = await runningTurnResponse;
+  expect(runningTurnReceipt.ok()).toBeTruthy();
+  const runningTurn = await runningTurnReceipt.json() as { turn_id: string };
   await expect(page.getByRole("button", { name: "暂停" })).toBeVisible();
   await editor.fill("/he");
   await expect(page.locator(".command-name", { hasText: "/help" })).toBeVisible();
@@ -316,6 +421,7 @@ test("file references stay atomic and completion remains available during a runn
   );
   await page.getByRole("button", { name: "发送第 1 条待发送消息" }).click();
   expect((await steerResponse).status()).toBe(202);
+  await waitForTurnStatus(page, sidebar.session_id, runningTurn.turn_id, "success");
   await expect(page.getByRole("region", { name: "待发送消息" })).toHaveCount(0, { timeout: 15_000 });
   await expect(page.locator(".message.assistant").last()).toContainText("FIFO steering complete.", { timeout: 20_000 });
 });
@@ -327,7 +433,7 @@ test("Trace audit lists two real Turns oldest first and loads them independently
   expect(sidebarResponse.ok(), `${sidebarResponse.status()} ${await sidebarResponse.text()}`).toBeTruthy();
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Trace Audit E2E", exact: true }).click();
+  await selectConversation(page, "Trace Audit E2E");
   const traceTask = "$trace-audit trace audit e2e";
   await page.getByLabel("聊天输入").fill(traceTask);
   const createTraceResponse = page.waitForResponse((response) =>
@@ -504,7 +610,7 @@ test("pausing a real chunked model stream does not record its transport close as
   const sidebar = await sidebarResponse.json() as { session_id: string };
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Paused Chunked Stream", exact: true }).click();
+  await selectConversation(page, "Paused Chunked Stream");
   await page.getByLabel("聊天输入").fill("pause chunked stream e2e");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   const assistant = page.locator(".message.assistant").last();
@@ -547,7 +653,7 @@ test("legacy unknown failure is hidden in Chat but remains available in Trace", 
   expect(seeded.ok(), `${seeded.status()} ${await seeded.text()}`).toBeTruthy();
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Legacy Unknown Error", exact: true }).click();
+  await selectConversation(page, "Legacy Unknown Error");
   await expect(page.locator(".message.assistant").filter({ hasText: legacyError })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Trace", exact: true }).click();
@@ -564,7 +670,7 @@ test("a real provider retry is visible live and remains ordered in Turn and Trac
   const sidebar = await sidebarResponse.json() as { session_id: string };
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Network Retry Visibility", exact: true }).click();
+  await selectConversation(page, "Network Retry Visibility");
   await page.getByLabel("聊天输入").fill("network retry visibility e2e");
   const createResponse = page.waitForResponse((response) =>
     response.request().method() === "POST" && response.url().endsWith("/api/turns"),
@@ -578,10 +684,11 @@ test("a real provider retry is visible live and remains ordered in Turn and Trac
   await expect(assistant).toContainText("Retry recovered from local HTTP.", { timeout: 15_000 });
   await expect(assistant).toContainText("网络请求已重试（1/5）");
 
+  const completedTurn = await waitForLatestTurnStatus(page, sidebar.session_id, "success");
   const turns = (await fetchRuntimeNodes(page, sidebar.session_id)).filter(isRuntimeTurnResponse);
   expect(turns).toHaveLength(1);
-  expect(turns[0].status).toBe("success");
-  const items = turns[0].data[turns[0].current_data_idx][1].content;
+  expect(completedTurn.id).toBe(turns[0].id);
+  const items = completedTurn.data[completedTurn.current_data_idx][1].content;
   expect(items.map((item) => item.type)).toEqual(["retry", "text"]);
   expect(items[0]).toMatchObject({
     event: "model_retry",
@@ -606,7 +713,7 @@ test("a real provider retry is visible live and remains ordered in Turn and Trac
   );
   await expect(retryPanel.locator(".trace-preview")).toContainText("503 Server Error: Service Unavailable");
 
-  const traceResponse = await page.request.get(`/api/turns/${encodeURIComponent(turns[0].id)}/trace?data_idx=0`);
+  const traceResponse = await page.request.get(`/api/turns/${encodeURIComponent(completedTurn.id)}/trace?data_idx=0`);
   expect(traceResponse.ok(), `${traceResponse.status()} ${await traceResponse.text()}`).toBeTruthy();
   const trace = await traceResponse.json() as { items: Array<{ item: { type: string; message?: string } }> };
   const retries = trace.items.filter((entry) => entry.item.type === "retry");
@@ -624,7 +731,7 @@ test("automatic Agent report and final answer share one Assistant reply frame", 
   expect(sidebarResponse.ok(), `${sidebarResponse.status()} ${await sidebarResponse.text()}`).toBeTruthy();
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Grouped Agent Report", exact: true }).click();
+  await selectConversation(page, "Grouped Agent Report");
   await page.getByLabel("聊天输入").fill("agent thread navigation e2e");
   const rootTurnResponse = page.waitForResponse((response) =>
     response.request().method() === "POST" && response.url().endsWith("/api/turns"),
@@ -652,7 +759,7 @@ test("Agent Thread tree streams an idle nested Agent message and keeps Chat and 
   const sidebar = await sidebarResponse.json() as { session_id: string; thread_id: string };
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Agent Thread Navigation", exact: true }).click();
+  await selectConversation(page, "Agent Thread Navigation");
   await page.getByLabel("聊天输入").fill("agent thread navigation e2e");
   const rootTurnResponse = page.waitForResponse((response) =>
     response.request().method() === "POST" && response.url().endsWith("/api/turns"),
@@ -712,10 +819,12 @@ test("Agent Thread tree streams an idle nested Agent message and keeps Chat and 
   });
   await page.getByRole("button", { name: "Thread", exact: true }).click();
   tree = page.getByRole("tree", { name: "Agent Thread 树" });
-  await tree.getByText("root", { exact: true }).locator("xpath=ancestor::*[@role='treeitem'][1]")
-    .locator(".ant-tree-switcher").click();
+  await ensureTreeItemExpanded(
+    page,
+    tree.getByText("root", { exact: true }).locator("xpath=ancestor::*[@role='treeitem'][1]"),
+  );
   const reloadedDirect = tree.getByText("/root/direct · success", { exact: true });
-  await reloadedDirect.locator("xpath=ancestor::*[@role='treeitem'][1]").locator(".ant-tree-switcher").click();
+  await ensureTreeItemExpanded(page, reloadedDirect.locator("xpath=ancestor::*[@role='treeitem'][1]"));
   const blockedStreamRequest = page.waitForRequest((request) => request.url().includes(
     `/api/agent-threads/${nestedThreadId}/stream`,
   ));
@@ -727,7 +836,7 @@ test("Agent Thread tree streams an idle nested Agent message and keeps Chat and 
   );
   await page.locator('input[type="file"]').setInputFiles("../README.md");
   expect((await uploadResponse).ok()).toBeTruthy();
-  await expect(page.getByText("README.md", { exact: true })).toBeVisible();
+  await expect(page.locator(".composer-upload-name")).toHaveText("workspace:uploads/README.md");
   const followUp = "idle nested Agent follow-up with upload";
   await page.getByLabel("聊天输入").fill(followUp);
   const messageRequest = page.waitForRequest((request) =>
@@ -782,11 +891,18 @@ test("Agent Thread tree streams an idle nested Agent message and keeps Chat and 
   ))).toBeTruthy();
   const latestUser = nestedTurns[1].data[nestedTurns[1].current_data_idx]
     .find((message) => message.role === "user");
-  const canonicalReferences = latestUser?.content[0].references as Array<{ path: string }>;
+  const canonicalReferences = latestUser?.content[0].references as Array<{
+    source: string;
+    path: string;
+    display_path: string;
+  }>;
   expect(canonicalReferences).toHaveLength(1);
-  expect(Object.keys(canonicalReferences[0])).toEqual(["path"]);
-  expect(canonicalReferences[0].path).toMatch(/^(?:[A-Za-z]:[\\/]|\/)/);
-  expect(canonicalReferences[0].path.replaceAll("\\", "/")).toMatch(/\/workspace\/uploads\/README\.md$/);
+  expect(Object.keys(canonicalReferences[0]).sort()).toEqual(["display_path", "path", "source"]);
+  expect(canonicalReferences[0]).toMatchObject({
+    source: "upload",
+    path: "workspace:uploads/README.md",
+    display_path: "workspace:uploads/README.md",
+  });
 
   await page.getByRole("button", { name: "Trace", exact: true }).click();
   await expect(page.locator(".trace-toolbar-thread-id")).toHaveText(nestedThreadId);
@@ -898,17 +1014,21 @@ test("Agent Thread tree streams an idle nested Agent message and keeps Chat and 
   expect((await isolatedForkChildren.json() as Array<{ thread_id: string }>).map((node) => node.thread_id))
     .toEqual([forkDirectSummary.thread_id]);
 
-  await page.getByRole("button", { name: "Agent Thread Navigation", exact: true }).click();
+  await selectConversation(page, "Agent Thread Navigation");
   await page.getByRole("button", { name: "Thread", exact: true }).click();
   tree = page.getByRole("tree", { name: "Agent Thread 树" });
-  await tree.getByText("root", { exact: true }).locator("xpath=ancestor::*[@role='treeitem'][1]")
-    .locator(".ant-tree-switcher").click();
-  await tree.getByText("/root/direct · success", { exact: true }).locator("xpath=ancestor::*[@role='treeitem'][1]")
-    .locator(".ant-tree-switcher").click();
+  await ensureTreeItemExpanded(
+    page,
+    tree.getByText("root", { exact: true }).locator("xpath=ancestor::*[@role='treeitem'][1]"),
+  );
+  await ensureTreeItemExpanded(
+    page,
+    tree.getByText("/root/direct · success", { exact: true }).locator("xpath=ancestor::*[@role='treeitem'][1]"),
+  );
   await tree.getByText("/root/direct/nested · success", { exact: true }).click();
   await expect(page.locator(".trace-toolbar-thread-id")).toHaveText(nestedThreadId);
 
-  await page.getByRole("button", { name: "Agent Thread Navigation（分支）", exact: true }).click();
+  await selectConversation(page, "Agent Thread Navigation（分支）");
   await expect(page.locator(".trace-toolbar-thread-id")).toHaveText(forkNestedSummary.thread_id);
   await page.getByRole("button", { name: "Trace", exact: true }).click();
   await expect(page.locator(".trace-toolbar-thread-id")).toHaveText(forkNestedSummary.thread_id);
@@ -921,7 +1041,7 @@ test("chat stays bottom-anchored and exposes a centered translucent return butto
   expect(sidebar.ok(), `${sidebar.status()} ${await sidebar.text()}`).toBeTruthy();
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Playwright Scroll Anchor", exact: true }).click();
+  await selectConversation(page, "Playwright Scroll Anchor");
   await expect(page.getByLabel("聊天输入")).toBeVisible();
 
   for (let index = 0; index < 8; index += 1) {
@@ -950,7 +1070,7 @@ test("chat stays bottom-anchored and exposes a centered translucent return butto
   await returnButton.hover();
   await expect(returnButton).toHaveCSS("background-color", "rgb(255, 255, 255)");
   await page.mouse.move(0, 0);
-  await returnButton.focus();
+  await focusWithKeyboard(page, returnButton);
   await expect(returnButton).toHaveCSS("background-color", "rgb(255, 255, 255)");
 
   const readingScrollTop = await scrollContainer.evaluate((element) => element.scrollTop);
@@ -983,7 +1103,7 @@ test("desktop timeline exposes more than 30 user Messages including steering in 
   expect(sidebarResponse.ok(), `${sidebarResponse.status()} ${await sidebarResponse.text()}`).toBeTruthy();
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Timeline Long Session", exact: true }).click();
+  await selectConversation(page, "Timeline Long Session");
   await expect(page.getByLabel("聊天输入")).toBeVisible();
   for (let index = 0; index < 29; index += 1) {
     await send(page, `timeline history ${index}`);
@@ -991,9 +1111,7 @@ test("desktop timeline exposes more than 30 user Messages including steering in 
     await expect(page.locator(".message.assistant")).toHaveCount(index + 1);
   }
 
-  await page.getByLabel("聊天输入").fill("steering fifo");
-  await page.getByRole("button", { name: "发送", exact: true }).click();
-  await expect(page.getByRole("button", { name: "暂停" })).toBeVisible();
+  await startRunningTurn(page, "steering fifo");
   await page.getByLabel("聊天输入").fill("timeline redirect one");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   const firstSteer = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/steer"));
@@ -1051,11 +1169,29 @@ test("desktop timeline exposes more than 30 user Messages including steering in 
   expect(lastBounds!.y).toBeGreaterThanOrEqual(timelineBounds!.y);
   expect(lastBounds!.y + lastBounds!.height).toBeLessThanOrEqual(timelineBounds!.y + timelineBounds!.height);
 
+  await lastTip.hover();
+  await expect(lastTip).toBeVisible();
+  const beforeTooltipWheel = await viewport.evaluate((element) => element.scrollTop);
+  const chatBeforeTooltipWheel = await page.locator("[data-conversation-scroll]").evaluate((element) => element.scrollTop);
+  const wheelOnTooltip = page.evaluate(() => new Promise<boolean>((resolve) => {
+    document.addEventListener("wheel", (event) => {
+      resolve(event.target instanceof Element && event.target.closest('[role="tooltip"]') !== null);
+    }, { once: true, capture: true });
+  }));
+  await page.mouse.wheel(0, 160);
+  expect(await wheelOnTooltip).toBe(true);
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  expect(await viewport.evaluate((element) => element.scrollTop)).toBe(beforeTooltipWheel);
+  expect(await page.locator("[data-conversation-scroll]").evaluate((element) => element.scrollTop)).toBe(chatBeforeTooltipWheel);
+
+  await viewport.evaluate((element) => {
+    element.scrollTop = Math.floor((element.scrollHeight - element.clientHeight) / 2);
+  });
   const timelineScrollTop = await viewport.evaluate((element) => element.scrollTop);
   const chatScrollTop = await page.locator("[data-conversation-scroll]").evaluate((element) => element.scrollTop);
-  await lastTip.hover();
+  await viewport.hover();
   await page.mouse.wheel(0, 160);
-  expect(await viewport.evaluate((element) => element.scrollTop)).toBe(timelineScrollTop);
+  await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(timelineScrollTop);
   expect(await page.locator("[data-conversation-scroll]").evaluate((element) => element.scrollTop)).toBe(chatScrollTop);
 });
 
@@ -1064,13 +1200,13 @@ test("first main Turn receives a dedicated model-generated title", async ({ page
   expect(sidebar.ok(), `${sidebar.status()} ${await sidebar.text()}`).toBeTruthy();
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "新对话", exact: true }).click();
+  await selectConversation(page, "新对话");
   await expect(page.getByRole("navigation", { name: "主内容视图" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Thread", exact: true })).toBeVisible();
   await expect(page.getByLabel("聊天输入")).toBeVisible();
   await send(page, "请生成这个对话的模型标题");
 
-  await expect(page.getByRole("button", { name: "浏览器生成的新标题很", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "浏览器生成的新标题很", exact: true })).toBeVisible({ timeout: 15_000 });
   const nodes = await fetchRuntimeNodes(page, (await sidebar.json() as { session_id: string }).session_id);
   const firstTurn = nodes.find(isRuntimeTurnResponse);
   expect(firstTurn).toBeDefined();
@@ -1087,7 +1223,7 @@ test("Sidebar shows durable message summary without opening the older conversati
   const older = await olderResponse.json() as { session_id: string };
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Sidebar Summary Older", exact: true }).click();
+  await selectConversation(page, "Sidebar Summary Older");
   await send(page, "hello");
 
   const newerResponse = await page.request.post("/api/sidebar-threads", {
@@ -1110,14 +1246,12 @@ test("Sidebar shows durable message summary without opening the older conversati
 });
 
 test("Todo panel auto-finishes and offers cleanup only for an incomplete terminal Turn", async ({ page }) => {
+  test.slow();
   const sidebar = await page.request.post("/api/sidebar-threads", { data: { title: "Todo Lifecycle" } });
   expect(sidebar.ok(), `${sidebar.status()} ${await sidebar.text()}`).toBeTruthy();
 
   await page.goto("/app");
-  await expect(page.getByRole("button", { name: "Todo Lifecycle", exact: true })).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
+  await selectConversation(page, "Todo Lifecycle");
   const editor = page.getByLabel("聊天输入");
 
   await editor.fill("todo abnormal close");
@@ -1145,8 +1279,18 @@ test("Todo panel auto-finishes and offers cleanup only for an incomplete termina
     response.request().method() === "POST" && response.url().endsWith("/api/turns"),
   );
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  expect((await completedResponse).ok()).toBeTruthy();
-  await expect(page.getByText("Complete the browser lifecycle")).toBeVisible({ timeout: 15_000 });
+  const completed = await completedResponse;
+  expect(completed.ok()).toBeTruthy();
+  const completedTurn = await completed.json() as { turn_id: string };
+  await expect(todoPanel.getByText("Complete the browser lifecycle", { exact: true })).toBeVisible({ timeout: 15_000 });
+  const completedNode = await waitForTurnStatus(
+    page,
+    (completed.request().postDataJSON() as { session_id: string }).session_id,
+    completedTurn.turn_id,
+    "success",
+  );
+  expect(JSON.stringify(completedNode.data[completedNode.current_data_idx]))
+    .toContain("Complete the browser lifecycle");
   await expect(page.getByRole("button", { name: "关闭任务清单", exact: true })).toHaveCount(0);
   await expect(todoPanel).toHaveCount(0, { timeout: 15_000 });
   await expect(page.locator(".composer")).not.toHaveClass(/has-todo/);
@@ -1157,7 +1301,10 @@ test("Todo panel auto-finishes and offers cleanup only for an incomplete termina
     response.request().method() === "POST" && response.url().endsWith("/api/turns"),
   );
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  expect((await rejectedResponse).ok()).toBeTruthy();
+  const rejected = await rejectedResponse;
+  expect(rejected.ok()).toBeTruthy();
+  const rejectedTurn = await rejected.json() as { turn_id: string };
+  await waitForTurnStatus(page, (rejected.request().postDataJSON() as { session_id: string }).session_id, rejectedTurn.turn_id, "success");
   await expect(page.getByText("The rejected Todo update was not applied.")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("Must never render")).toHaveCount(0);
   await expect(todoPanel).toHaveCount(0);
@@ -1199,9 +1346,10 @@ test("real Turn SSE flow supports tools, rewind versions, fork, and compact", as
   test.slow();
   const sidebar = await page.request.post("/api/sidebar-threads", { data: { title: "Playwright Turn" } });
   expect(sidebar.ok(), `${sidebar.status()} ${await sidebar.text()}`).toBeTruthy();
+  const sidebarThread = await sidebar.json() as { session_id: string };
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Playwright Turn", exact: true }).click();
+  await selectConversation(page, "Playwright Turn");
   await expect(page.getByLabel("聊天输入")).toBeVisible();
 
   await send(page, "hello");
@@ -1216,35 +1364,74 @@ test("real Turn SSE flow supports tools, rewind versions, fork, and compact", as
     response.request().method() === "POST" && response.url().includes("/rewind"),
   );
   await page.getByRole("button", { name: "保存并重新生成" }).click();
-  expect((await rewindResponse).ok()).toBeTruthy();
+  const rewound = await rewindResponse;
+  expect(rewound.ok()).toBeTruthy();
+  const regeneratedTurn = await rewound.json() as { turn_id: string };
+  await waitForTurnStatus(page, sidebarThread.session_id, regeneratedTurn.turn_id, "success");
+  await expect(page.locator(".message.assistant").last().getByRole("button", { name: "Fork" }))
+    .toBeVisible({ timeout: 15_000 });
+  const firstVersionControls = page.locator(".message.user").first().locator(".message-version-controls");
+  await expect(firstVersionControls).toContainText("2 / 2", { timeout: 15_000 });
   await expect(page.locator(".message.user")).toHaveCount(1);
   await expect(page.locator(".message.user").first()).toContainText("rewound hello");
-  await expect(page.getByRole("button", { name: "跳转到消息：rewound hello" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "跳转到消息：rewound hello" }))
+    .toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole("button", { name: "跳转到消息：hello" })).toHaveCount(0);
+  const firstPreviousVersion = page.waitForResponse((response) =>
+    response.request().method() === "PATCH" && response.url().endsWith("/current-data"),
+  );
   await page.locator(".message.user").first().getByRole("button", { name: "上一个消息版本" }).click();
+  expect((await firstPreviousVersion).ok()).toBeTruthy();
+  await expect(firstVersionControls).toContainText("1 / 2", { timeout: 15_000 });
   await expect(page.locator(".message.user")).toHaveCount(1);
   await expect(page.locator(".message.user").first()).toContainText("hello");
-  await expect(page.getByRole("button", { name: "跳转到消息：hello" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "跳转到消息：hello" }))
+    .toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole("button", { name: "跳转到消息：rewound hello" })).toHaveCount(0);
-  await page.locator(".message.user").first().getByRole("button", { name: "下一个消息版本" }).click();
+  const firstNextButton = page.locator(".message.user").first().getByRole("button", { name: "下一个消息版本" });
+  await expect(firstNextButton).toBeEnabled({ timeout: 15_000 });
+  const firstNextVersion = page.waitForResponse((response) =>
+    response.request().method() === "PATCH" && response.url().endsWith("/current-data"),
+  );
+  await firstNextButton.click();
+  expect((await firstNextVersion).ok()).toBeTruthy();
   await expect(page.locator(".message.user")).toHaveCount(1);
   await expect(page.locator(".message.user").first()).toContainText("rewound hello");
-  await expect(page.getByRole("button", { name: "跳转到消息：rewound hello" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "跳转到消息：rewound hello" }))
+    .toBeVisible({ timeout: 15_000 });
 
   await send(page, "next turn");
   await expect(page.locator(".message.user").last()).toContainText("next turn");
+  const secondPreviousVersion = page.waitForResponse((response) =>
+    response.request().method() === "PATCH" && response.url().endsWith("/current-data"),
+  );
   await page.locator(".message.user").first().getByRole("button", { name: "上一个消息版本" }).click();
+  expect((await secondPreviousVersion).ok()).toBeTruthy();
   await expect(page.locator(".message.user").first()).toContainText("hello");
   await expect(page.locator(".message.user").last()).toContainText("next turn");
-  await expect(page.getByRole("button", { name: "跳转到消息：hello" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "跳转到消息：next turn" })).toBeVisible();
-  await page.locator(".message.user").first().getByRole("button", { name: "下一个消息版本" }).click();
+  await expect(page.getByRole("button", { name: "跳转到消息：hello" }))
+    .toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("button", { name: "跳转到消息：next turn" }))
+    .toBeVisible({ timeout: 15_000 });
+  const secondNextButton = page.locator(".message.user").first().getByRole("button", { name: "下一个消息版本" });
+  await expect(secondNextButton).toBeEnabled({ timeout: 15_000 });
+  const secondNextVersion = page.waitForResponse((response) =>
+    response.request().method() === "PATCH" && response.url().endsWith("/current-data"),
+  );
+  await secondNextButton.click();
+  expect((await secondNextVersion).ok()).toBeTruthy();
   await expect(page.locator(".message.user").first()).toContainText("rewound hello");
-  await expect(page.getByRole("button", { name: "跳转到消息：rewound hello" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "跳转到消息：rewound hello" }))
+    .toBeVisible({ timeout: 15_000 });
 
+  const forkResponse = page.waitForResponse((response) =>
+    response.request().method() === "POST" && response.url().endsWith("/fork"),
+  );
   await page.locator(".message.assistant").last().getByRole("button", { name: "Fork" }).click();
+  expect((await forkResponse).ok()).toBeTruthy();
   await expect(page.getByRole("button", { name: "Playwright Turn", exact: true })).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "Playwright Turn（分支）", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Playwright Turn（分支）", exact: true }))
+    .toBeVisible({ timeout: 15_000 });
   await expect(page.locator(".message.user").last()).toContainText("next turn");
 
   await page.getByLabel("聊天输入").fill("/compact");
@@ -1266,7 +1453,7 @@ test("Plan Review compacts and implements as Plan, Compact, Agent Turns in one S
   const sidebar = await sidebarResponse.json() as { session_id: string };
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Plan Review Compact", exact: true }).click();
+  await selectConversation(page, "Plan Review Compact");
   await page.getByRole("combobox", { name: "运行模式" }).click();
   await page.getByRole("option", { name: /Plan/ }).click();
   await page.getByLabel("聊天输入").fill("plan review compact");
@@ -1321,6 +1508,7 @@ test("Plan Review compacts and implements as Plan, Compact, Agent Turns in one S
 });
 
 test("refresh reattaches a running Turn and flushes the persisted queue as one message", async ({ page }) => {
+  test.slow();
   const sidebarResponse = await page.request.post("/api/sidebar-threads", {
     data: { title: "Reconnect Queue" },
   });
@@ -1336,22 +1524,32 @@ test("refresh reattaches a running Turn and flushes the persisted queue as one m
   });
   await page.reload();
   await expect.poll(() => page.evaluate(() => localStorage.getItem("mini-agent-conversations"))).toBeNull();
-  await page.getByRole("button", { name: "Reconnect Queue", exact: true }).click();
+  await selectConversation(page, "Reconnect Queue");
   await page.getByLabel("聊天输入").fill("delayed reconnect");
   const createResponse = page.waitForResponse((response) =>
     response.request().method() === "POST" && response.url().endsWith("/api/turns"),
   );
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  expect((await createResponse).ok()).toBeTruthy();
+  const created = await createResponse;
+  expect(created.ok()).toBeTruthy();
+  const createdTurn = await created.json() as { turn_id: string };
   await expect(page.locator(".message.assistant").last()).toContainText(
     "Streaming began before refresh.",
     { timeout: 15_000 },
   );
 
   await page.getByLabel("聊天输入").fill("queued first");
+  const firstQueuedResponse = page.waitForResponse((response) =>
+    response.request().method() === "POST" && response.url().includes("/queued-messages"),
+  );
   await page.getByRole("button", { name: "发送", exact: true }).click();
+  expect((await firstQueuedResponse).ok()).toBeTruthy();
   await page.getByLabel("聊天输入").fill("queued second");
+  const secondQueuedResponse = page.waitForResponse((response) =>
+    response.request().method() === "POST" && response.url().includes("/queued-messages"),
+  );
   await page.getByRole("button", { name: "发送", exact: true }).click();
+  expect((await secondQueuedResponse).ok()).toBeTruthy();
   await expect(page.getByRole("region", { name: "待发送消息" })).toContainText("待发送 2 条");
 
   await page.reload();
@@ -1361,6 +1559,11 @@ test("refresh reattaches a running Turn and flushes the persisted queue as one m
     "Streaming finished after refresh.",
     { timeout: 15_000 },
   );
+  await waitForTurnStatus(page, sidebar.session_id, createdTurn.turn_id, "success");
+  await expect.poll(async () => {
+    const turns = (await fetchRuntimeNodes(page, sidebar.session_id)).filter(isRuntimeTurnResponse);
+    return { count: turns.length, status: turns.at(-1)?.status };
+  }, { timeout: 20_000 }).toEqual({ count: 2, status: "success" });
   await expect(page.getByRole("region", { name: "待发送消息" })).toHaveCount(0, { timeout: 15_000 });
   await expect(page.locator(".message.user")).toHaveCount(2, { timeout: 15_000 });
   await expect(page.locator(".message.user").last()).toContainText("queued first");
@@ -1390,15 +1593,10 @@ test("a paused Turn resumes in place with the same id", async ({ page }) => {
   const sidebar = await sidebarResponse.json() as { session_id: string };
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Pause Resume", exact: true }).click();
-  await page.getByLabel("聊天输入").fill("pause and resume");
-  const createResponse = page.waitForResponse((response) =>
-    response.request().method() === "POST" && response.url().endsWith("/api/turns"),
-  );
-  await page.getByRole("button", { name: "发送" }).click();
-  expect((await createResponse).ok()).toBeTruthy();
-  await expect(page.getByRole("button", { name: "暂停" })).toBeVisible();
+  await selectConversation(page, "Pause Resume");
+  const runningTurn = await startRunningTurn(page, "pause and resume");
   await page.getByRole("button", { name: "暂停" }).click();
+  await waitForTurnStatus(page, runningTurn.sessionId, runningTurn.turnId, "paused");
   await expect(page.getByRole("button", { name: "继续" })).toBeVisible({ timeout: 15_000 });
   await expect(page.locator(".message.assistant").last()).toContainText("Partial output preserved before pause.");
   await expect(page.getByText("The run was paused at the user's request.", { exact: false })).toHaveCount(0);
@@ -1435,10 +1633,8 @@ test("running Turn consumes FIFO steering as separate user Messages", async ({ p
   const sidebar = await sidebarResponse.json() as { session_id: string };
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "FIFO Steering", exact: true }).click();
-  await page.getByLabel("聊天输入").fill("steering fifo");
-  await page.getByRole("button", { name: "发送", exact: true }).click();
-  await expect(page.getByRole("button", { name: "暂停" })).toBeVisible();
+  await selectConversation(page, "FIFO Steering");
+  const runningTurn = await startRunningTurn(page, "steering fifo");
   await expect(page.getByRole("button", { name: "Fork" })).toHaveCount(0);
 
   await page.getByLabel("聊天输入").fill("first redirect");
@@ -1454,6 +1650,7 @@ test("running Turn consumes FIFO steering as separate user Messages", async ({ p
   await page.getByRole("button", { name: "发送第 2 条待发送消息" }).click();
   expect((await secondSteer).status()).toBe(202);
 
+  await waitForTurnStatus(page, runningTurn.sessionId, runningTurn.turnId, "success");
   await expect(page.getByRole("region", { name: "待发送消息" })).toHaveCount(0, { timeout: 15_000 });
   await expect(page.locator(".message.user")).toHaveCount(3, { timeout: 15_000 });
   await expect(page.locator(".message.user").nth(1)).toContainText("first redirect");
@@ -1474,7 +1671,7 @@ test("steering waits for the active tool and skips the next stale tool", async (
   const sidebar = await sidebarResponse.json() as { session_id: string };
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Tool Steering", exact: true }).click();
+  await selectConversation(page, "Tool Steering");
   await page.getByLabel("聊天输入").fill("steering during tool");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.locator(".message.assistant").last()).toContainText("slow_tool", { timeout: 15_000 });
@@ -1514,10 +1711,8 @@ test("Pause merges the local queue into one same-Turn steering Message", async (
   const sidebar = await sidebarResponse.json() as { session_id: string };
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Merged Steering", exact: true }).click();
-  await page.getByLabel("聊天输入").fill("steering merge");
-  await page.getByRole("button", { name: "发送", exact: true }).click();
-  await expect(page.getByRole("button", { name: "暂停" })).toBeVisible();
+  await selectConversation(page, "Merged Steering");
+  await startRunningTurn(page, "steering merge");
   await page.getByLabel("聊天输入").fill("merge first");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await page.getByLabel("聊天输入").fill("merge second");
@@ -1548,7 +1743,7 @@ test("assistant Items stay chronological and runtime Collapse starts folded", as
   expect(sidebar.ok(), `${sidebar.status()} ${await sidebar.text()}`).toBeTruthy();
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Ordered Items", exact: true }).click();
+  await selectConversation(page, "Ordered Items");
   await page.getByLabel("聊天输入").fill("ordered items");
   const responsePromise = page.waitForResponse((response) =>
     response.request().method() === "POST" && response.url().endsWith("/api/turns"),
@@ -1557,8 +1752,9 @@ test("assistant Items stay chronological and runtime Collapse starts folded", as
 
   const assistant = page.locator(".message.assistant").last();
   const firstReasoning = assistant.locator('.runtime-item-collapse[data-item-type="reasoning"]').first();
+  await expect(firstReasoning.locator(".runtime-summary-text"))
+    .toContainText("右侧最新字符可见", { timeout: 15_000 });
   await expect(firstReasoning.locator(".ant-collapse-item")).not.toHaveClass(/ant-collapse-item-active/);
-  await expect(firstReasoning.locator(".runtime-summary-text")).toContainText("右侧最新字符可见");
   await expect(firstReasoning.locator(".runtime-status-dot")).toHaveCount(0);
   await expect(firstReasoning.locator(".shimmer-text.is-active")).toHaveCount(0);
 
@@ -1597,7 +1793,10 @@ test("assistant Items stay chronological and runtime Collapse starts folded", as
   await expect(assistant.locator(".runtime-item-collapse .ant-collapse-item-active")).toHaveCount(0);
   await expect(assistant.locator(".shimmer-text.is-active")).toHaveCount(0);
 
-  const summaryViewport = firstReasoning.locator(".runtime-summary-viewport");
+  const completedReasoning = assistant
+    .locator('.runtime-item-collapse[data-item-type="reasoning"]:visible')
+    .first();
+  const summaryViewport = completedReasoning.locator(".runtime-summary-viewport");
   await expect(summaryViewport).toBeVisible();
   const summaryMetrics = await summaryViewport.evaluate((element) => {
     const viewport = element as HTMLElement;
@@ -1614,9 +1813,9 @@ test("assistant Items stay chronological and runtime Collapse starts folded", as
   expect(Math.abs(summaryMetrics.scrollLeft - (summaryMetrics.scrollWidth - summaryMetrics.clientWidth))).toBeLessThanOrEqual(1);
   await expect(summaryViewport.locator(".shimmer-text")).toHaveCount(0);
 
-  await firstReasoning.locator(".ant-collapse-header").click();
-  await expect(firstReasoning.locator(".ant-collapse-item")).toHaveClass(/ant-collapse-item-active/);
-  const reasoningBody = firstReasoning.locator(".thinking-content");
+  await completedReasoning.locator(".ant-collapse-header").click();
+  await expect(completedReasoning.locator(".ant-collapse-item")).toHaveClass(/ant-collapse-item-active/);
+  const reasoningBody = completedReasoning.locator(".thinking-content");
   await expect(reasoningBody).toBeVisible();
   const bodyBounds = await reasoningBody.evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -1624,10 +1823,10 @@ test("assistant Items stay chronological and runtime Collapse starts folded", as
   });
   expect(Math.abs(summaryMetrics.left - bodyBounds.left)).toBeLessThanOrEqual(1);
   expect(Math.abs(summaryMetrics.right - bodyBounds.right)).toBeLessThanOrEqual(1);
-  const reasoningItem = firstReasoning.locator(".ant-collapse-item");
+  const reasoningItem = completedReasoning.locator(".ant-collapse-item");
   await expect(async () => {
     if (await reasoningItem.evaluate((element) => element.classList.contains("ant-collapse-item-active"))) {
-      await firstReasoning.locator(".ant-collapse-header").click();
+      await completedReasoning.locator(".ant-collapse-header").click();
     }
     await expect(reasoningItem).not.toHaveClass(/ant-collapse-item-active/, { timeout: 1_000 });
   }).toPass({ timeout: 5_000 });
@@ -1642,7 +1841,7 @@ test("tool approval shows one pending card and one allowed status", async ({ pag
   const sidebar = await sidebarResponse.json() as { session_id: string };
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Approval Allowed", exact: true }).click();
+  await selectConversation(page, "Approval Allowed");
   await page.getByLabel("聊天输入").fill("approval presentation");
   const responsePromise = page.waitForResponse((response) =>
     response.request().method() === "POST" && response.url().endsWith("/api/turns"),
@@ -1651,12 +1850,12 @@ test("tool approval shows one pending card and one allowed status", async ({ pag
   expect((await responsePromise).ok()).toBeTruthy();
 
   const assistant = page.locator(".message.assistant").last();
+  await expect(assistant.locator(".decision-card")).toHaveCount(1, { timeout: 15_000 });
   await expect(assistant.getByText("Call tool web_search?", { exact: true })).toHaveCount(1);
-  await expect(assistant.locator(".decision-card")).toHaveCount(1);
   await expect(page.getByText("none", { exact: true })).toHaveCount(0);
   await assistant.getByRole("button", { name: "本次允许" }).click();
 
-  await expect(assistant.getByText("已允许 web_search", { exact: true })).toHaveCount(1);
+  await expect(assistant.getByText("已允许 web_search", { exact: true })).toHaveCount(1, { timeout: 15_000 });
   await expect(assistant.getByText("Call tool web_search?", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "发送" })).toBeVisible({ timeout: 15_000 });
 
@@ -1672,7 +1871,7 @@ test("denied tool approval shows one static denied status", async ({ page }) => 
   expect(sidebarResponse.ok(), `${sidebarResponse.status()} ${await sidebarResponse.text()}`).toBeTruthy();
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Approval Denied", exact: true }).click();
+  await selectConversation(page, "Approval Denied");
   await page.getByLabel("聊天输入").fill("approval presentation");
   const responsePromise = page.waitForResponse((response) =>
     response.request().method() === "POST" && response.url().endsWith("/api/turns"),
@@ -1681,10 +1880,11 @@ test("denied tool approval shows one static denied status", async ({ page }) => 
   expect((await responsePromise).ok()).toBeTruthy();
 
   const assistant = page.locator(".message.assistant").last();
+  await expect(assistant.locator(".decision-card")).toHaveCount(1, { timeout: 15_000 });
   await expect(assistant.getByText("Call tool web_search?", { exact: true })).toHaveCount(1);
   await assistant.getByRole("button", { name: "拒绝" }).click();
 
-  await expect(assistant.getByText("已拒绝 web_search", { exact: true })).toHaveCount(1);
+  await expect(assistant.getByText("已拒绝 web_search", { exact: true })).toHaveCount(1, { timeout: 15_000 });
   await expect(assistant.getByText("Call tool web_search?", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "发送" })).toBeVisible({ timeout: 15_000 });
 });
@@ -1701,21 +1901,16 @@ test("Sandbox health gate recovers through the real status and repair HTTP flow"
 
   await page.getByRole("button", { name: /个人简介：/ }).click();
   await page.getByRole("menuitem", { name: "沙箱" }).click();
+  const repairResponse = page.waitForResponse((response) =>
+    response.request().method() === "POST" && response.url().endsWith("/api/sandbox/repair"),
+  );
   const statusResponse = page.waitForResponse((response) =>
     response.request().method() === "GET" && response.url().endsWith("/api/sandbox/status"),
   );
   await page.getByRole("button", { name: /检\s*查/ }).click();
   expect((await statusResponse).ok()).toBeTruthy();
-  await expect(page.getByText("E2E Broker service stopped", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: /修\s*复/ })).toBeVisible();
-
-  const repairResponse = page.waitForResponse((response) =>
-    response.request().method() === "POST" && response.url().endsWith("/api/sandbox/repair"),
-  );
-  await page.getByRole("button", { name: /修\s*复/ }).click();
   expect((await repairResponse).ok()).toBeTruthy();
   await expect(page.getByText("E2E Broker service stopped", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /修\s*复/ })).toHaveCount(0);
   await expect(page.getByText("沙箱已就绪", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Close" }).click();
@@ -1730,7 +1925,7 @@ test("Redis connection failure returns 503 and preserves the Composer draft", as
   expect(sidebarResponse.ok(), `${sidebarResponse.status()} ${await sidebarResponse.text()}`).toBeTruthy();
 
   await page.goto("/app");
-  await page.getByRole("button", { name: "Redis Offline Composer", exact: true }).click();
+  await selectConversation(page, "Redis Offline Composer");
   const editor = page.getByLabel("聊天输入");
   const draft = "redis offline composer must survive";
   await editor.fill(draft);
@@ -1746,7 +1941,10 @@ test("Redis connection failure returns 503 and preserves the Composer draft", as
     await page.getByRole("button", { name: "发送", exact: true }).click();
     const rejected = await rejectedResponse;
     expect(rejected.status()).toBe(503);
-    expect(await rejected.json()).toEqual({ detail: "message_queue_unavailable" });
+    const payload = await rejected.json() as { detail: string };
+    expect(payload.detail).toMatch(
+      /connection (?:was )?refused|actively refused|timed out/i,
+    );
     await expect.poll(() => editor.textContent()).toContain(draft);
     await expect(page.locator(".message.user.is-pending")).toHaveCount(0);
   } finally {

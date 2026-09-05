@@ -12,6 +12,8 @@ from backend.domain.state import utc_now
 class SQLiteSidebarThreadMixin:
     def _sidebar_summaries_for_session(self, session_id: str) -> list[SidebarThreadSummary]:
         with self._connection(session_id) as connection:
+            # Keep node data and thread heads in the same snapshot during concurrent writes.
+            connection.execute("BEGIN")
             threads = [
                 SidebarThread.from_dict(value) for value in self._json_values(connection, session_id, "sidebar_thread")
             ]

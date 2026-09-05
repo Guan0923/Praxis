@@ -18,8 +18,23 @@ async function createConversation(page: Page, title: string): Promise<SidebarThr
   return response.json() as Promise<SidebarThreadResponse>;
 }
 
+async function selectConversation(page: Page, title: string): Promise<void> {
+  const thread = page.getByRole("button", { name: title, exact: true });
+  await expect(thread).toBeVisible();
+  if (await thread.getAttribute("aria-current") !== "page") {
+    await expect(thread).toBeEnabled();
+    await thread.click();
+  }
+  await expect(thread).toHaveAttribute("aria-current", "page");
+  await expect(page.getByLabel("聊天输入")).toBeVisible();
+}
+
 async function sendMessage(scope: Locator | Page, page: Page, text: string): Promise<void> {
   const editor = scope.getByLabel("聊天输入");
+  const users = scope.locator(".message.user");
+  const assistants = scope.locator(".message.assistant");
+  const userCount = await users.count();
+  const assistantCount = await assistants.count();
   await editor.fill(text);
   const responsePromise = page.waitForResponse((response) =>
     response.request().method() === "POST" && response.url().endsWith("/api/turns"),
@@ -27,8 +42,10 @@ async function sendMessage(scope: Locator | Page, page: Page, text: string): Pro
   await scope.getByRole("button", { name: "发送", exact: true }).click();
   const response = await responsePromise;
   expect(response.ok(), `${response.status()} ${await response.text()}`).toBeTruthy();
-  await expect(scope.locator(".message.user").last()).toContainText(text, { timeout: 15_000 });
-  const assistantFrame = scope.locator(".message.assistant").last().locator(".assistant-run-frame");
+  await expect(users).toHaveCount(userCount + 1, { timeout: 15_000 });
+  await expect(users.nth(userCount)).toContainText(text);
+  await expect(assistants).toHaveCount(assistantCount + 1, { timeout: 15_000 });
+  const assistantFrame = assistants.nth(assistantCount).locator(".assistant-run-frame");
   await expect(assistantFrame).toBeVisible({ timeout: 15_000 });
   await expect(assistantFrame).not.toHaveClass(/is-running/, { timeout: 15_000 });
 }
@@ -95,14 +112,24 @@ async function expectSideChatFillsPanel(shell: Locator): Promise<void> {
 }
 
 async function dragSplitterBy(page: Page, dragger: Locator, deltaX: number): Promise<void> {
+  await dragger.hover();
   const box = await dragger.boundingBox();
   expect(box).not.toBeNull();
   const startX = box!.x + box!.width / 2;
   const y = box!.y + box!.height / 2;
+  const savedLayout = page.waitForResponse((response) =>
+    ["POST", "PATCH"].includes(response.request().method())
+      && /\/api\/right-panel\/[^/]+$/.test(new URL(response.url()).pathname),
+  );
   await page.mouse.move(startX, y);
   await page.mouse.down();
+  await expect(dragger).toHaveClass(/ant-splitter-bar-dragger-active/);
   await page.mouse.move(startX + deltaX, y, { steps: 8 });
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   await page.mouse.up();
+  const saved = await savedLayout;
+  expect(saved.request().method()).toBe("PATCH");
+  expect(saved.status()).toBe(200);
 }
 
 test("side chat hides its anchor history, survives refresh, and leaves choices after its last tab closes", async ({ page }) => {
@@ -110,7 +137,7 @@ test("side chat hides its anchor history, survives refresh, and leaves choices a
   const { session_id: sessionId } = await createConversation(page, title);
 
   await page.goto("/app");
-  await page.getByRole("button", { name: title, exact: true }).click();
+  await selectConversation(page, title);
   await sendMessage(page, page, "main history must stay hidden from side chat");
   await expect(page.getByRole("combobox", { name: "运行模式" })).toBeVisible();
 
@@ -176,12 +203,12 @@ test("desktop resize keeps a 280px side chat usable, collapses below it, and res
   await createConversation(page, title);
 
   await page.goto("/app");
-  await page.getByRole("button", { name: title, exact: true }).click();
+  await selectConversation(page, title);
   await sendMessage(page, page, "create a Turn before resizing the panel");
   await openRightPanel(page);
 
   const shell = page.locator(".right-panel-shell");
-  const dragger = page.locator(".ant-splitter-bar").first();
+  const dragger = page.locator(".ant-splitter-bar-dragger").first();
   await expect(shell).toBeVisible();
   const initialWidth = (await shell.boundingBox())?.width ?? 0;
   expect(initialWidth).toBeGreaterThan(400);
@@ -193,6 +220,8 @@ test("desktop resize keeps a 280px side chat usable, collapses below it, and res
   await page.getByRole("button", { name: /创建侧边聊天/ }).click();
   expect((await createResponsePromise).ok()).toBeTruthy();
 
+  await expectSideChatFillsPanel(shell);
+  await expect(page.getByRole("button", { name: "新增右栏窗口" })).toBeEnabled();
   await dragSplitterBy(page, dragger, initialWidth - 280);
   await expect.poll(async () => (await shell.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(279);
   await expect.poll(async () => (await shell.boundingBox())?.width ?? 0).toBeLessThanOrEqual(281);
@@ -215,7 +244,12 @@ test("mobile right panel uses a full-width Drawer and keeps the empty creation s
 
   await page.goto("/app");
   await page.getByRole("button", { name: "打开会话列表" }).click();
-  await page.getByRole("button", { name: title, exact: true }).click();
+  await selectConversation(page, title);
+  const openSidebarDrawer = page.locator(".ant-drawer-content-wrapper:visible");
+  if (await openSidebarDrawer.count() > 0) {
+    await openSidebarDrawer.locator(".ant-drawer-close").click();
+    await expect(openSidebarDrawer).toHaveCount(0);
+  }
   await sendMessage(page, page, "create a Turn before opening the mobile panel");
 
   await openRightPanel(page);
@@ -249,7 +283,7 @@ test("real cmd terminal starts in the Turn cwd, replays after refresh, and close
   const { session_id: sessionId } = await createConversation(page, title);
 
   await page.goto("/app");
-  await page.getByRole("button", { name: title, exact: true }).click();
+  await selectConversation(page, title);
   await sendMessage(page, page, "create the terminal source Turn");
 
   const turnsResponse = await page.request.get(`/api/turns?session_id=${encodeURIComponent(sessionId)}`);

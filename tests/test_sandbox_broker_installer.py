@@ -312,6 +312,7 @@ def test_configuration_read_failure_logs_step_error_type_and_winerror_once(
         SC_MANAGER_CONNECT=1,
         OpenSCManager=lambda *args: (_ for _ in ()).throw(ServiceReadError("api_key=secret-value")),
     )
+    monkeypatch.setitem(sys.modules, "winreg", types.SimpleNamespace())
     monkeypatch.setitem(sys.modules, "win32service", fake_win32service)
     installer = WindowsServiceInstaller(("pythonservice.exe",), is_windows=True)
     caplog.set_level(logging.WARNING, logger="backend.sandbox.broker_service.installer")
