@@ -1,4 +1,4 @@
-import { requestJson } from "../transport/request";
+import { requestJson, requestRaw } from "../transport/request";
 import type { SessionInfo } from "../conversations/sessions";
 
 export interface ProjectInfo {
@@ -24,7 +24,7 @@ export async function listProjects(state: "active" | "removed" | "all" = "active
 }
 
 export async function createProject(): Promise<ProjectCreateResult | null> {
-  const response = await fetch("/api/projects", { method: "POST", cache: "no-store" });
+  const response = await requestRaw("/api/projects", { method: "POST", cache: "no-store" });
   if (response.status === 204) return null;
   if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || `请求失败（${response.status}）`);
   return response.json() as Promise<ProjectCreateResult>;
@@ -51,7 +51,7 @@ export async function renameProject(projectId: string, name: string): Promise<Pr
 }
 
 export async function changeProjectPath(projectId: string): Promise<ProjectInfo | null> {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/path`, {
+  const response = await requestRaw(`/api/projects/${encodeURIComponent(projectId)}/path`, {
     method: "POST",
     cache: "no-store",
   });

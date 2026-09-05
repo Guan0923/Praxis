@@ -197,7 +197,7 @@ export default function AppSidebar({
         </div>
 
         <div className="sidebar-primary-actions sidebar-reveal-item" data-reveal-index="1">
-          <Button type="default" className="sidebar-create-button" block icon={<PlusOutlined />} onClick={() => void onNew()} aria-label="新建对话">
+          <Button type="default" className="sidebar-create-button" block icon={<PlusOutlined />} onClick={() => void Promise.resolve(onNew()).catch(() => undefined)} aria-label="新建对话">
             新建对话
           </Button>
           <Button

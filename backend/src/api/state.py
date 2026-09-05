@@ -90,6 +90,9 @@ class WebAppState:
         self.active_turn_streams: dict[str, object] = {}
         self.active_turn_streams_lock = RLock()
         self.active_runtime_config_locks: dict[str, RLock] = {}
+        from .operation_control import OperationControl
+
+        self.operation_control = OperationControl()
         from backend.storage.sqlite import SQLiteSessionStore
 
         agent_store = SQLiteSessionStore(self.paths, self.agent_thread_index)

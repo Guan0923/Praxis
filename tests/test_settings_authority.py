@@ -312,6 +312,27 @@ def test_sandbox_network_rule_api_accepts_optional_port_and_at_most_64_rules() -
         SandboxConfigPayload(network_allowlist=[{"host": f"host-{index}.example"} for index in range(65)])
 
 
+@pytest.mark.parametrize(
+    ("network_mode", "rules"),
+    [
+        ("no_network", []),
+        ("full_network", []),
+        ("restricted_network", [{"host": "example.test"}]),
+        ("restricted_network", [{"host": "example.test", "port": 443}]),
+    ],
+)
+def test_sandbox_network_rules_round_trip_through_toml(
+    tmp_path: Path,
+    network_mode: str,
+    rules: list[dict[str, object]],
+) -> None:
+    store = LocalSettingsStore(tmp_path / "runtime" / "state.db", tmp_path / "config.toml")
+    updated = store.update_sandbox_config({"network_mode": network_mode, "network_allowlist": rules})
+
+    reloaded = LocalSettingsStore(tmp_path / "runtime" / "state.db", tmp_path / "config.toml")
+    assert reloaded.sandbox_config()["network_allowlist"] == updated["network_allowlist"]
+
+
 def test_provider_names_are_case_insensitive_unique_and_renamable(tmp_path: Path) -> None:
     store = LocalSettingsStore(tmp_path / "runtime" / "state.db", tmp_path / "config.toml")
     first = store.update_provider_config(

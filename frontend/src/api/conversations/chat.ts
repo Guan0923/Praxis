@@ -225,7 +225,7 @@ export async function streamRewind(
     { ...jsonBody({
       message: { role: "user", content: [{ type: "text", text: prompt, ...(options.references?.length ? { references: options.references } : {}) }] },
       ...executionConfig(options),
-    }), signal },
+    }), signal, operation: { sessionId: options.sessionId } },
   );
   return streamEndpoint(
     `/api/turns/${encodeURIComponent(turnId)}/stream?session_id=${encodeURIComponent(options.sessionId)}&delivery_id=${encodeURIComponent(receipt.delivery_id)}`,
@@ -257,7 +257,7 @@ export async function streamResume(
       running_mode: mode,
       provider_name: providerName,
       ...(model ? { model } : {}),
-    }), signal },
+    }), signal, operation: { sessionId } },
   );
   return streamEndpoint(
     `/api/turns/${encodeURIComponent(sourceNodeId)}/stream?session_id=${encodeURIComponent(sessionId)}`,
@@ -283,17 +283,24 @@ export async function streamAttachedTurn(
   );
 }
 
-export async function pauseTurn(turnId: string): Promise<void> {
-  await requestJson(`/api/turns/${encodeURIComponent(turnId)}/pause`, { method: "POST" });
+export async function pauseTurn(turnId: string, sessionId?: string): Promise<void> {
+  await requestJson(`/api/turns/${encodeURIComponent(turnId)}/pause`, {
+    method: "POST",
+    operation: { sessionId },
+  });
 }
 
 export async function steerTurn(
   turnId: string,
   deliveryId: string,
   messageIds: string[],
+  sessionId?: string,
 ): Promise<void> {
-  await requestJson(`/api/turns/${encodeURIComponent(turnId)}/steer`, jsonBody({
+  await requestJson(`/api/turns/${encodeURIComponent(turnId)}/steer`, {
+    ...jsonBody({
       delivery_id: deliveryId,
       message_ids: messageIds,
-    }));
+    }),
+    operation: { sessionId },
+  });
 }

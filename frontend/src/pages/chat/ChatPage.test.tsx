@@ -1065,6 +1065,7 @@ describe("ChatPage queued message flushing", () => {
       "turn-running",
       expect.any(String),
       ["queued-1"],
+      "session-rewind",
     ));
     expect(screen.getByTestId("queued-count")).toHaveTextContent("2");
     expect(screen.getByRole("button", { name: "发送第 1 条待发送消息" })).toBeDisabled();
@@ -1082,6 +1083,7 @@ describe("ChatPage queued message flushing", () => {
       "turn-running",
       expect.any(String),
       ["queued-1", "queued-2"],
+      "session-rewind",
     ));
     expect(screen.getAllByText(/发送中/)).toHaveLength(2);
   });

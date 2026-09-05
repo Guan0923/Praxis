@@ -42,7 +42,7 @@ export function createConversationActions(context: ConversationActionsContext) {
     try {
       const conversation = conversations.find((item) => item.id === id);
       const sessionId = await ensureSession(id);
-      const summary = await renameSession(conversation?.threadId ?? sessionId, title);
+      const summary = await renameSession(conversation?.threadId ?? sessionId, title, sessionId);
       updateConversation(id, (current) => summaryToConversation(summary, current));
     } catch (error) {
       setActionError(String((error as Error).message ?? error));
@@ -55,7 +55,7 @@ export function createConversationActions(context: ConversationActionsContext) {
     try {
       const conversation = conversations.find((item) => item.id === id);
       const sessionId = await ensureSession(id);
-      const summary = await archiveSession(conversation?.threadId ?? sessionId);
+      const summary = await archiveSession(conversation?.threadId ?? sessionId, sessionId);
       updateConversation(id, (current) => summaryToConversation(summary, current));
       if (currentId === id) setCurrentId(activeConversations.find((item) => item.id !== id)?.id ?? null);
     } catch (error) {
@@ -68,7 +68,7 @@ export function createConversationActions(context: ConversationActionsContext) {
     try {
       const conversation = conversations.find((item) => item.id === id);
       const sessionId = await ensureSession(id);
-      await deleteSession(conversation?.threadId ?? sessionId);
+      await deleteSession(conversation?.threadId ?? sessionId, sessionId);
       setConversations((previous) => previous.filter((item) => item.id !== id));
       if (currentId === id) setCurrentId(null);
     } catch (error) {
@@ -82,7 +82,7 @@ export function createConversationActions(context: ConversationActionsContext) {
       const conversation = conversations.find((item) => item.id === id);
       if (!conversation) return;
       const sessionId = await ensureSession(id);
-      const summary = await restoreSession(conversation.threadId ?? sessionId);
+      const summary = await restoreSession(conversation.threadId ?? sessionId, sessionId);
       updateConversation(id, (current) => summaryToConversation(summary, current));
       if (!currentId) setCurrentId(conversation.id);
     } catch (error) {
@@ -100,7 +100,7 @@ export function createConversationActions(context: ConversationActionsContext) {
       await ensureSession(id);
       const sourceTurnId = source.messages[index].sourceNodeId;
       if (!sourceTurnId) throw new Error("fork requires an assistant Turn");
-      const forked = await forkTurn(sourceTurnId);
+      const forked = await forkTurn(sourceTurnId, source.sessionId);
       const sidebar = forked.sidebar_thread;
       const branch = withLoadedTurns({
         id: sidebar.thread_id,

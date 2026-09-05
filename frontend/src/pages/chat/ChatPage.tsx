@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { App as AntApp, FloatButton } from "antd";
 import { VerticalAlignBottomOutlined } from "@ant-design/icons";
-import { sessionFileContentUrl, submitDecision } from "../../api";
+import { bindSessionOperationResources, sessionFileContentUrl, submitDecision } from "../../api";
 import { parseCommand } from "../../commands";
 import {
   commandKeyAction,
@@ -37,6 +37,7 @@ import { useChatCommands } from "./useChatCommands";
 import { useChatScroll } from "./useChatScroll";
 import { useQueuedMessageFlow } from "./useQueuedMessageFlow";
 import { useResponsiveChatLayout } from "./useResponsiveChatLayout";
+import { useSessionOwnership } from "../../app/useSessionOwnership";
 
 export { composerAction } from "./contracts";
 export { CHAT_COMPACT_WIDTH } from "./useResponsiveChatLayout";
@@ -66,12 +67,23 @@ export default function ChatPage({
   sandboxHealth = { phase: "healthy", detail: null },
 }: ChatPageProps) {
   const { message } = AntApp.useApp();
+  const sendPendingRef = useRef(false);
   const agentThreadView = useAgentThreadView({
     canonical: canonicalConversation,
     enabled: agentThreadNavigation,
     onUpdate,
   });
   const conversation = agentThreadView.conversation;
+  const ownership = useSessionOwnership(conversation?.sessionId);
+  const sessionReadOnly = Boolean(conversation?.sessionId) && ownership !== "writable";
+  useEffect(() => {
+    if (!conversation?.sessionId) return;
+    bindSessionOperationResources(
+      conversation.sessionId,
+      [conversation.threadId, ...(conversation.runtimeNodes ?? []).map((node) => node.thread_id)].filter((id): id is string => Boolean(id)),
+      (conversation.runtimeNodes ?? []).map((node) => node.id),
+    );
+  }, [conversation?.sessionId, conversation?.threadId, conversation?.runtimeNodes]);
   const [agentModeByThread, setAgentModeByThread] = useState<Record<string, ChatMode>>({});
   const mode = agentThreadView.isSubagent && agentThreadView.selectedThreadId
     ? agentModeByThread[agentThreadView.selectedThreadId] ?? selectedMode ?? "agent"
@@ -438,7 +450,9 @@ export default function ChatPage({
 
 
   async function send() {
-    if (compactionPending || sandboxBlocked) return;
+    if (compactionPending || sandboxBlocked || sessionReadOnly || sendPendingRef.current) return;
+    sendPendingRef.current = true;
+    try {
     const prompt = input.trim();
     // A running assistant no longer blocks the composer: a draft is handed
     // to the in-memory FIFO queue below.  Only an in-progress upload prevents
@@ -498,11 +512,14 @@ export default function ChatPage({
         setPendingUploads([]);
       },
     );
+    } finally {
+      sendPendingRef.current = false;
+    }
   }
 
   async function chooseDecision(request: DecisionRequest, choice: string, options?: { supplement?: string; answers?: Record<string, string[]> }) {
     try {
-      await submitDecision(request.decision_id, choice, options);
+      await submitDecision(request.decision_id, choice, options, conversation?.sessionId);
       setLast({ decision: undefined });
     } catch (error) {
       setLast({ error: String((error as Error).message ?? error) });
@@ -629,10 +646,11 @@ export default function ChatPage({
         onStop={queuedMessageFlow.pauseOrSteer}
         onSend={() => void send()}
         actionMode={actionMode}
-        submitDisabled={sandboxBlocked || projectUnavailable || compactionPending || composerActionState.disabled}
-        disabled={sandboxBlocked || projectUnavailable || compactionPending}
+        submitDisabled={sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || composerActionState.disabled}
+        disabled={sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly}
         disabledReason={sandboxBlocked
           ? sandboxHealth.phase === "checking" ? "正在检查沙箱 Broker" : "沙箱 Broker 不可用"
+          : sessionReadOnly ? ownership === "unknown" ? "正在确认窗口操作权" : "当前 session 正在另一个窗口对话"
           : conversation?.projectAvailable === false ? "项目 cwd 不可用，恢复文件夹后才能运行" : undefined}
         fileCandidates={fileCandidates}
         fileMenuVisible={fileMenuVisible}
@@ -644,6 +662,7 @@ export default function ChatPage({
         sessionId={conversation?.sessionId}
         pendingUploads={pendingUploads}
         uploadsUploading={pendingUploads.some((upload) => upload.status === "uploading")}
+        uploadsDisabled={sessionReadOnly}
         queuedMessages={agentThreadView.isSubagent ? [] : queuedMessages}
         onQueueSend={agentThreadView.isSubagent ? undefined : queuedMessageFlow.sendQueuedMessage}
         onQueueEdit={agentThreadView.isSubagent ? undefined : queuedMessageFlow.editQueuedMessage}

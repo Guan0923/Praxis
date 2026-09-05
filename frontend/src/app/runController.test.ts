@@ -371,7 +371,7 @@ describe("run controller incremental batching", () => {
 
     await controller.runConversation(request());
 
-    expect(pauseTurn).toHaveBeenCalledWith("turn_1");
+    expect(pauseTurn).toHaveBeenCalledWith("turn_1", "session_1");
     expect(recoverConversation).toHaveBeenCalledWith("conversation_1", "session_1", "turn_1");
   });
 

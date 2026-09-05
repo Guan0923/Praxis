@@ -1,6 +1,7 @@
 import type { FileReference, FileSource, SessionFileInfo } from "../../types";
 import { apiUrl } from "../transport/base";
-import { ApiError, errorFrom } from "../transport/request";
+import { ApiError, errorFrom, requestRaw } from "../transport/request";
+import { windowOperationControl } from "../transport/operationControl";
 
 /** Upload a batch of files; resolves to the stored file metadata. */
 export async function uploadSessionFiles(
@@ -10,10 +11,12 @@ export async function uploadSessionFiles(
 ): Promise<SessionFileInfo[]> {
   const form = new FormData();
   for (const file of files) form.append("files", file, file.name);
-  const response = await fetchWithProgress(
-    apiUrl(`/api/sessions/${encodeURIComponent(sessionId)}/files`),
-    form,
-    onProgress,
+  const url = `/api/sessions/${encodeURIComponent(sessionId)}/files`;
+  const response = await windowOperationControl.requestUsing(
+    url,
+    { method: "POST", body: form },
+    { sessionId },
+    (targetUrl, init) => fetchWithProgress(apiUrl(targetUrl), init, onProgress),
   );
   if (!response.ok) {
     throw new ApiError(response.status, await errorFrom(response));
@@ -24,27 +27,33 @@ export async function uploadSessionFiles(
 /** fetch() with upload progress, using XHR under the hood. */
 function fetchWithProgress(
   url: string,
-  body: FormData,
+  init: RequestInit,
   onProgress?: (percent: number) => void,
 ): Promise<Response> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", url);
+    xhr.open(init.method ?? "POST", url);
+    new Headers(init.headers).forEach((value, name) => xhr.setRequestHeader(name, value));
     xhr.upload.onprogress = (event) => {
       if (onProgress && event.lengthComputable) {
         onProgress(Math.round((event.loaded / event.total) * 100));
       }
     };
     xhr.onload = () => {
+      const headers = new Headers();
+      for (const line of xhr.getAllResponseHeaders().trim().split(/[\r\n]+/)) {
+        const index = line.indexOf(":");
+        if (index > 0) headers.append(line.slice(0, index).trim(), line.slice(index + 1).trim());
+      }
       const response = new Response(xhr.response, {
         status: xhr.status,
         statusText: xhr.statusText,
-        headers: { "Content-Type": xhr.getResponseHeader("Content-Type") ?? "application/json" },
+        headers,
       });
       resolve(response);
     };
     xhr.onerror = () => reject(new Error("上传请求失败"));
-    xhr.send(body);
+    xhr.send(init.body as XMLHttpRequestBodyInit | null);
   });
 }
 
@@ -84,9 +93,9 @@ export async function deleteSessionFile(
   path: string,
 ): Promise<void> {
   const params = new URLSearchParams({ source, path });
-  const response = await fetch(
-    apiUrl(`/api/sessions/${encodeURIComponent(sessionId)}/files?${params.toString()}`),
-    { method: "DELETE", cache: "no-store" },
+  const response = await requestRaw(
+    `/api/sessions/${encodeURIComponent(sessionId)}/files?${params.toString()}`,
+    { method: "DELETE", cache: "no-store", operation: { sessionId } },
   );
   if (!response.ok) {
     throw new ApiError(response.status, await errorFrom(response));

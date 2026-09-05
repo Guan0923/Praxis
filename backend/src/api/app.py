@@ -46,7 +46,46 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
                 status_code=403,
                 headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
             )
-        response = await call_next(request)
+        from .operation_control import canonical_operation_session, operation_headers
+
+        try:
+            operation = operation_headers(request) if request.method not in {"GET", "HEAD", "OPTIONS"} else None
+        except HTTPException as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        if operation is None and request.method not in {"GET", "HEAD", "OPTIONS"} and request.headers.get("origin"):
+            return JSONResponse({"detail": "浏览器写请求缺少操作协议头。"}, status_code=400)
+        if operation is None:
+            response = await call_next(request)
+        else:
+            window_id, generation, group, session_id, seq, ack = operation
+            try:
+                session_id = await canonical_operation_session(request, resolved, session_id)
+                state, lock = await resolved.operation_control.operation(
+                    window_id=window_id,
+                    generation=generation,
+                    group=group,
+                    session_id=session_id,
+                )
+            except HTTPException as exc:
+                return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+            try:
+                async with lock:
+                    if seq != state.client_seq or ack != state.server_seq:
+                        return JSONResponse(
+                            {"detail": "操作序号不匹配，未执行请求。", "code": "operation_sequence_mismatch"},
+                            status_code=409,
+                            headers={
+                                "X-Mini-Agent-Seq": str(state.server_seq),
+                                "X-Mini-Agent-Ack": str(state.client_seq),
+                            },
+                        )
+                    response = await call_next(request)
+                    response.headers["X-Mini-Agent-Seq"] = str(state.server_seq)
+                    state.client_seq += 1
+                    state.server_seq += 1
+                    response.headers["X-Mini-Agent-Ack"] = str(state.client_seq)
+            finally:
+                await resolved.operation_control.finish_operation(window_id, session_id)
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
             response.headers["Pragma"] = "no-cache"
@@ -71,6 +110,7 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
     from .routes.sidebar_threads import router as sidebar_threads_router
     from .routes.skill_settings import router as skill_settings_router
     from .routes.turns import router as turns_router
+    from .routes.window_control import router as window_control_router
     from .session_files import router as session_files_router
     from .shared.benchmark import create_benchmark_app
     from .shared.info import router as info_router
@@ -88,6 +128,7 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
     app.include_router(sidebar_threads_router)
     app.include_router(turns_router)
     app.include_router(session_files_router)
+    app.include_router(window_control_router)
     app.mount("/benchmark", create_benchmark_app(resolved))
 
     @app.get("/api/health")

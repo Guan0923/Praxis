@@ -8,6 +8,7 @@ import {
   listSessions,
   updateSidebarThreadOrder,
   updateProfile,
+  bindSessionOperationResources,
   type ProviderConfig,
   type SidebarThreadSort,
 } from "../api";
@@ -68,6 +69,7 @@ function AgentApp() {
   const [projectLoading, setProjectLoading] = useState(false);
   const activeRunsRef = useRef(new Map<string, import("./types").ActiveRun>());
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const newConversationPromiseRef = useRef<Promise<string> | null>(null);
   const sandboxHealth = useSandboxHealth();
   const [panelConversations, setPanelConversations] = useState<Record<string, Conversation>>({});
 
@@ -168,6 +170,16 @@ function AgentApp() {
     if (page === "trash") setArchiveReadState((previous) => markArchivedAsRead(previous, archivedConversations));
   }, [archivedConversations, page]);
   const current = activeConversations.find((conversation) => conversation.id === currentId) ?? activeConversations[0] ?? null;
+  useEffect(() => {
+    for (const conversation of conversations) {
+      if (!conversation.sessionId) continue;
+      bindSessionOperationResources(
+        conversation.sessionId,
+        [conversation.threadId, ...(conversation.runtimeNodes ?? []).map((node) => node.thread_id)].filter((id): id is string => Boolean(id)),
+        (conversation.runtimeNodes ?? []).map((node) => node.id),
+      );
+    }
+  }, [conversations]);
 
   // Removing a project can hide the currently selected conversation. Keep
   // the chat page in a deterministic empty/ordinary state instead of letting
@@ -359,7 +371,7 @@ function AgentApp() {
     return summary.session_id;
   }
 
-  async function newConversation(title?: string): Promise<string> {
+  async function createNewConversation(title?: string): Promise<string> {
     const empty = activeConversations.find(
       (conversation) =>
         !conversation.projectId &&
@@ -386,6 +398,21 @@ function AgentApp() {
     setCurrentId(conversation.id);
     setPage("chat");
     return conversation.id;
+  }
+
+  function newConversation(title?: string): Promise<string> {
+    if (newConversationPromiseRef.current) return newConversationPromiseRef.current;
+    const pending = createNewConversation(title)
+      .catch(async (error) => {
+        setActionError(String((error as Error).message ?? error));
+        await refreshSessions().catch(() => undefined);
+        throw error;
+      })
+      .finally(() => {
+        if (newConversationPromiseRef.current === pending) newConversationPromiseRef.current = null;
+      });
+    newConversationPromiseRef.current = pending;
+    return pending;
   }
 
   function applySidebarOrder(projectId: string | null, orderedThreadIds: string[]) {

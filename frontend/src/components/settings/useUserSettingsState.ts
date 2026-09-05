@@ -56,6 +56,7 @@ export function useUserSettingsState({
   const [managedModelOpen, setManagedModelOpen] = useState<Record<string, boolean>>({});
   const [managedModelFeedback, setManagedModelFeedback] = useState<Record<string, ProviderModelFeedback>>({});
   const settingsOpenRef = useRef(open);
+  const savingRef = useRef(false);
 
   useEffect(() => {
     settingsOpenRef.current = open;
@@ -183,7 +184,8 @@ export function useUserSettingsState({
   }
 
   async function saveCurrent() {
-    if (!settings) return;
+    if (!settings || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     setError("");
     try {
@@ -231,6 +233,7 @@ export function useUserSettingsState({
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "保存失败，请稍后重试。");
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }

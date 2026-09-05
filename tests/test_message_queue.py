@@ -231,6 +231,48 @@ def test_create_turn_keeps_accepted_delivery_pending_until_worker_admission(tmp_
     assert claimed is not None and claimed.envelope.delivery_id == "delivery-stream-failure"
 
 
+def test_turn_start_worker_acknowledges_permanent_invalid_command(tmp_path: Path) -> None:
+    from backend.storage.message_queue import MemoryMessageQueue
+
+    queue = MemoryMessageQueue()
+    state = WebAppState(tmp_path / "web", message_queue=queue)
+    state.turn_message_worker.close()
+    try:
+        with TestClient(create_app(state)) as client:
+            sidebar = client.post("/api/sidebar-threads", json={}).json()
+            envelope = MessageEnvelope(
+                "delivery-invalid-command",
+                "user",
+                sidebar["thread_id"],
+                "turn_start",
+                "turn-invalid-command",
+                sidebar["session_id"],
+                sidebar["thread_id"],
+                {
+                    "content": "invalid command",
+                    "references": [],
+                    "version": 1,
+                    "operation": "unsupported",
+                    "parent_id": "",
+                    "config": {},
+                },
+                ("delivery-invalid-command",),
+            )
+            queue.dispatch_turn_start(envelope)
+            claimed = queue.claim_turn_start("test-worker", recover=True)
+            assert claimed is not None
+
+            state.turn_message_worker._start(claimed)
+
+            assert queue.claim_turn_start("replacement", recover=True) is None
+            terminal = state.runtime_event_stream.latest_turn_event("turn-invalid-command")
+            assert terminal is not None
+            assert terminal.payload["type"] == "turn.terminal"
+            assert terminal.payload["terminal_type"] == "failed"
+    finally:
+        state.close()
+
+
 def test_create_turn_fails_closed_when_message_queue_is_unavailable(tmp_path: Path) -> None:
     from backend.domain import MessageQueueUnavailable
     from backend.storage.message_queue import MemoryMessageQueue
@@ -371,6 +413,40 @@ def test_real_redis_turn_start_xautoclaim_recovers_one_delivery(redis_queue: Red
     redis_queue.ack(replacement)
     assert redis_queue.claim_turn_start("after-ack", recover=True) is None
     assert redis_queue.client.xlen(stream) == 0
+
+
+def test_real_redis_turn_start_pending_delivery_does_not_block_another_session(
+    redis_queue: RedisMessageQueue,
+) -> None:
+    def envelope(delivery_id: str, session_id: str) -> MessageEnvelope:
+        return MessageEnvelope(
+            delivery_id,
+            "user",
+            session_id,
+            "turn_start",
+            f"turn-{delivery_id}",
+            session_id,
+            session_id,
+            {
+                "content": delivery_id,
+                "references": [],
+                "version": 1,
+                "operation": "create",
+                "parent_id": "",
+                "config": {},
+            },
+            (delivery_id,),
+        )
+
+    redis_queue.dispatch_turn_start(envelope("first", "session-first"))
+    redis_queue.dispatch_turn_start(envelope("second", "session-second"))
+    first = redis_queue.claim_turn_start("worker-first", recover=True)
+    second = redis_queue.claim_turn_start("worker-second")
+
+    assert first is not None and first.envelope.session_id == "session-first"
+    assert second is not None and second.envelope.session_id == "session-second"
+    redis_queue.ack(first)
+    redis_queue.ack(second)
 
 
 def test_real_redis_restart_acks_committed_turn_without_rerun_and_marks_process_stop(

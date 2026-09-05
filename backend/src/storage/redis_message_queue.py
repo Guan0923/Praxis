@@ -356,6 +356,7 @@ class RedisMessageQueue:
         *,
         stale_claim_ms: int = STALE_CLAIM_MS,
         group: str | None = None,
+        block_on_pending: bool = True,
     ) -> ClaimedEnvelope | None:
         resolved_group = group or self.consumer_group
         self._ensure_group(stream, resolved_group)
@@ -369,10 +370,11 @@ class RedisMessageQueue:
                 count=1,
             )
             entries = reclaimed[1] if len(reclaimed) > 1 else []
-            if not entries:
+            if not entries and block_on_pending:
                 pending = self.client.xpending(stream, resolved_group)
                 if int(pending.get("pending", 0)) > 0:
                     return None
+            if not entries:
                 response = self.client.xreadgroup(resolved_group, consumer, {stream: ">"}, count=1, block=None)
                 entries = response[0][1] if response else []
             if not entries:
@@ -393,6 +395,7 @@ class RedisMessageQueue:
             consumer,
             stale_claim_ms=0 if recover else STALE_CLAIM_MS,
             group=TURN_START_CONSUMER_GROUP,
+            block_on_pending=False,
         )
 
     def claim_thread(self, thread_id: str, consumer: str) -> ClaimedEnvelope | None:

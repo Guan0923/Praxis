@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import threading
 
+from pydantic import ValidationError
+
 from backend.domain.runtime_state import RuntimeState
 from backend.storage.sqlite import SQLiteSessionStore
 
@@ -50,6 +52,9 @@ class TurnMessageWorker:
         payload = envelope.payload
         store = SQLiteSessionStore(self.state.paths, getattr(self.state, "agent_thread_index", None))
         operation = str(payload.get("operation") or "create")
+        if operation not in {"create", "rewind"}:
+            self._reject_permanently(claimed)
+            return
         existing = store.find_node(envelope.target_id)
         if isinstance(existing, RuntimeState) and any(
             message.get("delivery_id") == envelope.delivery_id for version in existing.data for message in version
@@ -57,18 +62,27 @@ class TurnMessageWorker:
             self.state.message_queue.ack(claimed)
             return
         if operation == "create" and isinstance(existing, RuntimeState):
+            self._reject_permanently(claimed)
             return
         config_payload = payload.get("config")
-        config = TurnExecutionConfig.model_validate(config_payload if isinstance(config_payload, dict) else {})
+        try:
+            config = TurnExecutionConfig.model_validate(config_payload if isinstance(config_payload, dict) else {})
+        except ValidationError:
+            self._reject_permanently(claimed)
+            return
         if operation == "rewind":
             item: dict[str, object] = {"type": "text", "text": envelope.content, "status": "success"}
             if envelope.references:
                 item["references"] = list(envelope.references)
-            rewound = store.append_turn_version(
-                envelope.target_id,
-                item,
-                delivery_id=envelope.delivery_id,
-            )
+            try:
+                rewound = store.append_turn_version(
+                    envelope.target_id,
+                    item,
+                    delivery_id=envelope.delivery_id,
+                )
+            except (KeyError, RuntimeError, ValueError):
+                self._reject_permanently(claimed)
+                return
             _stream_turn(
                 self.state,
                 session_id=envelope.session_id,
@@ -83,8 +97,6 @@ class TurnMessageWorker:
                 stream_response=False,
             )
             return
-        if operation != "create":
-            raise ValueError("Unsupported queued Turn message operation.")
         _stream_turn(
             self.state,
             session_id=envelope.session_id,
@@ -97,6 +109,20 @@ class TurnMessageWorker:
             initial_delivery=claimed,
             stream_response=False,
         )
+
+    def _reject_permanently(self, claimed) -> None:
+        from .runtime_event_transport import publish_terminal
+
+        envelope = claimed.envelope
+        publish_terminal(
+            self.state,
+            session_id=envelope.session_id,
+            thread_id=envelope.thread_id,
+            turn_id=envelope.target_id,
+            terminal_type="failed",
+            message="Turn 启动请求无效，已停止重试。",
+        )
+        self.state.message_queue.ack(claimed)
 
 
 __all__ = ["TurnMessageWorker"]
