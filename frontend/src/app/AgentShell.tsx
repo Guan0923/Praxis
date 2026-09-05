@@ -15,6 +15,7 @@ import UserSettingsModal from "../components/UserSettingsModal";
 import IconAction from "../components/IconAction";
 import type { SandboxHealthState } from "./useSandboxHealth";
 import RightPanel, { RightPanelLauncher, useRightPanel } from "../components/rightPanel/RightPanel";
+import { allowAllFilePanelsToLeave } from "../components/rightPanel/filePanelLifecycle";
 
 export const DEFAULT_RIGHT_PANEL_WIDTH = 420;
 export const RIGHT_PANEL_CLOSE_THRESHOLD = 280;
@@ -123,12 +124,16 @@ export default function AgentShell(props: AgentShellProps) {
     props.onNavigate(page);
     closeMobile();
   };
-  const select = (id: string) => {
-    userBackendRequest(() => props.onSelect(id));
+  const select = async (id: string) => {
+    props.sandboxHealth.notifyUserBackendRequest();
+    if (!await allowAllFilePanelsToLeave()) return;
+    props.onSelect(id);
     closeMobile();
   };
   const create = async (title?: string) => {
-    const id = await userBackendRequest(() => props.onNew(title));
+    props.sandboxHealth.notifyUserBackendRequest();
+    if (!await allowAllFilePanelsToLeave()) return props.current?.id ?? "";
+    const id = await props.onNew(title);
     closeMobile();
     return id;
   };
@@ -137,11 +142,15 @@ export default function AgentShell(props: AgentShellProps) {
     closeMobile();
   };
   const createProjectConversation = async (projectId: string) => {
-    await userBackendRequest(() => props.onNewProjectConversation(projectId));
+    props.sandboxHealth.notifyUserBackendRequest();
+    if (!await allowAllFilePanelsToLeave()) return;
+    await props.onNewProjectConversation(projectId);
     closeMobile();
   };
   const useSession = async (sessionId: string) => {
-    const id = await userBackendRequest(() => props.onSelectSession(sessionId));
+    props.sandboxHealth.notifyUserBackendRequest();
+    if (!await allowAllFilePanelsToLeave()) return props.current?.id ?? sessionId;
+    const id = await props.onSelectSession(sessionId);
     closeMobile();
     return id;
   };
@@ -298,7 +307,11 @@ export default function AgentShell(props: AgentShellProps) {
               placement="right"
               size="100%"
               open={panelOpen}
-              onClose={() => panel.setLayout({ collapsed: true })}
+              onClose={() => {
+                void allowAllFilePanelsToLeave().then((allowed) => {
+                  if (allowed) panel.setLayout({ collapsed: true });
+                });
+              }}
               styles={{ body: { padding: 0, overflow: "hidden" } }}
             >
               <div className="right-panel-shell">{rightPanel}</div>

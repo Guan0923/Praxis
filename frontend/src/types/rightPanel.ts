@@ -8,7 +8,7 @@ export interface RightPanelState {
 export interface RightPanelWindow {
   id: string;
   session_id: string;
-  kind: "side_chat" | "terminal";
+  kind: "side_chat" | "terminal" | "files";
   title: string;
   position: number;
   created_at: string;

@@ -1,6 +1,14 @@
-import type { FileReference, FileSource, SessionFileInfo } from "../../types";
+import type {
+  FileEditorDocument,
+  FileReference,
+  FileSource,
+  FileTreeEntry,
+  FileTreeRoot,
+  ManagedFileSource,
+  SessionFileInfo,
+} from "../../types";
 import { apiUrl } from "../transport/base";
-import { ApiError, errorFrom } from "../transport/request";
+import { ApiError, errorFrom, jsonBody, requestJson, requestVoid } from "../transport/request";
 
 /** Upload a batch of files; resolves to the stored file metadata. */
 export async function uploadSessionFiles(
@@ -102,4 +110,77 @@ export async function fileReferenceAvailable(reference: FileReference, sessionId
   } catch {
     return false;
   }
+}
+
+const managedBase = (sessionId: string) => `/api/sessions/${encodeURIComponent(sessionId)}/files`;
+
+export function getFileRoots(sessionId: string): Promise<FileTreeRoot[]> {
+  return requestJson(`${managedBase(sessionId)}/roots`);
+}
+
+export function listFileDirectory(
+  sessionId: string,
+  source: ManagedFileSource,
+  path: string,
+): Promise<FileTreeEntry[]> {
+  const params = new URLSearchParams({ source, path });
+  return requestJson(`${managedBase(sessionId)}/tree?${params.toString()}`);
+}
+
+export function readEditorFile(
+  sessionId: string,
+  source: ManagedFileSource,
+  path: string,
+  encoding?: string,
+): Promise<FileEditorDocument> {
+  const params = new URLSearchParams({ source, path });
+  if (encoding) params.set("encoding", encoding);
+  return requestJson(`${managedBase(sessionId)}/editor?${params.toString()}`);
+}
+
+export function saveEditorFile(
+  sessionId: string,
+  payload: {
+    source: ManagedFileSource;
+    path: string;
+    content: string;
+    encoding: string;
+    bom: boolean;
+    newline: "\n" | "\r\n" | "\r";
+    version: string;
+    force?: boolean;
+  },
+): Promise<FileEditorDocument> {
+  return requestJson(`${managedBase(sessionId)}/editor`, { ...jsonBody(payload), method: "PUT" });
+}
+
+export function createFileEntry(
+  sessionId: string,
+  payload: { source: ManagedFileSource; parent_path: string; name: string; kind: "file" | "directory" },
+): Promise<Pick<FileTreeEntry, "source" | "path" | "name" | "kind">> {
+  return requestJson(`${managedBase(sessionId)}/entries`, jsonBody(payload));
+}
+
+export function renameFileEntry(
+  sessionId: string,
+  payload: { source: ManagedFileSource; path: string; name: string },
+): Promise<Pick<FileTreeEntry, "source" | "path" | "name">> {
+  return requestJson(`${managedBase(sessionId)}/entries/rename`, { ...jsonBody(payload), method: "PATCH" });
+}
+
+export function moveFileEntry(
+  sessionId: string,
+  payload: {
+    source: ManagedFileSource;
+    path: string;
+    target_source: ManagedFileSource;
+    target_parent_path: string;
+  },
+): Promise<Pick<FileTreeEntry, "source" | "path" | "name">> {
+  return requestJson(`${managedBase(sessionId)}/entries/move`, { ...jsonBody(payload), method: "PATCH" });
+}
+
+export function recycleFileEntry(sessionId: string, source: ManagedFileSource, path: string): Promise<void> {
+  const params = new URLSearchParams({ source, path });
+  return requestVoid(`${managedBase(sessionId)}/entries?${params.toString()}`, { method: "DELETE" });
 }

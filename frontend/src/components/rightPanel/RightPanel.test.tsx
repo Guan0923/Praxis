@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   updateRightPanel: vi.fn(),
   createSideChat: vi.fn(),
   createPanelTerminal: vi.fn(),
+  createFilesWindow: vi.fn(),
   renameRightPanelWindow: vi.fn(),
   closeRightPanelWindow: vi.fn(),
 }));
@@ -183,12 +184,49 @@ describe("RightPanel tabs", () => {
     expect(screen.getByRole("button", { name: /创建侧边聊天/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: /打开终端/ })).toBeDisabled();
     expect(screen.getByText(/当前主聊天没有可用 Turn/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "打开文件" })).toBeEnabled();
+  });
+
+  it("opens the file window without requiring a current Turn", () => {
+    const controller: RightPanelController = {
+      payload: payload([]),
+      loading: false,
+      createWindow: vi.fn().mockResolvedValue(undefined),
+      closeWindow: vi.fn(),
+      renameWindow: vi.fn(),
+      setActive: vi.fn(),
+      setLayout: vi.fn(),
+    };
+    render(
+      <App>
+        <RightPanel
+          controller={controller}
+          sourceAvailable={false}
+          terminalAvailable={false}
+          terminalReason="当前没有可用 Turn"
+          renderSideChat={() => null}
+        />
+      </App>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "打开文件" }));
+    expect(controller.createWindow).toHaveBeenCalledWith("files");
   });
 });
 
 function HookHarness({ sessionId }: { sessionId: string }) {
   const controller = useRightPanel(sessionId, "turn-main", vi.fn(), vi.fn());
   return <output>{controller.payload?.state.session_id ?? "loading"}</output>;
+}
+
+function LauncherHookHarness({ sessionId }: { sessionId: string }) {
+  const controller = useRightPanel(sessionId, undefined, vi.fn(), vi.fn());
+  return (
+    <>
+      <RightPanelLauncher controller={controller} />
+      <output data-testid="panel-state">{controller.payload ? String(controller.payload.state.collapsed) : "loading"}</output>
+    </>
+  );
 }
 
 it("reloads the canonical layout when the main Session changes", async () => {
@@ -202,4 +240,17 @@ it("reloads the canonical layout when the main Session changes", async () => {
   rerender(<HookHarness sessionId="session-b" />);
   expect(await screen.findByText("session-b")).toBeInTheDocument();
   await waitFor(() => expect(api.getRightPanel).toHaveBeenCalledWith("session-b"));
+});
+
+it("keeps a launcher click made while the initial layout is still loading", async () => {
+  let resolveInitial!: (value: RightPanelPayload) => void;
+  api.getRightPanel.mockReturnValueOnce(new Promise((resolve) => { resolveInitial = resolve; }));
+  api.updateRightPanel.mockResolvedValue(payload([], false));
+  render(<LauncherHookHarness sessionId="session" />);
+
+  fireEvent.click(screen.getByRole("button", { name: "打开右侧边栏" }));
+  resolveInitial(payload([], true));
+
+  expect(await screen.findByTestId("panel-state")).toHaveTextContent("false");
+  expect(api.updateRightPanel).toHaveBeenCalledWith("session", { collapsed: false });
 });

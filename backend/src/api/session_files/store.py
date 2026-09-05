@@ -14,11 +14,14 @@ import mimetypes
 import os
 import re
 import shutil
+import stat
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
+
+from send2trash import send2trash
 
 from backend.configuration import ClientPaths, ConfigurationError
 from backend.domain.file_paths import FILE_SOURCES, ScopedPaths
@@ -28,6 +31,7 @@ MAX_FILE_BYTES = 50 * 1024 * 1024
 MAX_BATCH_BYTES = 200 * 1024 * 1024
 MAX_SEARCH_RESULTS = 100
 MAX_WALKED_FILES = 20_000
+MAX_EDITABLE_FILE_BYTES = 5_000_000
 _CHUNK_SIZE = 1024 * 1024
 _IGNORED_DIRECTORIES = frozenset(
     {
@@ -49,6 +53,10 @@ _TRAILING_DOTS_SPACES = re.compile(r"[. ]+$")
 
 class SessionFileError(ValueError):
     """A session file operation was rejected or failed."""
+
+
+class SessionFileConflict(SessionFileError):
+    """A file changed after the browser loaded it."""
 
 
 def _mime_for(name: str) -> str:
@@ -150,6 +158,323 @@ class SessionFileStore:
                 raise SessionFileError("当前会话没有项目目录。")
             return root
         raise SessionFileError(f"不支持的引用来源：{source}")
+
+    def _managed_root(self, source: str) -> Path:
+        if source not in {"workspace", "project"}:
+            raise SessionFileError("文件管理只支持 workspace 和 project。")
+        return self._root_for(source).absolute()
+
+    def _scoped(self, path: Path, source: str) -> str:
+        root = self._managed_root(source)
+        absolute = Path(os.path.abspath(path))
+        if not absolute.is_relative_to(root):
+            raise SessionFileError("文件路径超出允许范围。")
+        relative = absolute.relative_to(root).as_posix()
+        return f"{source}:{'' if relative == '.' else relative}"
+
+    def _resolve_entry(self, source: str, path: str, *, allow_root: bool = False) -> Path:
+        root = self._managed_root(source)
+        expected_prefix = source
+        prefix = path.partition(":")[0]
+        if prefix in {"workspace", "project"} and prefix != expected_prefix:
+            raise SessionFileError("文件路径前缀与来源不一致。")
+        try:
+            resolved = self.file_paths.resolve(path, allow_root=allow_root)
+        except ValueError as exc:
+            raise SessionFileError(str(exc)) from exc
+        if resolved != root.resolve() and root.resolve() not in resolved.parents:
+            raise SessionFileError("文件路径超出允许范围。")
+        if not resolved.exists():
+            raise SessionFileError("文件或目录不存在。")
+        return resolved
+
+    @staticmethod
+    def _version(path: Path) -> str:
+        info = path.stat()
+        return f"{info.st_mtime_ns}:{info.st_size}"
+
+    @staticmethod
+    def _validate_entry_name(name: str) -> str:
+        if not isinstance(name, str) or not name.strip():
+            raise SessionFileError("名称不能为空。")
+        value = name.strip()
+        if value in {".", ".."} or _WINDOWS_RESERVED.search(value) or _TRAILING_DOTS_SPACES.search(value):
+            raise SessionFileError("名称包含无效字符。")
+        if len(value) > 200:
+            raise SessionFileError("名称不能超过 200 个字符。")
+        return value
+
+    def roots(self) -> list[dict[str, object]]:
+        return [
+            {"source": "workspace", "path": "workspace:", "name": "workspace", "available": True},
+            {
+                "source": "project",
+                "path": "project:",
+                "name": "project",
+                "available": self._project_root is not None,
+            },
+        ]
+
+    def list_directory(self, source: str, path: str) -> list[dict[str, object]]:
+        directory = self._resolve_entry(source, path, allow_root=True)
+        if not directory.is_dir():
+            raise SessionFileError("目标不是目录。")
+        items: list[dict[str, object]] = []
+        try:
+            entries = list(os.scandir(directory))
+        except OSError as exc:
+            raise SessionFileError("目录读取失败。") from exc
+        for entry in entries:
+            entry_path = Path(entry.path)
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            linked = entry.is_symlink() or bool(int(getattr(info, "st_file_attributes", 0)) & 0x400)
+            if linked:
+                kind = "link"
+            elif stat.S_ISDIR(info.st_mode):
+                kind = "directory"
+            elif stat.S_ISREG(info.st_mode):
+                kind = "file"
+            else:
+                kind = "special"
+            item: dict[str, object] = {
+                "source": source,
+                "path": self._scoped(entry_path, source),
+                "name": entry.name,
+                "kind": kind,
+                "size": info.st_size if kind == "file" else None,
+                "mtime": datetime.fromtimestamp(info.st_mtime, tz=UTC).isoformat(),
+                "mime": _mime_for(entry.name) if kind == "file" else None,
+                "is_image": kind == "file" and is_image(entry.name),
+                "version": f"{info.st_mtime_ns}:{info.st_size}" if kind == "file" else None,
+            }
+            items.append(item)
+        return sorted(items, key=lambda item: (item["kind"] != "directory", str(item["name"]).casefold()))
+
+    @staticmethod
+    def _looks_binary(raw: bytes) -> bool:
+        if raw.startswith((b"%PDF-", b"PK\x03\x04", b"\xd0\xcf\x11\xe0", b"\x7fELF", b"MZ")):
+            return True
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            return False
+        sample = raw[:8192]
+        if b"\x00" in sample:
+            return True
+        controls = sum(byte < 32 and byte not in {8, 9, 10, 12, 13} for byte in sample)
+        return bool(sample) and controls / len(sample) > 0.08
+
+    @staticmethod
+    def _decode_text(raw: bytes, requested: str | None = None) -> tuple[str, str, bool]:
+        aliases = {"gbk": "gb18030", "utf-16": "utf-16-le"}
+        encoding = aliases.get((requested or "").casefold(), (requested or "").casefold()) or None
+        supported = {"utf-8", "utf-16-le", "utf-16-be", "gb18030"}
+        if encoding is not None and encoding not in supported:
+            raise SessionFileError("不支持所选文字编码。")
+        bom_encoding: str | None = None
+        bom_size = 0
+        if raw.startswith(b"\xef\xbb\xbf"):
+            bom_encoding, bom_size = "utf-8", 3
+        elif raw.startswith(b"\xff\xfe"):
+            bom_encoding, bom_size = "utf-16-le", 2
+        elif raw.startswith(b"\xfe\xff"):
+            bom_encoding, bom_size = "utf-16-be", 2
+        candidates = [encoding] if encoding else ([bom_encoding] if bom_encoding else ["utf-8", "gb18030"])
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            try:
+                offset = bom_size if bom_encoding == candidate else 0
+                return raw[offset:].decode(candidate, errors="strict"), candidate, offset > 0
+            except UnicodeDecodeError:
+                continue
+        raise SessionFileError("无法确定文字编码，请选择 UTF-8、UTF-16 或 GB18030。")
+
+    def read_editor_file(self, source: str, path: str, encoding: str | None = None) -> dict[str, object]:
+        resolved = self._resolve_entry(source, path)
+        if not resolved.is_file():
+            raise SessionFileError("目标不是文件。")
+        info = resolved.stat()
+        base = {
+            "source": source,
+            "path": self._scoped(resolved, source),
+            "name": resolved.name,
+            "size": info.st_size,
+            "mime": _mime_for(resolved.name),
+            "mtime": datetime.fromtimestamp(info.st_mtime, tz=UTC).isoformat(),
+            "version": self._version(resolved),
+        }
+        if info.st_size > MAX_EDITABLE_FILE_BYTES:
+            return {**base, "kind": "too_large", "limit": MAX_EDITABLE_FILE_BYTES}
+        if is_image(resolved.name):
+            return {**base, "kind": "image"}
+        raw = resolved.read_bytes()
+        if self._looks_binary(raw):
+            return {**base, "kind": "binary"}
+        try:
+            content, detected, bom = self._decode_text(raw, encoding)
+        except SessionFileError:
+            if encoding is not None:
+                raise
+            return {
+                **base,
+                "kind": "encoding_required",
+                "encodings": ["utf-8", "utf-16-le", "utf-16-be", "gb18030"],
+            }
+        newline = "\r\n" if "\r\n" in content else ("\r" if "\r" in content and "\n" not in content else "\n")
+        return {
+            **base,
+            "kind": "text",
+            "content": content,
+            "encoding": detected,
+            "bom": bom,
+            "newline": newline,
+        }
+
+    def write_editor_file(
+        self,
+        source: str,
+        path: str,
+        *,
+        content: str,
+        encoding: str,
+        bom: bool,
+        newline: str,
+        expected_version: str,
+        force: bool = False,
+    ) -> dict[str, object]:
+        resolved = self._resolve_entry(source, path)
+        if not resolved.is_file():
+            raise SessionFileError("目标不是文件。")
+        if not force and self._version(resolved) != expected_version:
+            raise SessionFileConflict("文件已被其他程序修改。")
+        normalized = content.replace("\r\n", "\n").replace("\r", "\n")
+        selected_newline = newline if newline in {"\n", "\r\n", "\r"} else "\n"
+        normalized = normalized.replace("\n", selected_newline)
+        canonical = {"gbk": "gb18030", "utf-16": "utf-16-le"}.get(encoding.casefold(), encoding.casefold())
+        if canonical not in {"utf-8", "utf-16-le", "utf-16-be", "gb18030"}:
+            raise SessionFileError("不支持所选文字编码。")
+        try:
+            raw = normalized.encode(canonical, errors="strict")
+        except UnicodeEncodeError as exc:
+            raise SessionFileError("当前文字编码无法保存这些字符。") from exc
+        prefixes = {"utf-8": b"\xef\xbb\xbf", "utf-16-le": b"\xff\xfe", "utf-16-be": b"\xfe\xff"}
+        if bom and canonical in prefixes:
+            raw = prefixes[canonical] + raw
+        if len(raw) > MAX_EDITABLE_FILE_BYTES:
+            raise SessionFileError("文件保存后超过 5 MB，已取消保存。")
+        temporary = resolved.with_name(f".{resolved.name}.mini-agent-{uuid4().hex}.tmp")
+        mode = stat.S_IMODE(resolved.stat().st_mode)
+        try:
+            with temporary.open("wb") as handle:
+                handle.write(raw)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary, mode)
+            os.replace(temporary, resolved)
+        except OSError as exc:
+            temporary.unlink(missing_ok=True)
+            raise SessionFileError("文件保存失败。") from exc
+        return self.read_editor_file(source, self._scoped(resolved, source), canonical)
+
+    def create_entry(self, source: str, parent_path: str, name: str, kind: str) -> dict[str, object]:
+        parent = self._resolve_entry(source, parent_path, allow_root=True)
+        if not parent.is_dir():
+            raise SessionFileError("目标父目录无效。")
+        target = parent / self._validate_entry_name(name)
+        if target.exists() or target.is_symlink():
+            raise SessionFileError("同名文件或目录已存在。")
+        try:
+            if kind == "file":
+                target.write_text("", encoding="utf-8")
+            elif kind == "directory":
+                target.mkdir()
+            else:
+                raise SessionFileError("只能新建文件或目录。")
+        except OSError as exc:
+            raise SessionFileError("新建失败。") from exc
+        return {"source": source, "path": self._scoped(target, source), "name": target.name, "kind": kind}
+
+    @staticmethod
+    def _numbered_target(parent: Path, name: str) -> Path:
+        candidate = parent / name
+        if not candidate.exists() and not candidate.is_symlink():
+            return candidate
+        base = Path(name)
+        stem = base.stem if base.suffix else name
+        suffix = base.suffix
+        number = 1
+        while True:
+            candidate = parent / f"{stem}({number}){suffix}"
+            if not candidate.exists() and not candidate.is_symlink():
+                return candidate
+            number += 1
+
+    def rename_entry(self, source: str, path: str, name: str) -> dict[str, object]:
+        current = self._resolve_entry(source, path)
+        target = current.with_name(self._validate_entry_name(name))
+        if target.exists() or target.is_symlink():
+            raise SessionFileError("同名文件或目录已存在。")
+        try:
+            current.rename(target)
+        except OSError as exc:
+            raise SessionFileError("重命名失败。") from exc
+        return {"source": source, "path": self._scoped(target, source), "name": target.name}
+
+    @staticmethod
+    def _validate_tree_for_copy(source: Path) -> None:
+        for directory, directories, files in os.walk(source, followlinks=False):
+            base = Path(directory)
+            for name in [*directories, *files]:
+                item = base / name
+                info = item.lstat()
+                if item.is_symlink() or int(getattr(info, "st_file_attributes", 0)) & 0x400:
+                    raise SessionFileError("包含链接的目录不能移动。")
+                if not item.is_file() and not item.is_dir():
+                    raise SessionFileError("包含特殊文件的目录不能移动。")
+
+    def move_entry(self, source: str, path: str, target_source: str, target_parent_path: str) -> dict[str, object]:
+        current = self._resolve_entry(source, path)
+        parent = self._resolve_entry(target_source, target_parent_path, allow_root=True)
+        if not parent.is_dir():
+            raise SessionFileError("移动目标不是目录。")
+        if current.is_dir() and (parent == current or parent.is_relative_to(current)):
+            raise SessionFileError("目录不能移动到自身内部。")
+        target = self._numbered_target(parent, current.name)
+        temporary: Path | None = None
+        try:
+            if source == target_source:
+                current.rename(target)
+            else:
+                temporary = target.with_name(f".{target.name}.mini-agent-{uuid4().hex}.tmp")
+                if current.is_dir():
+                    self._validate_tree_for_copy(current)
+                    shutil.copytree(current, temporary)
+                else:
+                    shutil.copy2(current, temporary)
+                os.replace(temporary, target)
+                try:
+                    shutil.rmtree(current) if current.is_dir() else current.unlink()
+                except OSError:
+                    shutil.rmtree(target) if target.is_dir() else target.unlink(missing_ok=True)
+                    raise
+        except (OSError, shutil.Error) as exc:
+            if temporary is not None and temporary.exists():
+                shutil.rmtree(temporary) if temporary.is_dir() else temporary.unlink(missing_ok=True)
+            raise SessionFileError("移动失败。") from exc
+        return {
+            "source": target_source,
+            "path": self._scoped(target, target_source),
+            "name": target.name,
+        }
+
+    def recycle_entry(self, source: str, path: str) -> None:
+        target = self._resolve_entry(source, path)
+        try:
+            send2trash(str(target))
+        except Exception as exc:
+            raise SessionFileError("删除失败。") from exc
 
     def store_batch(self, items: Sequence[tuple[str, object]]) -> list[dict[str, object]]:
         """Stream a multipart batch into the upload directory atomically.
@@ -353,7 +678,9 @@ __all__ = [
     "MAX_BATCH_BYTES",
     "MAX_FILE_BYTES",
     "MAX_FILES_PER_BATCH",
+    "MAX_EDITABLE_FILE_BYTES",
     "MAX_SEARCH_RESULTS",
+    "SessionFileConflict",
     "SessionFileError",
     "SessionFileStore",
     "is_image",

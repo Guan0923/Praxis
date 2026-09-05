@@ -201,6 +201,20 @@ def test_side_chat_api_stays_out_of_sidebar_and_close_keeps_empty_panel_open(tmp
         assert client.get(f"/api/sidebar-threads/{window['thread_id']}/queued-messages").status_code == 404
 
 
+def test_files_window_is_unique_and_does_not_require_a_turn(tmp_path: Path) -> None:
+    state = WebAppState(tmp_path / ".mini_agent")
+    with TestClient(create_app(state)) as client:
+        session_id = client.post("/api/sidebar-threads", json={}).json()["session_id"]
+        first = client.post(f"/api/right-panel/{session_id}/files")
+        second = client.post(f"/api/right-panel/{session_id}/files")
+        assert first.status_code == 201
+        assert second.status_code == 201
+        assert first.json()["window"]["id"] == second.json()["window"]["id"]
+        payload = client.get(f"/api/right-panel/{session_id}").json()
+        assert [item["kind"] for item in payload["windows"]] == ["files"]
+        assert payload["state"]["active_window_id"] == first.json()["window"]["id"]
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows terminal test")
 def test_terminal_creation_fails_closed_without_redis_and_restart_drops_stale_metadata(tmp_path: Path) -> None:
     state = WebAppState(tmp_path / ".mini_agent")

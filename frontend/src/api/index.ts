@@ -5,3 +5,4 @@ export * from "./runtime";
 export * from "./settings";
 export * from "./benchmarks";
 export * from "./rightPanel";
+export * from "./projects/files";

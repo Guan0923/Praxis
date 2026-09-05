@@ -19,6 +19,10 @@ export interface CreatedTerminal {
   };
 }
 
+export interface CreatedFilesWindow {
+  window: RightPanelWindow;
+}
+
 const base = (sessionId: string) => `/api/right-panel/${encodeURIComponent(sessionId)}`;
 
 export function getRightPanel(sessionId: string): Promise<RightPanelPayload> {
@@ -29,7 +33,7 @@ export function updateRightPanel(
   sessionId: string,
   patch: Partial<Pick<RightPanelPayload["state"], "width" | "collapsed" | "active_window_id">>,
 ): Promise<RightPanelPayload> {
-  return requestJson(base(sessionId), { method: "PATCH", ...jsonBody(patch) });
+  return requestJson(base(sessionId), { ...jsonBody(patch), method: "PATCH" });
 }
 
 export function createSideChat(sessionId: string, sourceTurnId: string): Promise<CreatedSideChat> {
@@ -46,10 +50,14 @@ export function createPanelTerminal(sessionId: string, sourceTurnId: string): Pr
   });
 }
 
+export function createFilesWindow(sessionId: string): Promise<CreatedFilesWindow> {
+  return requestJson(`${base(sessionId)}/files`, { method: "POST" });
+}
+
 export function renameRightPanelWindow(sessionId: string, windowId: string, title: string): Promise<RightPanelWindow> {
   return requestJson(`${base(sessionId)}/windows/${encodeURIComponent(windowId)}`, {
-    method: "PATCH",
     ...jsonBody({ title }),
+    method: "PATCH",
   });
 }
 
