@@ -1601,6 +1601,54 @@ test("assistant Items stay chronological and runtime Collapse starts folded", as
   expect(await assistant.getByText("The first tool completed.", { exact: false }).evaluate((element) => element.closest(".runtime-collapse"))).toBeNull();
 });
 
+test("parallel tools keep nested Collapse state live, after reload, and in Trace", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const sidebarResponse = await page.request.post("/api/sidebar-threads", { data: { title: "Parallel Tools" } });
+  expect(sidebarResponse.ok(), `${sidebarResponse.status()} ${await sidebarResponse.text()}`).toBeTruthy();
+
+  await page.goto("/app");
+  const parallelThread = page.getByRole("button", { name: "Parallel Tools", exact: true });
+  await expect(parallelThread).toBeVisible();
+  if (await parallelThread.isEnabled()) await parallelThread.click();
+  await page.getByLabel("聊天输入").fill("parallel tools e2e");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+
+  const assistant = page.locator(".message.assistant").last();
+  const group = assistant.locator(".runtime-parallel-collapse");
+  await expect(group).toBeVisible({ timeout: 15_000 });
+  const groupHeader = group.locator(":scope > .ant-collapse-item > .ant-collapse-header");
+  await expect(groupHeader).toContainText("并行调用工具");
+  await groupHeader.click();
+  await expect(group.locator(".runtime-parallel-inner-collapse > .ant-collapse-item")).toHaveCount(2);
+  await expect(group.getByText("parallel_slow_1", { exact: true })).toBeVisible();
+  await expect(group.getByText("parallel_slow_2", { exact: true })).toBeVisible();
+  await expect(group.locator(".parallel-tool-label .tool-status")).toHaveCount(2);
+  expect(await group.locator(".parallel-tool-label .tool-status").allTextContents()).toEqual(
+    expect.arrayContaining([expect.stringMatching(/等待中|排队中|运行中|成功/)]),
+  );
+
+  await expect(assistant).toContainText("Parallel tools completed.", { timeout: 20_000 });
+  await expect(group.locator(":scope > .ant-collapse-item")).toHaveClass(/ant-collapse-item-active/);
+  await expect(group.getByText("成功", { exact: true })).toHaveCount(2);
+
+  await page.reload();
+  const restoredGroup = page.locator(".message.assistant").last().locator(".runtime-parallel-collapse");
+  await expect(restoredGroup).toBeVisible({ timeout: 15_000 });
+  await restoredGroup.locator(":scope > .ant-collapse-item > .ant-collapse-header").click();
+  await expect(restoredGroup.getByText("parallel_slow_1", { exact: true })).toBeVisible();
+  await expect(restoredGroup.getByText("parallel_slow_2", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Trace", exact: true }).click();
+  const traceGroup = page.getByTitle("并行调用工具").locator(
+    "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-collapse-item ')][1]",
+  );
+  await expect(traceGroup).toBeVisible({ timeout: 15_000 });
+  await traceGroup.locator(":scope > .ant-collapse-header").click();
+  await expect(page.getByTitle("slow_tool · parallel_slow_1")).toBeVisible();
+  await expect(page.getByTitle("slow_tool · parallel_slow_2")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("parallel-tools-trace.png"), fullPage: true });
+});
+
 test("tool approval shows one pending card and one allowed status", async ({ page }) => {
   const sidebarResponse = await page.request.post("/api/sidebar-threads", { data: { title: "Approval Allowed" } });
   expect(sidebarResponse.ok(), `${sidebarResponse.status()} ${await sidebarResponse.text()}`).toBeTruthy();

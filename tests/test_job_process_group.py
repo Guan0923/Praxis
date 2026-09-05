@@ -107,14 +107,17 @@ class StubPopen:
         self.pid = 4242
         self._returncode: int | None = None if running else 0
         self.killed = False
+        self.calls: list[str] = []
 
     def poll(self) -> int | None:
         return self._returncode
 
     def wait(self, timeout: float | None = None) -> int | None:
+        self.calls.append("wait")
         return None if (timeout is not None and not False) else self._returncode
 
     def kill(self) -> None:
+        self.calls.append("kill")
         self.killed = True
         self._returncode = -9
 
@@ -343,6 +346,27 @@ def test_builtin_terminator_invoked_and_root_fallback(tmp_path) -> None:
     assert _retry_until(lambda: group.poll() is not None)
     assert group.poll() is not None
     assert pid in group.pids or group.pids == ()  # root recorded while running
+
+
+def test_failed_windows_taskkill_falls_back_without_waiting(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stub = StubPopen(running=True)
+
+    def factory(*args, **kwargs):
+        return stub
+
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1))
+    group = ProcessGroup(
+        _sleep_cmd(300),
+        make_env(tmp_path),
+        cwd=str(tmp_path),
+        is_windows=True,
+        popen_factory=factory,
+    )
+    group.start()
+
+    group.terminate()
+
+    assert stub.calls[0] == "kill"
 
 
 # ---------------------------------------------------------------------------

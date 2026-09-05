@@ -89,7 +89,7 @@ class AdmissionPolicy:
     """Per-job admission behaviour."""
 
     queue_mode: QueueMode = QueueMode.WAIT
-    queue_timeout_seconds: float | None = 30.0
+    queue_timeout_seconds: float | None = 90.0
     slot_mode: SlotMode = SlotMode.COUNTED
 
 

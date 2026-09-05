@@ -87,6 +87,7 @@ class ProcessGroup:
 
         self._lock = threading.Lock()
         self._process: subprocess.Popen[str] | None = None
+        self._windows_job_handle: int | None = None
         # Set by terminate() when the root process could not be confirmed to
         # have exited within the termination timeout.
         self.termination_uncertain = False
@@ -118,6 +119,8 @@ class ProcessGroup:
                 return self._process.pid
             process = self._popen_factory(self._argv, **process_options)
             self._process = process
+            if self._is_windows:
+                self._windows_job_handle = _create_windows_job(process)
             return process.pid
 
     def poll(self) -> int | None:
@@ -126,7 +129,10 @@ class ProcessGroup:
             process = self._process
         if process is None:
             return None
-        return process.poll()
+        exit_code = process.poll()
+        if exit_code is not None:
+            self._release_windows_job()
+        return exit_code
 
     def wait(self, timeout: float | None = None) -> int | None:
         """Wait for the root process and return its exit code.
@@ -138,9 +144,11 @@ class ProcessGroup:
         if process is None:
             return None
         try:
-            return process.wait(timeout=timeout)
+            exit_code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             return None
+        self._release_windows_job()
+        return exit_code
 
     def communicate(
         self,
@@ -158,7 +166,9 @@ class ProcessGroup:
             process = self._process
         if process is None:
             return None, None
-        return process.communicate(timeout=timeout)
+        result = process.communicate(timeout=timeout)
+        self._release_windows_job()
+        return result
 
     def terminate(self) -> None:
         """Terminate the whole tree, then ensure the root process exits.
@@ -174,10 +184,10 @@ class ProcessGroup:
             if process is None or process.poll() is not None:
                 return  # nothing running → already-exited idempotent no-op
 
-            self._terminate_tree(process)
+            tree_termination_requested = self._terminate_tree(process)
 
             # Ensure the root process actually exits.
-            if process.poll() is None:
+            if tree_termination_requested and process.poll() is None:
                 self._wait_for_exit(process)
             if process.poll() is None:
                 process.kill()
@@ -185,6 +195,8 @@ class ProcessGroup:
                 self._wait_for_exit(process)
             if process.poll() is None:
                 self.termination_uncertain = True
+            else:
+                self._release_windows_job_locked()
 
     def kill(self) -> None:
         """Immediately force-kill the root process.
@@ -218,20 +230,22 @@ class ProcessGroup:
 
     # -- internals ----------------------------------------------------------
 
-    def _terminate_tree(self, process: subprocess.Popen[str]) -> None:
+    def _terminate_tree(self, process: subprocess.Popen[str]) -> bool:
         """Best-effort tree kill; the caller always follows with a root fallback."""
         if self._tree_terminator is not None:
             try:
                 self._tree_terminator(process)
             except Exception:  # noqa: BLE001 - terminator failures must not block root kill
-                pass
-            return
-        self._builtin_terminate_tree(process)
+                return False
+            return True
+        return self._builtin_terminate_tree(process)
 
-    def _builtin_terminate_tree(self, process: subprocess.Popen[str]) -> None:
+    def _builtin_terminate_tree(self, process: subprocess.Popen[str]) -> bool:
         if self._is_windows:
+            if self._terminate_windows_job():
+                return True
             try:
-                subprocess.run(
+                result = subprocess.run(
                     ["taskkill", "/PID", str(process.pid), "/T", "/F"],
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
@@ -241,16 +255,84 @@ class ProcessGroup:
                     env=self._env,
                 )
             except (OSError, subprocess.TimeoutExpired):
-                pass
+                return False
+            return result.returncode == 0
         else:
             try:
                 killpg = getattr(os, "killpg")
                 killpg(process.pid, signal.SIGKILL)
             except (AttributeError, OSError, ProcessLookupError):
-                pass
+                return False
+            return True
+
+    def _terminate_windows_job(self) -> bool:
+        handle = self._windows_job_handle
+        if handle is None:
+            return False
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+            kernel32.TerminateJobObject.restype = wintypes.BOOL
+            return bool(kernel32.TerminateJobObject(wintypes.HANDLE(handle), 1))
+        except (AttributeError, OSError, ValueError):
+            return False
+
+    def _release_windows_job(self) -> None:
+        with self._lock:
+            self._release_windows_job_locked()
+
+    def _release_windows_job_locked(self) -> None:
+        handle = self._windows_job_handle
+        if handle is None:
+            return
+        self._windows_job_handle = None
+        _close_windows_handle(handle)
 
     def _wait_for_exit(self, process: subprocess.Popen[str]) -> None:
         try:
             process.wait(timeout=self._termination_timeout)
         except subprocess.TimeoutExpired:
             pass
+
+
+def _create_windows_job(process: subprocess.Popen[str]) -> int | None:
+    if os.name != "nt":
+        return None
+    process_handle = getattr(process, "_handle", None)
+    if process_handle is None:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        handle = kernel32.CreateJobObjectW(None, None)
+        if not handle:
+            return None
+        handle_value = int(handle)
+        if kernel32.AssignProcessToJobObject(wintypes.HANDLE(handle_value), wintypes.HANDLE(int(process_handle))):
+            return handle_value
+        _close_windows_handle(handle_value)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    return None
+
+
+def _close_windows_handle(handle: int) -> None:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle(wintypes.HANDLE(handle))
+    except (AttributeError, OSError, ValueError):
+        pass

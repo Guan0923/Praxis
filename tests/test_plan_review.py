@@ -133,7 +133,7 @@ def test_blank_plan_is_retryable_then_valid_plan_opens_review(tmp_path: Path) ->
     assert len(result.actions) == 2
 
 
-def test_plan_review_must_not_be_mixed_with_execution_tools(tmp_path: Path) -> None:
+def test_plan_review_uses_serial_lane_alongside_execution_tools(tmp_path: Path) -> None:
     planner = ScriptedPlanPlanner(
         [
             AssistantMessage(
@@ -150,21 +150,22 @@ def test_plan_review_must_not_be_mixed_with_execution_tools(tmp_path: Path) -> N
         ]
     )
     runner = AgentRunner(planner, ToolRegistry(tmp_path))
+    requests = []
     runtime = runner.new_runtime(
         task="Discuss the change",
         mode="plan",
-        interrupt=lambda _request: pytest.fail("mixed control call must be returned to the model"),
+        interrupt=lambda request: requests.append(request) or InterruptDecision("stay_in_plan_mode"),
     )
 
     result = runner.run(runtime)
 
     assert result.status == "completed"
-    assert result.final_answer == "I can explain the options without opening review."
-    rejected = runtime.state.messages[1]
-    assert isinstance(rejected, AssistantMessage)
-    assert [tool.status for tool in rejected.tool_messages] == ["failed", "failed"]
-    assert all(tool.retryable is True for tool in rejected.tool_messages)
-    assert all("only tool call" in (tool.content or "") for tool in rejected.tool_messages)
+    assert result.final_answer == PLAN
+    mixed = runtime.state.messages[1]
+    assert isinstance(mixed, AssistantMessage)
+    assert [request.kind for request in requests] == ["plan"]
+    assert [tool.status for tool in mixed.tool_messages] == ["succeeded", "failed"]
+    assert "Read-only Plan mode blocked" in (mixed.tool_messages[1].content or "")
 
 
 def test_repeated_invalid_plan_review_calls_continue_until_model_recovers(tmp_path: Path) -> None:

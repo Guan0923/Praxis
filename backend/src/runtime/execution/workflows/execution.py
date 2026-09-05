@@ -5,23 +5,22 @@ from __future__ import annotations
 from backend.domain import PlanningError
 from backend.planning import PlannerCapabilities
 
-from ...conversation.steering import collect_steering, consume_steering
+from ...conversation.steering import consume_steering
 from ...core.context import AgentRuntime
 from ...core.contracts import WorkflowModeChanged
 from ..lifecycle.cancellation import cancel_if_requested
 from ..lifecycle.outcomes import cancel_run, complete_run, fail_run, planning_failure_data, record_plan_feedback
-from ..steps import USER_DENIED_BATCH_FAILURE_CODE, ToolStepExecutor
+from ..steps import ToolStepExecutor
 from ..todo_finalization import (
     check_todo_finalization,
     refresh_todo_finalization_context,
     should_defer_todo_content,
 )
+from ..tool_batch import ToolBatchExecutor
 from .budgets import _claim_model_turn, _ensure_tool_budget, _reject_over_budget_tools, _tool_batch_fits
 from .common import (
-    _apply_tool_batch_reports,
     _apply_tool_batch_steering,
     _consume_agent_reports,
-    _execute_tool,
     _fail_pending_tools,
     _finish_assistant,
     _model_text_stream,
@@ -36,6 +35,7 @@ from .common import (
 class ExecutionWorkflow:
     def __init__(self) -> None:
         self._steps = ToolStepExecutor()
+        self._tool_batches = ToolBatchExecutor(self._steps)
 
     def run(self, runtime: AgentRuntime):
         capabilities = PlannerCapabilities.from_planner(runtime.services.planner)
@@ -75,6 +75,7 @@ class ExecutionWorkflow:
                 raise
             else:
                 streamed = close(publish_deferred_content=bool(response.tool_messages) or not defer_todo_content)
+            self._tool_batches.prepare(response)
             _publish_repairs(runtime, capabilities)
             todo_retry = not response.tool_messages and check_todo_finalization(
                 runtime,
@@ -106,71 +107,38 @@ class ExecutionWorkflow:
                 return runtime.run
 
             _start_assistant(runtime, response)
-            steered = False
-            denied = False
-            for index, tool in enumerate(response.tool_messages):
-                if cancel_if_requested(runtime):
-                    return runtime.run
-                if _consume_agent_reports(runtime):
-                    _apply_tool_batch_reports(runtime, next_tool_index=index)
-                    steered = True
-                    break
-                update = collect_steering(runtime)
-                if update is not None:
-                    _apply_tool_batch_steering(
-                        runtime,
-                        update,
-                        next_tool_index=index,
-                        phase="before_tool",
-                    )
-                    steered = True
-                    break
-                try:
-                    outcome = _execute_tool(runtime, index, self._steps)
-                except WorkflowModeChanged:
-                    _fail_pending_tools(runtime, response, "Not executed because the workflow mode changed.")
-                    _finish_assistant(runtime)
-                    raise
-                if cancel_if_requested(runtime):
-                    return runtime.run
-                if _consume_agent_reports(runtime):
-                    _apply_tool_batch_reports(runtime, next_tool_index=index + 1)
-                    steered = True
-                    break
-                if outcome.interrupt is not None:
-                    if outcome.interrupt.choice == "deny":
-                        _fail_pending_tools(
-                            runtime,
-                            response,
-                            "Not executed because tool execution was interrupted.",
-                            failure_code=USER_DENIED_BATCH_FAILURE_CODE,
-                        )
-                        _finish_assistant(runtime)
-                        denied = True
-                        break
-                    _fail_pending_tools(runtime, response, "Not executed because tool execution was interrupted.")
-                    runtime.state.active_message = None
-                    runtime.state.active_tool_index = None
-                    if outcome.interrupt.choice == "cancel":
-                        cancel_run(runtime)
-                    elif record_plan_feedback(runtime, outcome.interrupt.supplement) is None:
-                        pass
-                    return runtime.run
-                update = collect_steering(runtime)
-                if update is not None:
-                    _apply_tool_batch_steering(
-                        runtime,
-                        update,
-                        next_tool_index=index + 1,
-                        phase="after_tool",
-                    )
-                    steered = True
-                    break
-                if outcome.success:
+            try:
+                batch = self._tool_batches.execute(runtime, response)
+            except WorkflowModeChanged:
+                _fail_pending_tools(runtime, response, "Not executed because the workflow mode changed.")
+                _finish_assistant(runtime)
+                raise
+            for tool, outcome in zip(response.tool_messages, batch.outcomes, strict=True):
+                if outcome.success or outcome.interrupt is not None:
                     continue
                 error = outcome.error or "Tool execution failed without an error message."
                 tool.content = _tool_failure_content(tool, error)
                 _publish_tool_recovery(runtime, tool, error)
-            if steered or denied:
+            if cancel_if_requested(runtime):
+                return runtime.run
+            if batch.steering is not None:
+                _apply_tool_batch_steering(
+                    runtime, batch.steering, next_tool_index=len(response.tool_messages), phase="after_tool_batch"
+                )
                 continue
+            interrupt = next(
+                (
+                    outcome.interrupt
+                    for outcome in batch.outcomes
+                    if outcome.interrupt is not None and outcome.interrupt.choice != "deny"
+                ),
+                None,
+            )
+            if interrupt is not None:
+                _finish_assistant(runtime)
+                if interrupt.choice == "cancel":
+                    cancel_run(runtime)
+                else:
+                    record_plan_feedback(runtime, interrupt.supplement)
+                return runtime.run
             _finish_assistant(runtime)

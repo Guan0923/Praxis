@@ -42,9 +42,12 @@ def build_local_application(
     log_full_messages = runtime_values.get("log_full_messages", True) if isinstance(runtime_values, dict) else True
     if not isinstance(log_full_messages, bool):
         log_full_messages = True
-    max_tool_calls = runtime_values.get("max_tool_calls", 32) if isinstance(runtime_values, dict) else 32
+    max_tool_calls = runtime_values.get("max_tool_calls", 512) if isinstance(runtime_values, dict) else 512
     if not isinstance(max_tool_calls, int) or isinstance(max_tool_calls, bool):
-        max_tool_calls = 32
+        max_tool_calls = 512
+    max_tool_parellel = runtime_values.get("max_tool_parellel", 16) if isinstance(runtime_values, dict) else 16
+    if not isinstance(max_tool_parellel, int) or isinstance(max_tool_parellel, bool) or max_tool_parellel < 1:
+        max_tool_parellel = 16
     if session_provisioner is None:
         session_provisioner = _project_session_provisioner(state)
     if session_provisioner_cleanup is None:
@@ -54,6 +57,7 @@ def build_local_application(
         "settings": RunnerSettings(
             max_transport_retries=5,
             max_tool_calls=max_tool_calls,
+            max_tool_parellel=max_tool_parellel,
             log_full_messages=log_full_messages,
         ),
         "user_preferences": user_preferences,

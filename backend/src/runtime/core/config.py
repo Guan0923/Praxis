@@ -11,18 +11,21 @@ from pathlib import Path
 @dataclass(frozen=True, init=False)
 class RunnerSettings:
     max_transport_retries: int = 5
-    max_tool_calls: int = 32
+    max_tool_calls: int = 512
+    max_tool_parellel: int = 16
     log_full_messages: bool = True
 
     def __init__(
         self,
         max_transport_retries: int = 5,
-        max_tool_calls: int = 32,
+        max_tool_calls: int = 512,
+        max_tool_parellel: int = 16,
         log_full_messages: bool = True,
     ) -> None:
         values = {
             "max_transport_retries": max_transport_retries,
             "max_tool_calls": max_tool_calls,
+            "max_tool_parellel": max_tool_parellel,
             "log_full_messages": log_full_messages,
         }
         for name, value in values.items():
@@ -36,6 +39,10 @@ class RunnerSettings:
             raise ValueError("max_tool_calls must be an integer.")
         if not 1 <= self.max_tool_calls <= 1000:
             raise ValueError("max_tool_calls must be between 1 and 1000.")
+        if not isinstance(self.max_tool_parellel, int) or isinstance(self.max_tool_parellel, bool):
+            raise ValueError("max_tool_parellel must be an integer.")
+        if self.max_tool_parellel < 1:
+            raise ValueError("max_tool_parellel must be a positive integer.")
         if not isinstance(self.log_full_messages, bool):
             raise ValueError("log_full_messages must be boolean.")
 

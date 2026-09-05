@@ -1198,7 +1198,10 @@ def test_pause_current_turn_waits_for_child_report_and_resumes_the_same_turn(tmp
             for item in message.get("content", [])
             if item.get("type") == "tool_result" and item.get("call_id") == "must_not_run"
         ]
-        assert skipped == []
+        assert len(skipped) == 1
+        assert skipped[0]["content"] == "Tool was not started because this tool batch was interrupted."
+        assert skipped[0]["status"] == "failed"
+        assert skipped[0]["failure_code"] == "tool_batch_interrupted"
     finally:
         coordinator.close()
         registry.close_all(reason="test cleanup", timeout=5)

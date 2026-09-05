@@ -165,6 +165,11 @@
   background: transparent;
 }
 
+.trace-parallel-inner-collapse {
+  background: transparent;
+  border-inline-start: 1px solid var(--border);
+}
+
 .trace-turn-content {
   min-width: 0;
 }

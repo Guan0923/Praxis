@@ -41,7 +41,11 @@ DEFAULT_PROVIDER_CONFIG: dict[str, object] = {
 }
 DEFAULT_CAPABILITY_CONFIG: dict[str, object] = {"skills": True, "mcp": False}
 DEFAULT_SKILL_CONFIG: dict[str, object] = {"disabled": []}
-DEFAULT_RUNTIME_CONFIG: dict[str, object] = {"max_tool_calls": 32, "terminal_type": DEFAULT_TERMINAL_TYPE}
+DEFAULT_RUNTIME_CONFIG: dict[str, object] = {
+    "max_tool_calls": 512,
+    "max_tool_parellel": 16,
+    "terminal_type": DEFAULT_TERMINAL_TYPE,
+}
 DEFAULT_SANDBOX_CONFIG: dict[str, object] = {
     "policy_version": 4,
     "network_mode": NetworkMode.NO_NETWORK.value,
@@ -89,14 +93,23 @@ def normalize_skill_config(values: Mapping[str, object]) -> dict[str, object]:
 def normalize_runtime_config(current: Mapping[str, object], values: Mapping[str, object]) -> dict[str, object]:
     """Merge and validate local execution limits."""
 
-    raw = values.get("max_tool_calls", current.get("max_tool_calls", 32))
+    raw = values.get("max_tool_calls", current.get("max_tool_calls", 512))
     if isinstance(raw, bool) or not isinstance(raw, int):
         raise ValueError("max_tool_calls must be an integer")
     max_tool_calls = raw
     if not 1 <= max_tool_calls <= 1000:
         raise ValueError("max_tool_calls must be between 1 and 1000")
+    raw_parallel = values.get("max_tool_parellel", current.get("max_tool_parellel", 16))
+    if isinstance(raw_parallel, bool) or not isinstance(raw_parallel, int):
+        raise ValueError("max_tool_parellel must be an integer")
+    if raw_parallel < 1:
+        raise ValueError("max_tool_parellel must be a positive integer")
     terminal_type = normalize_terminal_type(values.get("terminal_type", current.get("terminal_type")))
-    return {"max_tool_calls": max_tool_calls, "terminal_type": terminal_type}
+    return {
+        "max_tool_calls": max_tool_calls,
+        "max_tool_parellel": raw_parallel,
+        "terminal_type": terminal_type,
+    }
 
 
 def normalize_sandbox_config(

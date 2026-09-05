@@ -88,6 +88,7 @@ class RuntimeState:
             "runner_settings": {
                 "max_transport_retries": self.runner_settings.max_transport_retries,
                 "max_tool_calls": self.runner_settings.max_tool_calls,
+                "max_tool_parellel": self.runner_settings.max_tool_parellel,
                 "log_full_messages": self.runner_settings.log_full_messages,
             },
             "tool_specs": [
@@ -117,7 +118,7 @@ class RuntimeState:
         legacy_tool_calls = raw_settings.get("max_actions") if isinstance(raw_settings, dict) else None
         settings = {
             key: raw_settings[key]
-            for key in ("max_transport_retries", "max_tool_calls", "log_full_messages")
+            for key in ("max_transport_retries", "max_tool_calls", "max_tool_parellel", "log_full_messages")
             if isinstance(raw_settings, dict) and key in raw_settings
         }
         if (

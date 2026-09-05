@@ -139,6 +139,42 @@
   color: #dc2626 !important;
 }
 
+.runtime-parallel-inner-collapse {
+  border-inline-start: 1px solid var(--border) !important;
+  margin-inline-start: 4px;
+}
+
+.parallel-tool-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.parallel-tool-label > :first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.parallel-tool-label .tool-status {
+  flex: 0 0 auto;
+}
+
+.parallel-tool-label .tool-call-id {
+  min-width: 0;
+  margin-inline-start: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.parallel-tool-body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
 .runtime-details-body {
   display: flex;
   flex-direction: column;

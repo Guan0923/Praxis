@@ -53,6 +53,7 @@ class AgentRunner:
         log_full_messages: bool = True,
         checkpoints: CheckpointStore | None = None,
         max_tool_calls: int | None = None,
+        max_tool_parellel: int = 16,
         max_transport_retries: int = 5,
         skill_catalog: object | None = None,
         skills_enabled: bool = True,
@@ -90,7 +91,8 @@ class AgentRunner:
         self._closed = False
         self.settings = RunnerSettings(
             max_transport_retries=max_transport_retries,
-            max_tool_calls=32 if max_tool_calls is None else max_tool_calls,
+            max_tool_calls=512 if max_tool_calls is None else max_tool_calls,
+            max_tool_parellel=max_tool_parellel,
             log_full_messages=log_full_messages,
         )
         self.checkpoints = checkpoints
@@ -355,6 +357,7 @@ class AgentRunner:
                     "runner_settings": {
                         "max_transport_retries": settings.max_transport_retries,
                         "max_tool_calls": settings.max_tool_calls,
+                        "max_tool_parellel": settings.max_tool_parellel,
                         "log_full_messages": settings.log_full_messages,
                     },
                 },

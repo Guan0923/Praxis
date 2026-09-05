@@ -40,7 +40,7 @@ from .terminal import terminal_executable, windows_workspace_to_wsl
 class WorkspaceCommand:
     """Run an explicitly approved command with the workspace as its working directory."""
 
-    _MAX_TIMEOUT_SECONDS = 120
+    _MAX_TIMEOUT_SECONDS = 600
     _MAX_OUTPUT_CHARS = 20_000
     _WAIT_INTERVAL_SECONDS = 0.05
     _SENSITIVE_ENV_COMPOUNDS = (
@@ -78,7 +78,7 @@ class WorkspaceCommand:
         self._tree_terminator = tree_terminator
         self._environment = self._filtered_environment(os.environ if environment is None else environment)
 
-    def run(self, command: str, timeout_seconds: int = 30) -> str:
+    def run(self, command: str, timeout_seconds: int = 60) -> str:
         """Execute through a private registry when no runtime context exists."""
 
         return self.run_with_context(ToolInvocationContext(), command, timeout_seconds)
@@ -87,7 +87,7 @@ class WorkspaceCommand:
         self,
         context: ToolInvocationContext,
         command: str,
-        timeout_seconds: int = 30,
+        timeout_seconds: int = 60,
     ) -> str:
         """Execute as a managed subprocess job in the invocation's registry."""
 

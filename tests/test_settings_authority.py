@@ -19,7 +19,7 @@ from backend.providers import (
 )
 from backend.runtime.core.context import AgentRuntime
 from backend.storage.settings import LocalSettingsStore, normalize_sandbox_config
-from backend.storage.settings.contract import normalize_provider_config
+from backend.storage.settings.contract import normalize_provider_config, normalize_runtime_config
 
 
 def runtime_for(*messages, stream: bool = False) -> AgentRuntime:
@@ -270,6 +270,21 @@ def test_local_profile_and_agent_preferences_are_stored_in_toml(tmp_path: Path) 
 
     assert store.profile() == {"display_name": "One", "agent_preferences": "concise"}
     assert store.agent_preferences() == "Preferred tone: direct\nUse bullets\nconcise"
+
+
+def test_runtime_tool_limits_default_validate_and_persist(tmp_path: Path) -> None:
+    store = LocalSettingsStore(tmp_path / "runtime" / "state.db", tmp_path / "config.toml")
+
+    assert store.runtime_config()["max_tool_calls"] == 512
+    assert store.runtime_config()["max_tool_parellel"] == 16
+    store.update_runtime_config({"max_tool_calls": 700, "max_tool_parellel": 64})
+
+    reopened = LocalSettingsStore(tmp_path / "runtime" / "state.db", tmp_path / "config.toml")
+    assert reopened.runtime_config()["max_tool_calls"] == 700
+    assert reopened.runtime_config()["max_tool_parellel"] == 64
+    assert normalize_runtime_config({"max_tool_calls": 9}, {})["max_tool_parellel"] == 16
+    with pytest.raises(ValueError, match="positive integer"):
+        normalize_runtime_config({}, {"max_tool_parellel": 0})
 
 
 def test_sandbox_enabled_parameter_is_removed_from_every_settings_projection(tmp_path: Path) -> None:

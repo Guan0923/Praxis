@@ -158,7 +158,24 @@ export function RuntimeSettingsSection({ state }: SectionProps) {
           }}
         />
         <Typography.Paragraph type="secondary">
-          默认值为 32。成功、失败和重复的工具调用都会计入整个 Agent 工作流的上限；保存后仅影响新建或恢复的运行。
+          默认值为 512。成功、失败、拒绝和排队超时的工具调用都会计入整个 Agent 工作流的上限；保存后仅影响新建或恢复的运行。
+        </Typography.Paragraph>
+      </Form.Item>
+      <Form.Item label="工具并行数量">
+        <InputNumber
+          aria-label="工具并行数量"
+          min={1}
+          step={1}
+          precision={0}
+          value={settings.runtime_config.max_tool_parellel}
+          onChange={(max_tool_parellel) => {
+            if (typeof max_tool_parellel === "number" && Number.isInteger(max_tool_parellel)) {
+              state.updateSettings({ runtime_config: { ...settings.runtime_config, max_tool_parellel } });
+            }
+          }}
+        />
+        <Typography.Paragraph type="secondary">
+          默认值为 16，仅要求为正整数；设为 1 时工具串行执行。保存后仅影响新建或恢复的运行。
         </Typography.Paragraph>
       </Form.Item>
     </Form>

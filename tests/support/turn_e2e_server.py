@@ -221,6 +221,7 @@ class TraceModelHandler(BaseHTTPRequestHandler):
         raw_chunked_error_request = RAW_CHUNKED_ERROR_TASK in serialized_messages
         paused_chunked_request = PAUSED_CHUNKED_TASK in serialized_messages
         retry_visibility_request = RETRY_VISIBILITY_TASK in serialized_messages
+        parallel_tools_request = "parallel tools e2e" in serialized_messages
         if retry_visibility_request:
             RETRY_MODEL_CALLS += 1
         has_tool_result = any(
@@ -305,6 +306,56 @@ class TraceModelHandler(BaseHTTPRequestHandler):
                 return
             events = (
                 [
+                    {
+                        "id": "parallel-tools-e2e",
+                        "object": "chat.completion.chunk",
+                        "created": 1,
+                        "model": "trace-e2e-model",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {
+                                    "role": "assistant",
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "parallel_slow_1",
+                                            "function": {"name": "slow_tool", "arguments": "{}"},
+                                        },
+                                        {
+                                            "index": 1,
+                                            "id": "parallel_slow_2",
+                                            "function": {"name": "slow_tool", "arguments": "{}"},
+                                        },
+                                    ],
+                                },
+                                "finish_reason": "tool_calls",
+                            }
+                        ],
+                        "usage": None,
+                    },
+                    {"choices": [], "usage": {"input_tokens": 4, "output_tokens": 4, "total_tokens": 8}},
+                ]
+                if parallel_tools_request and not has_tool_result
+                else [
+                    {
+                        "id": "parallel-tools-e2e",
+                        "object": "chat.completion.chunk",
+                        "created": 1,
+                        "model": "trace-e2e-model",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": "Parallel tools completed."},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": None,
+                    },
+                    {"choices": [], "usage": {"input_tokens": 8, "output_tokens": 4, "total_tokens": 12}},
+                ]
+                if parallel_tools_request
+                else [
                     {
                         "id": "agent-thread-e2e",
                         "object": "chat.completion.chunk",
@@ -611,6 +662,8 @@ class CooperativePausePlanner(LLMPlanner):
             [trace_mcp_tool.spec],
             user_preferences="Trace E2E preference: concise local audit.",
         )
+        parallel_spec = Tool("slow_tool", "Run one deterministic slow tool.", lambda: "unused").spec
+        self._parallel_planner = LLMPlanner(LLMClient(TRACE_MODEL_CONFIG), [parallel_spec], [parallel_spec])
 
     def decide(self, runtime):
         task = runtime.run.task.strip()
@@ -662,6 +715,8 @@ class CooperativePausePlanner(LLMPlanner):
             return self._trace_planner.decide(runtime)
         if task == RETRY_VISIBILITY_TASK:
             return self._trace_planner.decide(runtime)
+        if task == "parallel tools e2e":
+            return self._parallel_planner.decide(runtime)
         if runtime.run.mode == "plan" and task == PLAN_REVIEW_TASK:
             return AssistantMessage(
                 tool_messages=[

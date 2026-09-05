@@ -348,6 +348,93 @@ function RetryItem({ item, active }: { item: TurnItem; active: boolean }) {
   );
 }
 
+function parallelGroupId(item: TurnItem): string {
+  return typeof item.parallel_group_id === "string" ? item.parallel_group_id : "";
+}
+
+function parallelToolStatus(call: TurnItem, result?: TurnItem): string {
+  if (result?.status === "failed") return "失败";
+  if (result?.status === "success") return "成功";
+  const stage = String(call.execution_stage ?? "");
+  if (stage === "waiting_approval") return "待审批";
+  if (stage === "queued") return "排队中";
+  if (stage === "running") return "运行中";
+  return call.status === "failed" ? "失败" : "等待中";
+}
+
+function ParallelToolGroup({
+  items,
+  groupId,
+  itemKey,
+  display,
+  active,
+}: {
+  items: TurnItem[];
+  groupId: string;
+  itemKey: string;
+  display: DisplayMode;
+  active: boolean;
+}) {
+  const [outerExpanded, setOuterExpanded] = useState(false);
+  const [innerExpanded, setInnerExpanded] = useState<string[]>([]);
+  const calls = items
+    .filter((item) => item.type === "tool_call" && parallelGroupId(item) === groupId)
+    .sort((left, right) => Number(left.parallel_index ?? 0) - Number(right.parallel_index ?? 0));
+  const results = new Map(
+    items
+      .filter((item) => item.type === "tool_result" && parallelGroupId(item) === groupId)
+      .map((item) => [String(item.call_id ?? ""), item]),
+  );
+  const running = calls.some((call) => !results.has(String(call.call_id ?? "")) && call.status === "running");
+  const children = calls.map((call, index) => {
+    const callId = String(call.call_id ?? `${groupId}:${index}`);
+    const result = results.get(callId);
+    const childKey = `${itemKey}:${callId}`;
+    const tool = runtimeToolName(call);
+    return {
+      key: childKey,
+      label: (
+        <span className="parallel-tool-label">
+          <span>{tool}</span>
+          <span className={`tool-status${result?.status === "failed" ? " failed" : ""}`}>
+            {parallelToolStatus(call, result)}
+          </span>
+          <span className="tool-call-id">{callId}</span>
+        </span>
+      ),
+      children: (
+        <div className="parallel-tool-body">
+          {runtimeItemBody(call, display, active && !result)}
+          {result ? runtimeItemBody(result, display, false) : null}
+        </div>
+      ),
+    };
+  });
+  return (
+    <Collapse
+      className="runtime-collapse runtime-parallel-collapse"
+      ghost
+      size="small"
+      activeKey={outerExpanded ? [itemKey] : []}
+      onChange={(keys) => setOuterExpanded(Array.isArray(keys) ? keys.map(String).includes(itemKey) : String(keys) === itemKey)}
+      items={[{
+        key: itemKey,
+        label: running ? <RuntimeStatusLabel text="并行调用工具" shimmer={!outerExpanded} /> : <span className="runtime-static-label">并行调用工具</span>,
+        children: (
+          <Collapse
+            className="runtime-parallel-inner-collapse"
+            ghost
+            size="small"
+            activeKey={innerExpanded}
+            onChange={(keys) => setInnerExpanded((Array.isArray(keys) ? keys : [keys]).map(String))}
+            items={children}
+          />
+        ),
+      }]}
+    />
+  );
+}
+
 const HIDDEN_ASSISTANT_ITEM_TYPES = new Set(["skill_snapshot"]);
 
 function visibleAssistantItems(items: TurnItem[] | undefined): TurnItem[] {
@@ -373,6 +460,24 @@ function OrderedAssistantItems({
       {items.map((item, index) => {
         const identity = `${msg.id}:${version}:${index}`;
         const active = Boolean(msg.running && index === items.length - 1);
+        const groupId = parallelGroupId(item);
+        if (groupId && ["tool_call", "tool_result"].includes(item.type)) {
+          const first = items.findIndex((candidate) => parallelGroupId(candidate) === groupId);
+          if (first !== index) return null;
+          if (display === "minimal") {
+            return active ? <MinimalRuntimeStatus key={identity} item={item} /> : null;
+          }
+          return (
+            <ParallelToolGroup
+              key={`${msg.id}:${groupId}`}
+              items={items}
+              groupId={groupId}
+              itemKey={`${msg.id}:${groupId}`}
+              display={display}
+              active={Boolean(msg.running)}
+            />
+          );
+        }
         if (item.type === "retry") {
           return <RetryItem key={identity} item={item} active={active && item.status === "running"} />;
         }

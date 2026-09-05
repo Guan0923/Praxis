@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
+from threading import RLock
 from time import perf_counter
 
 from backend.domain import safe_error_message
@@ -38,24 +41,49 @@ class ToolStepExecutor:
     """Execute runtime.state.active_message.tool_messages[active_tool_index]."""
 
     def execute(self, runtime: AgentRuntime) -> ToolStepResult:
-        previous_mode = runtime.run.mode
+        message = runtime.state.active_message
+        index = runtime.state.active_tool_index
+        if message is None or index is None or not 0 <= index < len(message.tool_messages):
+            return self._failure(runtime, None, None, "unknown", "Runtime does not identify an active tool call.")
         runtime.apply_pending_runtime_config()
+        return self.execute_call(runtime, message, index)
+
+    def execute_call(
+        self,
+        runtime: AgentRuntime,
+        message,
+        index: int,
+        *,
+        approval_lock: RLock | None = None,
+        execution_slot: Callable[[], AbstractContextManager[None]] | None = None,
+        commit_lock: RLock | None = None,
+        action_number: int | None = None,
+    ) -> ToolStepResult:
+        previous_mode = runtime.run.mode
         run = runtime.run
         if runtime.state.running_mode in {"agent", "plan"}:
             run.mode = runtime.state.running_mode  # type: ignore[assignment]
         if run.mode != previous_mode:
             raise WorkflowModeChanged(f"Workflow mode changed from {previous_mode} to {run.mode}.")
-        message = runtime.state.active_message
-        index = runtime.state.active_tool_index
-        if message is None or index is None or not 0 <= index < len(message.tool_messages):
-            return self._failure(runtime, "unknown", "Runtime does not identify an active tool call.")
         tool_message = message.tool_messages[index]
         tool = tool_message.name
         tools = runtime.services.tools
-        publish = runtime.services.publish or (lambda _event: None)
+        raw_publish = runtime.services.publish or (lambda _event: None)
+        lock = commit_lock or RLock()
+
+        def publish(event: RuntimeEvent) -> None:
+            with lock:
+                event_call_id = event.data.get("call_id")
+                if event_call_id == tool_message.call_id and event.kind == "approval_requested":
+                    tool_message.execution_stage = "waiting_approval"
+                    runtime.save()
+                raw_publish(event)
+
         try:
             if run.mode == "plan" and not tools.is_read_only(tool):
-                return self._failure(runtime, tool, f"Read-only Plan mode blocked tool: {tool}")
+                return self._failure(
+                    runtime, message, index, tool, f"Read-only Plan mode blocked tool: {tool}", commit_lock=lock
+                )
             requires_confirmation = tools.requires_confirmation(tool)
             read_only = tools.is_read_only(tool)
             workspace_confined = tools.is_workspace_confined(tool)
@@ -64,7 +92,7 @@ class ToolStepExecutor:
             if callable(validate):
                 validate(tool, tool_message.arguments)
         except ToolError as exc:
-            return self._failure(runtime, tool, safe_error_message(exc))
+            return self._failure(runtime, message, index, tool, safe_error_message(exc), commit_lock=lock)
 
         context = ToolHookContext(
             run=RunHookInfo(runtime.state.session_id, run.run_id, run.task, run.mode),
@@ -84,13 +112,22 @@ class ToolStepExecutor:
             record_event=lambda _kind, _message, _data: None,
             publish=publish,
         )
-        before = before_tool_hook_manager.execute(context, publish)
+        with approval_lock if requires_confirmation and approval_lock is not None else nullcontext():
+            before = before_tool_hook_manager.execute(context, publish)
         if before.decision == "reject":
             interrupt = before.data.get("interrupt")
             decision = interrupt if isinstance(interrupt, InterruptDecision) else InterruptDecision("cancel")
             if decision.choice == "deny":
-                return self._denied(runtime, tool, decision)
-            failure = self._failure(runtime, tool, before.reason or "Tool call rejected by hook.", retryable=False)
+                return self._denied(runtime, message, index, tool, decision, commit_lock=lock)
+            failure = self._failure(
+                runtime,
+                message,
+                index,
+                tool,
+                before.reason or "Tool call rejected by hook.",
+                retryable=False,
+                commit_lock=lock,
+            )
             return ToolStepResult(
                 success=False,
                 error=failure.error,
@@ -99,39 +136,69 @@ class ToolStepExecutor:
             )
         sandbox_data = before.data.get("sandbox_decision")
         sandbox_decision = sandbox_data if isinstance(sandbox_data, SandboxExecutionDecision) else None
-        result = self._invoke(runtime, retryable=retryable, sandbox_decision=sandbox_decision)
+        try:
+            with execution_slot() if execution_slot is not None else nullcontext():
+                result = self._invoke(
+                    runtime,
+                    message,
+                    index,
+                    retryable=retryable,
+                    sandbox_decision=sandbox_decision,
+                    commit_lock=lock,
+                    action_number=action_number,
+                )
+        except ToolError as exc:
+            error = safe_error_message(exc)
+            failure_code = "tool_queue_timeout" if "queue timed out" in error.casefold() else "tool_batch_interrupted"
+            result = self._failure(
+                runtime,
+                message,
+                index,
+                tool,
+                error,
+                retryable=False,
+                failure_code=failure_code,
+                commit_lock=lock,
+            )
         after_tool_hook_manager.execute(replace(context, outcome=self._hook_outcome(result)), publish)
         return result
 
     def _invoke(
         self,
         runtime: AgentRuntime,
+        message,
+        index: int,
         *,
         retryable: bool,
         sandbox_decision: SandboxExecutionDecision | None,
+        commit_lock: RLock,
+        action_number: int | None,
     ) -> ToolStepResult:
         run = runtime.run
-        message = runtime.state.active_message
-        index = runtime.state.active_tool_index
-        assert message is not None and index is not None
         tool_message = message.tool_messages[index]
         tool = tool_message.name
         tools = runtime.services.tools
         publish = runtime.services.publish or (lambda _event: None)
         started_at = perf_counter()
         started_at_timestamp = runtime.services.clock()
-        publish(
-            RuntimeEvent(
-                "tool_call",
-                tool,
-                {
-                    "call_id": tool_message.call_id,
-                    "arguments": tool_message.arguments,
-                    "attempt": 1,
-                    "started_at": started_at_timestamp,
-                },
+        with commit_lock:
+            tool_message.execution_stage = "running"
+            publish(
+                RuntimeEvent(
+                    "tool_call",
+                    tool,
+                    self._event_data(
+                        tool_message,
+                        {
+                            "arguments": tool_message.arguments,
+                            "attempt": 1,
+                            "started_at": started_at_timestamp,
+                            "execution_stage": "running",
+                        },
+                    ),
+                )
             )
-        )
+            runtime.save()
         try:
             subagents = runtime.services.subagents
             if subagents is not None and subagents.handles(tool):
@@ -159,37 +226,53 @@ class ToolStepExecutor:
                     result = tools.invoke(tool, tool_message.arguments, confirmed=True)
             if runtime.stop_requested():
                 raise ToolError("Tool invocation cancelled.")
-            tool_message.status = "succeeded"
-            tool_message.content = result
-            tool_message.retryable = retryable
-            run.completed_steps.append(len(run.actions))
             duration_ms = round((perf_counter() - started_at) * 1000, 3)
-            publish(
-                RuntimeEvent(
-                    "tool_result",
-                    result,
-                    {"tool": tool, "call_id": tool_message.call_id, "duration_ms": duration_ms, "attempts": 1},
+            with commit_lock:
+                tool_message.status = "succeeded"
+                tool_message.content = result
+                tool_message.retryable = retryable
+                tool_message.execution_stage = "succeeded"
+                run.completed_steps.append(action_number if action_number is not None else len(run.actions))
+                publish(
+                    RuntimeEvent(
+                        "tool_result",
+                        result,
+                        self._event_data(
+                            tool_message,
+                            {
+                                "tool": tool,
+                                "duration_ms": duration_ms,
+                                "attempts": 1,
+                                "execution_stage": "succeeded",
+                            },
+                        ),
+                    )
                 )
-            )
-            runtime.save()
+                runtime.save()
             return ToolStepResult(success=True, output=result, retryable=retryable)
         except ToolError as exc:
             return self._failure(
                 runtime,
+                message,
+                index,
                 tool,
                 safe_error_message(exc),
                 retryable=retryable,
                 duration_ms=round((perf_counter() - started_at) * 1000, 3),
+                commit_lock=commit_lock,
             )
         except Exception as exc:
             # A tool failure is returned to the planner so it can select a
             # different action; it must not abort the surrounding run.
             return self._failure(
                 runtime,
+                message,
+                index,
                 tool,
                 safe_error_message(exc),
                 retryable=retryable,
                 duration_ms=round((perf_counter() - started_at) * 1000, 3),
+                commit_lock=commit_lock,
             )
 
     @staticmethod
@@ -209,25 +292,28 @@ class ToolStepExecutor:
         )
 
     @staticmethod
-    def _denied(runtime: AgentRuntime, tool: str, decision: InterruptDecision) -> ToolStepResult:
-        message = runtime.state.active_message
-        index = runtime.state.active_tool_index
-        assert message is not None and index is not None
+    def _denied(
+        runtime: AgentRuntime, message, index: int, tool: str, decision: InterruptDecision, *, commit_lock: RLock
+    ) -> ToolStepResult:
         current = message.tool_messages[index]
         error = f"The user denied this {tool} tool call."
-        current.status = "failed"
-        current.content = error
-        current.retryable = False
-        current.failure_code = USER_DENIED_FAILURE_CODE
-        data = {
-            "tool": tool,
-            "call_id": current.call_id,
-            "error": error,
-            "failure_code": USER_DENIED_FAILURE_CODE,
-        }
-        publish = runtime.services.publish or (lambda _event: None)
-        publish(RuntimeEvent("tool_failed", error, data))
-        runtime.save()
+        with commit_lock:
+            current.status = "failed"
+            current.content = error
+            current.retryable = False
+            current.failure_code = USER_DENIED_FAILURE_CODE
+            current.execution_stage = "failed"
+            data = ToolStepExecutor._event_data(
+                current,
+                {
+                    "tool": tool,
+                    "error": error,
+                    "failure_code": USER_DENIED_FAILURE_CODE,
+                },
+            )
+            publish = runtime.services.publish or (lambda _event: None)
+            publish(RuntimeEvent("tool_failed", error, data))
+            runtime.save()
         return ToolStepResult(
             success=False,
             error=error,
@@ -238,25 +324,46 @@ class ToolStepExecutor:
     @staticmethod
     def _failure(
         runtime: AgentRuntime,
+        message,
+        index: int | None,
         tool: str,
         error: str,
         *,
         retryable: bool | None = None,
         duration_ms: float | None = None,
+        failure_code: str | None = None,
+        commit_lock: RLock | None = None,
     ) -> ToolStepResult:
-        message = runtime.state.active_message
-        index = runtime.state.active_tool_index
         call_id = ""
-        if message is not None and index is not None and 0 <= index < len(message.tool_messages):
-            current = message.tool_messages[index]
-            call_id = current.call_id
-            current.status = "failed"
-            current.content = error
-            current.retryable = retryable
-        data: dict[str, object] = {"call_id": call_id, "error": error}
-        if duration_ms is not None:
-            data["duration_ms"] = duration_ms
-        publish = runtime.services.publish or (lambda _event: None)
-        publish(RuntimeEvent("tool_failed", error, {"tool": tool, **data}))
-        runtime.save()
+        lock = commit_lock or RLock()
+        with lock:
+            current = None
+            if message is not None and index is not None and 0 <= index < len(message.tool_messages):
+                current = message.tool_messages[index]
+                call_id = current.call_id
+                current.status = "failed"
+                current.content = error
+                current.retryable = retryable
+                current.failure_code = failure_code
+                current.execution_stage = "failed"
+            data: dict[str, object] = {"call_id": call_id, "error": error}
+            if current is not None:
+                data = ToolStepExecutor._event_data(current, data)
+            if duration_ms is not None:
+                data["duration_ms"] = duration_ms
+            if failure_code is not None:
+                data["failure_code"] = failure_code
+            publish = runtime.services.publish or (lambda _event: None)
+            publish(RuntimeEvent("tool_failed", error, {"tool": tool, **data}))
+            runtime.save()
         return ToolStepResult(success=False, error=error, retryable=retryable)
+
+    @staticmethod
+    def _event_data(tool_message, values: dict[str, object]) -> dict[str, object]:
+        return {
+            "call_id": tool_message.call_id,
+            "parallel_group_id": tool_message.parallel_group_id,
+            "parallel_index": tool_message.parallel_index,
+            "parallel_size": tool_message.parallel_size,
+            **values,
+        }
