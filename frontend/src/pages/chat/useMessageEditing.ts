@@ -131,7 +131,7 @@ export function useMessageEditing({
     const nextIndex = turn.current_data_idx + direction;
     if (nextIndex < 0 || nextIndex >= turn.data.length) return;
     try {
-      const updated = await patchTurnCurrentData(turn.id, nextIndex);
+      const updated = await patchTurnCurrentData(turn.id, nextIndex, conversation.sessionId);
       onUpdate(conversation.id, (current) => {
         const map = new Map((current.runtimeNodes ?? []).map((item) => [`${item.session_id}:${item.id}`, item] as const));
         map.set(`${updated.session_id}:${updated.id}`, updated);

@@ -1,5 +1,6 @@
 import type { RightPanelPayload, RightPanelWindow, RuntimeStateNode } from "../types";
 import { jsonBody, requestJson, requestVoid } from "./transport/request";
+import { browserWindowGeneration, browserWindowId } from "./transport/operationControl";
 
 export interface CreatedSideChat {
   window: RightPanelWindow;
@@ -60,5 +61,8 @@ export async function closeRightPanelWindow(sessionId: string, windowId: string)
 export function terminalWebSocketUrl(terminalId: string, afterSequence: number): string {
   const scheme = window.location.protocol === "https:" ? "wss" : "ws";
   const baseUrl = `${scheme}://${window.location.host}`;
-  return `${baseUrl}/api/right-panel/terminals/${encodeURIComponent(terminalId)}/ws?after_sequence=${afterSequence}`;
+  const params = new URLSearchParams({ after_sequence: String(afterSequence), window_id: browserWindowId() });
+  const generation = browserWindowGeneration();
+  if (generation !== null) params.set("generation", String(generation));
+  return `${baseUrl}/api/right-panel/terminals/${encodeURIComponent(terminalId)}/ws?${params}`;
 }

@@ -16,6 +16,7 @@ export async function createSidebarThread(title = "新对话", clientId?: string
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title, client_id: clientId }),
+    operation: { group: "conversations:create", dedupeKey: "conversation:create" },
   });
 }
 
@@ -32,25 +33,27 @@ export async function updateSidebarThreadOrder(
         ? { ordered_thread_ids: order.orderedThreadIds }
         : { sort_by: order.sortBy }),
     }),
+    operation: { group: `sidebar-order:${projectId ?? "ungrouped"}` },
   });
 }
 
-export async function renameSidebarThread(threadId: string, title: string): Promise<SidebarThread> {
+export async function renameSidebarThread(threadId: string, title: string, sessionId?: string): Promise<SidebarThread> {
   return requestJson(`/api/sidebar-threads/${encodeURIComponent(threadId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
+    operation: { sessionId },
   });
 }
 
-export async function archiveSidebarThread(threadId: string): Promise<SidebarThread> {
-  return requestJson(`/api/sidebar-threads/${encodeURIComponent(threadId)}/archive`, { method: "POST" });
+export async function archiveSidebarThread(threadId: string, sessionId?: string): Promise<SidebarThread> {
+  return requestJson(`/api/sidebar-threads/${encodeURIComponent(threadId)}/archive`, { method: "POST", operation: { sessionId } });
 }
 
-export async function restoreSidebarThread(threadId: string): Promise<SidebarThread> {
-  return requestJson(`/api/sidebar-threads/${encodeURIComponent(threadId)}/restore`, { method: "POST" });
+export async function restoreSidebarThread(threadId: string, sessionId?: string): Promise<SidebarThread> {
+  return requestJson(`/api/sidebar-threads/${encodeURIComponent(threadId)}/restore`, { method: "POST", operation: { sessionId } });
 }
 
-export async function deleteSidebarThread(threadId: string): Promise<SidebarThread> {
-  return requestJson(`/api/sidebar-threads/${encodeURIComponent(threadId)}`, { method: "DELETE" });
+export async function deleteSidebarThread(threadId: string, sessionId?: string): Promise<SidebarThread> {
+  return requestJson(`/api/sidebar-threads/${encodeURIComponent(threadId)}`, { method: "DELETE", operation: { sessionId } });
 }

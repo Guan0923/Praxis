@@ -257,9 +257,24 @@ async def _terminal_output(websocket: WebSocket, state: WebAppState, terminal_id
             return
 
 
-async def _terminal_input(websocket: WebSocket, state: WebAppState, terminal_id: str) -> None:
+async def _terminal_input(
+    websocket: WebSocket,
+    state: WebAppState,
+    terminal_id: str,
+    *,
+    window_id: str | None = None,
+    session_id: str | None = None,
+    generation: int | None = None,
+) -> None:
     while True:
         payload = await websocket.receive_json()
+        if window_id and (
+            session_id is None
+            or generation is None
+            or not await state.operation_control.is_session_owner(window_id, session_id, generation)
+        ):
+            await websocket.close(code=1008)
+            return
         if not isinstance(payload, dict):
             await websocket.close(code=1003)
             return
@@ -276,6 +291,14 @@ async def _terminal_input(websocket: WebSocket, state: WebAppState, terminal_id:
             return
 
 
+def _terminal_session_id(state: WebAppState, terminal_id: str) -> str | None:
+    store = session_store(state)
+    for summary in store.list_sessions(state="all"):
+        if any(window.terminal_id == terminal_id for window in store.list_right_panel_windows(summary.session_id)):
+            return summary.session_id
+    return None
+
+
 @router.websocket("/terminals/{terminal_id}/ws")
 async def terminal_websocket(terminal_id: str, websocket: WebSocket) -> None:
     settings = LocalWebSettings.from_env()
@@ -283,6 +306,15 @@ async def terminal_websocket(terminal_id: str, websocket: WebSocket) -> None:
         await websocket.close(code=1008)
         return
     state: WebAppState = websocket.app.state.web
+    window_id = websocket.query_params.get("window_id", "")
+    try:
+        generation = int(websocket.query_params.get("generation", "0"))
+    except ValueError:
+        generation = 0
+    session_id = _terminal_session_id(state, terminal_id)
+    writable = not window_id or bool(
+        session_id and await state.operation_control.is_session_owner(window_id, session_id, generation)
+    )
     try:
         terminal = state.terminal_manager.connect(terminal_id)
     except KeyError:
@@ -297,8 +329,22 @@ async def terminal_websocket(terminal_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
         await websocket.send_json({"type": "ready", **terminal.payload()})
         output = asyncio.create_task(_terminal_output(websocket, state, terminal_id, after))
-        input_task = asyncio.create_task(_terminal_input(websocket, state, terminal_id))
-        done, pending = await asyncio.wait({output, input_task}, return_when=asyncio.FIRST_COMPLETED)
+        input_task = (
+            asyncio.create_task(
+                _terminal_input(
+                    websocket,
+                    state,
+                    terminal_id,
+                    window_id=window_id or None,
+                    session_id=session_id,
+                    generation=generation,
+                )
+            )
+            if writable
+            else None
+        )
+        tasks = {output, input_task} if input_task is not None else {output}
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
         for task in done:

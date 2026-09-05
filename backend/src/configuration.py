@@ -226,6 +226,8 @@ def _to_toml(values: Mapping[str, Mapping[str, object]]) -> str:
             return repr(value)
         if isinstance(value, list):
             return "[" + ", ".join(render(item) for item in value) + "]"
+        if isinstance(value, Mapping):
+            return "{ " + ", ".join(f"{key} = {render(item)}" for key, item in value.items()) + " }"
         return json.dumps(str(value), ensure_ascii=False)
 
     def emit_table(name: str, entries: Mapping[str, object]) -> None:

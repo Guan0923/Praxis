@@ -6,9 +6,10 @@ import type { RightPanelWindow } from "../../types";
 
 interface TerminalPaneProps {
   panelWindow: RightPanelWindow;
+  readOnly?: boolean;
 }
 
-export default function TerminalPane({ panelWindow }: TerminalPaneProps) {
+export default function TerminalPane({ panelWindow, readOnly = false }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<XtermTerminal | null>(null);
   const sequenceRef = useRef(0);
@@ -47,7 +48,7 @@ export default function TerminalPane({ panelWindow }: TerminalPaneProps) {
       terminalRef.current = terminal;
       const sendResize = () => {
         fit.fit();
-        if (socket?.readyState === WebSocket.OPEN) {
+        if (!readOnly && socket?.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }));
         }
       };
@@ -85,7 +86,7 @@ export default function TerminalPane({ panelWindow }: TerminalPaneProps) {
         };
       };
       disposeInput = terminal.onData((data) => {
-        if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }));
+        if (!readOnly && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }));
       });
       connect();
     }).catch(() => setStatus("failed"));
@@ -99,7 +100,7 @@ export default function TerminalPane({ panelWindow }: TerminalPaneProps) {
       terminalRef.current?.dispose();
       terminalRef.current = null;
     };
-  }, [panelWindow.terminal_id]);
+  }, [panelWindow.terminal_id, readOnly]);
 
   return (
     <div className="right-panel-terminal">

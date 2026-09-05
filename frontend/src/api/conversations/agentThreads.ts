@@ -45,6 +45,7 @@ export async function sendAgentThreadMessage(
       provider_name: values.providerName,
       model: values.model,
     }),
+    operation: { sessionId: values.sessionId },
   });
 }
 

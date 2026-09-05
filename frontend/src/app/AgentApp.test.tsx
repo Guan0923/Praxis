@@ -11,6 +11,7 @@ import { TURN_PROTOCOL_VERSION } from "./runtime/runtimeNodeNormalization";
 
 const api = vi.hoisted(() => ({
   archiveSession: vi.fn(),
+  bindSessionOperationResources: vi.fn(),
   createSession: vi.fn(),
   deleteSession: vi.fn(),
   forkTurn: vi.fn(),
@@ -405,7 +406,7 @@ describe("AgentApp new conversation initialization", () => {
       await shell.props!.onFork(source.thread_id, "assistant-source");
     });
 
-    expect(api.forkTurn).toHaveBeenCalledWith("turn-source");
+    expect(api.forkTurn).toHaveBeenCalledWith("turn-source", "session-fork");
     expect(shell.props?.current).toMatchObject({ id: "thread-fork", title: "源对话标题（分支）" });
   });
 
@@ -451,7 +452,7 @@ describe("AgentApp new conversation initialization", () => {
 
     await renderReady();
 
-    await waitFor(() => expect(api.pauseTurn).toHaveBeenCalledWith("turn-running"));
+    await waitFor(() => expect(api.pauseTurn).toHaveBeenCalledWith("turn-running", "session-running"));
     expect(api.streamAttachedTurn).not.toHaveBeenCalled();
     expect(shell.props?.sandboxHealth.phase).toBe("unhealthy");
   });

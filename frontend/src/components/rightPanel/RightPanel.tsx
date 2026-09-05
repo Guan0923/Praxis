@@ -11,6 +11,7 @@ import {
 } from "../../api";
 import type { RightPanelPayload, RightPanelWindow } from "../../types";
 import TerminalPane from "./TerminalPane";
+import { useSessionOwnership } from "../../app/useSessionOwnership";
 
 const RIGHT_PANEL_TAB_STYLES: TabsProps["styles"] = {
   body: { height: "100%", minHeight: 0 },
@@ -18,6 +19,8 @@ const RIGHT_PANEL_TAB_STYLES: TabsProps["styles"] = {
 };
 
 export interface RightPanelController {
+  sessionId?: string;
+  writable?: boolean;
   payload: RightPanelPayload | null;
   loading: boolean;
   createWindow: (kind: "side_chat" | "terminal") => Promise<void>;
@@ -33,6 +36,8 @@ export function useRightPanel(
   onHydrate: (window: RightPanelWindow) => Promise<void>,
   onForget: (windowId: string) => void,
 ): RightPanelController {
+  const ownership = useSessionOwnership(sessionId);
+  const writable = !sessionId || ownership === "writable";
   const [payload, setPayload] = useState<RightPanelPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const hydrateRef = useRef(onHydrate);
@@ -59,6 +64,7 @@ export function useRightPanel(
 
   const createWindow = async (kind: "side_chat" | "terminal") => {
     if (!sessionId || !sourceTurnId) throw new Error("当前没有可用 Turn。");
+    if (!writable) throw new Error("当前 session 正在另一个窗口对话。");
     setLoading(true);
     try {
       if (kind === "side_chat") {
@@ -77,6 +83,7 @@ export function useRightPanel(
 
   const closeWindow = async (window: RightPanelWindow) => {
     if (!sessionId) return;
+    if (!writable) throw new Error("当前 session 正在另一个窗口对话。");
     setPayload((current) => current ? {
       ...current,
       state: {
@@ -93,6 +100,7 @@ export function useRightPanel(
 
   const renameWindow = async (window: RightPanelWindow, title: string) => {
     if (!sessionId || !title.trim()) return;
+    if (!writable) throw new Error("当前 session 正在另一个窗口对话。");
     const updated = await renameRightPanelWindow(sessionId, window.id, title.trim());
     setPayload((current) => current ? {
       ...current,
@@ -104,16 +112,16 @@ export function useRightPanel(
   const setActive = (windowId: string | null) => {
     if (!sessionId) return;
     setPayload((current) => current ? { ...current, state: { ...current.state, active_window_id: windowId } } : current);
-    void updateRightPanel(sessionId, { active_window_id: windowId });
+    if (writable) void updateRightPanel(sessionId, { active_window_id: windowId });
   };
 
   const setLayout = (patch: Partial<Pick<RightPanelPayload["state"], "width" | "collapsed" | "active_window_id">>) => {
     if (!sessionId) return;
     setPayload((current) => current ? { ...current, state: { ...current.state, ...patch } } : current);
-    void updateRightPanel(sessionId, patch);
+    if (writable) void updateRightPanel(sessionId, patch);
   };
 
-  return { payload, loading, createWindow, closeWindow, renameWindow, setActive, setLayout };
+  return { sessionId, writable, payload, loading, createWindow, closeWindow, renameWindow, setActive, setLayout };
 }
 
 const creationItems = (
@@ -121,19 +129,20 @@ const creationItems = (
   sourceAvailable: boolean,
   terminalAvailable: boolean,
   terminalReason: string,
+  writable: boolean,
 ) => [
   {
     key: "side_chat",
     icon: <CommentOutlined />,
     label: sourceAvailable ? "侧边聊天" : "侧边聊天（当前没有可用 Turn）",
-    disabled: !sourceAvailable,
+    disabled: !sourceAvailable || !writable,
     onClick: () => create("side_chat"),
   },
   {
     key: "terminal",
     icon: <ProductOutlined />,
     label: terminalAvailable ? "终端" : `终端（${terminalReason}）`,
-    disabled: !terminalAvailable,
+    disabled: !terminalAvailable || !writable,
     onClick: () => create("terminal"),
   },
 ];
@@ -185,6 +194,7 @@ export default function RightPanel({
   const tabs = (payload?.windows ?? []).map((window) => ({
     key: window.id,
     forceRender: true,
+    closable: controller.writable !== false,
     label: editingId === window.id ? (
       <Input
         autoFocus
@@ -197,15 +207,23 @@ export default function RightPanel({
       />
     ) : (
       <Tooltip title="双击重命名">
-        <span onDoubleClick={() => { setEditingId(window.id); setTitleDraft(window.title); }}>{window.title}</span>
+        <span onDoubleClick={() => {
+          if (controller.writable === false) return;
+          setEditingId(window.id);
+          setTitleDraft(window.title);
+        }}>{window.title}</span>
       </Tooltip>
     ),
-    children: window.kind === "terminal" ? <TerminalPane panelWindow={window} /> : renderSideChat(window),
+    children: window.kind === "terminal" ? <TerminalPane panelWindow={window} readOnly={controller.writable === false} /> : renderSideChat(window),
   }));
   const extra = (
     <Space size={4}>
-      <Dropdown menu={{ items: creationItems(run, sourceAvailable, terminalAvailable, terminalReason) }} trigger={["click"]}>
-        <Button type="text" size="small" icon={<PlusOutlined />} aria-label="新增右栏窗口" />
+      <Dropdown
+        menu={{ items: creationItems(run, sourceAvailable, terminalAvailable, terminalReason, controller.writable !== false) }}
+        trigger={["click"]}
+        disabled={controller.writable === false}
+      >
+        <Button type="text" size="small" icon={<PlusOutlined />} aria-label="新增右栏窗口" disabled={controller.writable === false} />
       </Dropdown>
       <Button type="text" size="small" icon={<CloseOutlined />} aria-label="收起右侧边栏" onClick={() => controller.setLayout({ collapsed: true })} />
     </Space>
@@ -215,8 +233,8 @@ export default function RightPanel({
       <div className="right-panel-empty">
         <Empty description="选择要打开的窗口" />
         <Space>
-          <Button icon={<CommentOutlined />} disabled={!sourceAvailable} loading={controller.loading} onClick={() => run("side_chat")}>创建侧边聊天</Button>
-          <Button icon={<ProductOutlined />} disabled={!terminalAvailable} loading={controller.loading} onClick={() => run("terminal")}>打开终端</Button>
+          <Button icon={<CommentOutlined />} disabled={!sourceAvailable || controller.writable === false} loading={controller.loading} onClick={() => run("side_chat")}>创建侧边聊天</Button>
+          <Button icon={<ProductOutlined />} disabled={!terminalAvailable || controller.writable === false} loading={controller.loading} onClick={() => run("terminal")}>打开终端</Button>
         </Space>
         {!sourceAvailable ? <Typography.Text type="secondary">当前主聊天没有可用 Turn，暂时不能创建右栏窗口。</Typography.Text> : null}
         {sourceAvailable && !terminalAvailable ? <Typography.Text type="secondary">{terminalReason}</Typography.Text> : null}

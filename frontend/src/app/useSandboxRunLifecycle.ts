@@ -39,8 +39,11 @@ export function useSandboxRunLifecycle({
     if (sandboxHealth.phase !== "unhealthy") return;
     const runningTurnIds = new Set<string>();
     const turnSessions = new Map<string, { conversationId: string; sessionId: string }>();
-    for (const active of activeRunsRef.current.values()) {
-      if (active.turnId) runningTurnIds.add(active.turnId);
+    for (const [conversationId, active] of activeRunsRef.current.entries()) {
+      if (active.turnId) {
+        runningTurnIds.add(active.turnId);
+        turnSessions.set(active.turnId, { conversationId, sessionId: active.sessionId });
+      }
     }
     for (const conversation of [...conversations, ...Object.values(panelConversations)]) {
       for (const node of conversation.runtimeNodes ?? []) {
@@ -71,7 +74,7 @@ export function useSandboxRunLifecycle({
     for (const turnId of runningTurnIds) {
       if (pausedForSandboxOutageRef.current.has(turnId)) continue;
       pausedForSandboxOutageRef.current.add(turnId);
-      void pauseTurn(turnId).catch(async () => {
+      void pauseTurn(turnId, turnSessions.get(turnId)?.sessionId).catch(async () => {
         pausedForSandboxOutageRef.current.delete(turnId);
         const target = turnSessions.get(turnId);
         if (!target) return;

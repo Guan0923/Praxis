@@ -86,7 +86,7 @@ export function useChatCommands({
     if (!conversation || !activeRuntimeNode) return;
     setCompactionPending(true);
     try {
-      const compacted = await compactTurn(activeRuntimeNode.id);
+      const compacted = await compactTurn(activeRuntimeNode.id, conversation.sessionId);
       await onReload(conversation.id, compacted.id);
     } catch (error) {
       await onInsert(String((error as Error).message ?? error));

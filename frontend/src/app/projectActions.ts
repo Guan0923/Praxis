@@ -39,9 +39,12 @@ export function createProjectActions(context: ProjectActionsContext) {
     setActionError,
     refreshSessions,
   } = context;
+  let newProjectPending = false;
+  const projectConversationPending = new Set<string>();
 
   async function newProject(): Promise<void> {
-    if (projectLoading) return;
+    if (projectLoading || newProjectPending) return;
+    newProjectPending = true;
     setProjectLoading(true);
     setActionError(null);
     try {
@@ -62,11 +65,14 @@ export function createProjectActions(context: ProjectActionsContext) {
     } catch (error) {
       setActionError(String((error as Error).message ?? error));
     } finally {
+      newProjectPending = false;
       setProjectLoading(false);
     }
   }
 
   async function newProjectConversation(projectId: string): Promise<void> {
+    if (projectConversationPending.has(projectId)) return;
+    projectConversationPending.add(projectId);
     setActionError(null);
     try {
       const existing = activeConversations.find(
@@ -94,6 +100,8 @@ export function createProjectActions(context: ProjectActionsContext) {
       setPage("chat");
     } catch (error) {
       setActionError(String((error as Error).message ?? error));
+    } finally {
+      projectConversationPending.delete(projectId);
     }
   }
 

@@ -52,20 +52,20 @@ export async function createSession(title = "新对话", clientId?: string): Pro
   return summary(await createSidebarThread(title, clientId));
 }
 
-export async function renameSession(threadId: string, title: string): Promise<SessionInfo> {
-  return summary(await renameSidebarThread(threadId, title));
+export async function renameSession(threadId: string, title: string, sessionId?: string): Promise<SessionInfo> {
+  return summary(await renameSidebarThread(threadId, title, sessionId));
 }
 
-export async function archiveSession(threadId: string): Promise<SessionInfo> {
-  return summary(await archiveSidebarThread(threadId));
+export async function archiveSession(threadId: string, sessionId?: string): Promise<SessionInfo> {
+  return summary(await archiveSidebarThread(threadId, sessionId));
 }
 
-export async function restoreSession(threadId: string): Promise<SessionInfo> {
-  return summary(await restoreSidebarThread(threadId));
+export async function restoreSession(threadId: string, sessionId?: string): Promise<SessionInfo> {
+  return summary(await restoreSidebarThread(threadId, sessionId));
 }
 
-export async function deleteSession(threadId: string): Promise<SessionInfo> {
-  return summary(await deleteSidebarThread(threadId));
+export async function deleteSession(threadId: string, sessionId?: string): Promise<SessionInfo> {
+  return summary(await deleteSidebarThread(threadId, sessionId));
 }
 
 export async function getSessionNodes(sessionId: string): Promise<RuntimeTreeNode[]> {
@@ -79,7 +79,7 @@ export async function getSessionLeaves(sessionId: string): Promise<RuntimeStateN
 }
 
 export async function patchRuntimeConfig(
-  _sessionId: string,
+  sessionId: string,
   values: { node_id: string; provider_name?: string; model?: Record<string, unknown>; permission_mode?: "read_only" | "workspace_write" | "full_access"; full_access_acknowledged?: boolean; running_mode?: "agent" | "plan" },
 ): Promise<RuntimeStateNode> {
   const { node_id, ...body } = values;
@@ -87,6 +87,7 @@ export async function patchRuntimeConfig(
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    operation: { sessionId },
   });
   return normalizeRuntimeNode(node);
 }
@@ -99,10 +100,11 @@ export async function setTimezone(_sessionId: string, timezone: string): Promise
   return { timezone };
 }
 
-export async function submitDecision(decisionId: string, choice: string, options: { supplement?: string; answers?: Record<string, string[]> } = {}): Promise<void> {
+export async function submitDecision(decisionId: string, choice: string, options: { supplement?: string; answers?: Record<string, string[]> } = {}, sessionId?: string): Promise<void> {
   await requestJson("/api/decisions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ decision_id: decisionId, choice, ...options }),
+    body: JSON.stringify({ decision_id: decisionId, choice, ...options, session_id: sessionId }),
+    operation: { sessionId },
   });
 }

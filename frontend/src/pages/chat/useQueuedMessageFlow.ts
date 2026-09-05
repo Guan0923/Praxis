@@ -112,8 +112,8 @@ export function useQueuedMessageFlow({
     if (!conversation?.id || !conversation.threadId) return;
     try {
       const stored = editingQueuedMessageId
-        ? await updateQueuedMessage(conversation.threadId, editingQueuedMessageId, prompt, itemReferences ?? [])
-        : await createQueuedMessage(conversation.threadId, crypto.randomUUID(), prompt, itemReferences ?? []);
+        ? await updateQueuedMessage(conversation.threadId, editingQueuedMessageId, prompt, itemReferences ?? [], conversation.sessionId)
+        : await createQueuedMessage(conversation.threadId, crypto.randomUUID(), prompt, itemReferences ?? [], conversation.sessionId);
       updateQueue((items) => editingQueuedMessageId
         ? items.map((item) => item.id === stored.id ? stored : item)
         : [...items, stored]);
@@ -148,7 +148,7 @@ export function useQueuedMessageFlow({
   async function deleteMessage(item: QueuedMessage) {
     if (isSubagent || item.state !== "pending" || !conversation?.threadId) return;
     try {
-      await deleteQueuedMessage(conversation.threadId, item.id);
+      await deleteQueuedMessage(conversation.threadId, item.id, conversation.sessionId);
       updateQueue((items) => items.filter((candidate) => candidate.id !== item.id));
     } catch (error) {
       onSetLast({ error: String((error as Error).message ?? error) });
@@ -158,7 +158,12 @@ export function useQueuedMessageFlow({
   async function submitSteering(items: QueuedMessage[]) {
     if (sandboxBlocked || !conversation?.id || activeRuntimeNode?.status !== "running" || items.length === 0) return;
     try {
-      await steerTurn(activeRuntimeNode.id, crypto.randomUUID(), items.map((item) => item.id));
+      await steerTurn(
+        activeRuntimeNode.id,
+        crypto.randomUUID(),
+        items.map((item) => item.id),
+        conversation.sessionId,
+      );
       await onQueuedMessagesRefresh(conversation.id);
     } catch (error) {
       onSetLast({ error: String((error as Error).message ?? error) });

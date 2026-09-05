@@ -110,7 +110,7 @@ export function createRunController(callbacks: RunControllerCallbacks) {
       scheduleFrameFlush();
       if (active.stopRequested && !active.cancelIssued) {
         active.cancelIssued = true;
-        void pauseTurn(turn.id).catch(() => undefined);
+        void pauseTurn(turn.id, request.sessionId).catch(() => undefined);
       }
     };
 
@@ -201,7 +201,9 @@ export function createRunController(callbacks: RunControllerCallbacks) {
       if (protocolError) {
         controller.abort();
         const recoveryTurnId = active.turnId ?? request.turnId ?? request.sourceNodeId;
-        if (recoveryTurnId && !request.attach) await pauseTurn(recoveryTurnId).catch(() => undefined);
+        if (recoveryTurnId && !request.attach) {
+          await pauseTurn(recoveryTurnId, request.sessionId).catch(() => undefined);
+        }
         await callbacks.recoverConversation(request.conversationId, request.sessionId, recoveryTurnId).catch(() => undefined);
       }
       if (request.attach) {
@@ -235,7 +237,7 @@ export function createRunController(callbacks: RunControllerCallbacks) {
     active.stopRequested = true;
     if (active.turnId) {
       active.cancelIssued = true;
-      void pauseTurn(active.turnId).catch(() => undefined);
+      void pauseTurn(active.turnId, active.sessionId).catch(() => undefined);
     }
   }
 
