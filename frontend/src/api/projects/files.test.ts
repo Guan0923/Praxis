@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fileReferenceAvailable, sessionFileContentUrl } from "./files";
+import { fileReferenceAvailable, renameFileEntry, saveEditorFile, sessionFileContentUrl } from "./files";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -38,5 +38,28 @@ describe("fileReferenceAvailable", () => {
       { source: "workspace", path: "workspace:missing.txt", display_path: "workspace:missing.txt" },
       "session_1",
     )).resolves.toBe(false);
+  });
+});
+
+describe("managed file mutations", () => {
+  it("keeps PUT and PATCH methods after adding a JSON body", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ kind: "text" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ path: "workspace:b.txt" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await saveEditorFile("session", {
+      source: "workspace",
+      path: "workspace:a.txt",
+      content: "text",
+      encoding: "utf-8",
+      bom: false,
+      newline: "\n",
+      version: "1:0",
+    });
+    await renameFileEntry("session", { source: "workspace", path: "workspace:a.txt", name: "b.txt" });
+
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "PUT" });
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PATCH" });
   });
 });

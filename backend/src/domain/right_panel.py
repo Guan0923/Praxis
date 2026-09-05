@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-RightPanelWindowKind = Literal["side_chat", "terminal"]
+RightPanelWindowKind = Literal["side_chat", "terminal", "files"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,8 +59,8 @@ class RightPanelWindow:
     def __post_init__(self) -> None:
         if not self.id or not self.session_id or not self.title:
             raise ValueError("RightPanelWindow identifiers and title are required.")
-        if self.kind not in {"side_chat", "terminal"}:
-            raise ValueError("RightPanelWindow kind must be side_chat or terminal.")
+        if self.kind not in {"side_chat", "terminal", "files"}:
+            raise ValueError("RightPanelWindow kind must be side_chat, terminal, or files.")
         if isinstance(self.position, bool) or self.position < 0:
             raise ValueError("RightPanelWindow position must be non-negative.")
         if self.kind == "side_chat" and (not self.thread_id or not self.anchor_turn_id or self.terminal_id):
@@ -69,6 +69,10 @@ class RightPanelWindow:
             not self.terminal_id or not self.terminal_type or not self.cwd or self.thread_id or self.anchor_turn_id
         ):
             raise ValueError("A terminal window requires terminal metadata only.")
+        if self.kind == "files" and any(
+            (self.thread_id, self.anchor_turn_id, self.terminal_id, self.terminal_type, self.cwd)
+        ):
+            raise ValueError("A files window cannot carry chat or terminal metadata.")
 
     @property
     def active(self) -> bool:

@@ -198,6 +198,30 @@ def create_terminal(
     return {"window": window.to_dict(), "terminal": terminal.payload()}
 
 
+@router.post("/{session_id}/files", status_code=201)
+def create_files_window(session_id: str, request: Request) -> dict[str, object]:
+    store = session_store(request.app.state.web)
+    require_active_session(store, session_id)
+    existing = next((item for item in store.list_right_panel_windows(session_id) if item.kind == "files"), None)
+    if existing is not None:
+        store.save_right_panel_state(session_id, collapsed=False, active_window_id=existing.id)
+        return {"window": existing.to_dict()}
+    all_windows = store.list_right_panel_windows(session_id, include_deleted=True)
+    now = utc_now()
+    window = RightPanelWindow(
+        id=f"window_{uuid4().hex}",
+        session_id=session_id,
+        kind="files",
+        title="文件",
+        position=len(all_windows),
+        created_at=now,
+        updated_at=now,
+    )
+    store.create_right_panel_window(window)
+    store.save_right_panel_state(session_id, collapsed=False, active_window_id=window.id)
+    return {"window": window.to_dict()}
+
+
 @router.patch("/{session_id}/windows/{window_id}")
 def rename_window(
     session_id: str,
@@ -223,7 +247,7 @@ def close_window(session_id: str, window_id: str, request: Request) -> None:
     store.update_right_panel_window(session_id, window_id, deleted_at=utc_now())
     if window.kind == "terminal" and window.terminal_id is not None:
         state.terminal_manager.close(window.terminal_id)
-    elif window.thread_id is not None:
+    elif window.kind == "side_chat" and window.thread_id is not None:
         runtime_thread = store.get_runtime_thread(session_id, window.thread_id)
         running_turn_id = runtime_thread.running_turn_id if runtime_thread is not None else None
         if running_turn_id:

@@ -29,6 +29,7 @@ dependencies = [
     "pywin32>=308; sys_platform == 'win32'",
     "pywinpty>=2.0.14,<3; sys_platform == 'win32'",
     "tzdata>=2025.2; sys_platform == 'win32'",
+    "send2trash>=1.8,<2",
 ]
 
 [project.optional-dependencies]

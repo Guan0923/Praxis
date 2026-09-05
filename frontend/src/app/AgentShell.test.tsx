@@ -14,6 +14,7 @@ const rightPanelApi = vi.hoisted(() => ({
   updateRightPanel: vi.fn(),
   createSideChat: vi.fn(),
   createPanelTerminal: vi.fn(),
+  createFilesWindow: vi.fn(),
   renameRightPanelWindow: vi.fn(),
   closeRightPanelWindow: vi.fn(),
 }));

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
 
 import pytest
@@ -11,8 +12,10 @@ from fastapi.testclient import TestClient
 from backend.api.app import create_app
 from backend.api.session_files.store import (
     MAX_BATCH_BYTES,
+    MAX_EDITABLE_FILE_BYTES,
     MAX_FILE_BYTES,
     MAX_FILES_PER_BATCH,
+    SessionFileConflict,
     SessionFileError,
     SessionFileStore,
 )
@@ -278,3 +281,132 @@ def test_store_sanitize_and_unique_target(tmp_path: Path) -> None:
     (uploads / "x.txt").write_text("1", encoding="utf-8")
     target, name = SessionFileStore.unique_target(uploads, "x.txt")
     assert name == "x (2).txt"
+
+
+def test_file_tree_lists_complete_roots_without_following_links(tmp_path: Path) -> None:
+    paths = ClientPaths(tmp_path / "data")
+    paths.ensure_session("session_x")
+    workspace = paths.session_workspace("session_x")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".hidden").mkdir()
+    (project / "node_modules").mkdir()
+    (project / ".hidden" / "note.txt").write_text("hidden", encoding="utf-8")
+    link = project / "linked"
+    try:
+        link.symlink_to(project / ".hidden", target_is_directory=True)
+    except OSError:
+        link = None
+
+    store = SessionFileStore(paths, "session_x", project_root=project)
+    roots = store.roots()
+    assert roots == [
+        {"source": "workspace", "path": "workspace:", "name": "workspace", "available": True},
+        {"source": "project", "path": "project:", "name": "project", "available": True},
+    ]
+    names = {item["name"]: item["kind"] for item in store.list_directory("project", "project:")}
+    assert names[".hidden"] == "directory"
+    assert names["node_modules"] == "directory"
+    if link is not None:
+        assert names["linked"] == "link"
+        with pytest.raises(SessionFileError):
+            store.list_directory("project", "project:linked")
+    assert workspace.is_dir()
+
+
+@pytest.mark.parametrize(
+    ("encoding", "bom", "raw"),
+    [
+        ("utf-8", True, b"\xef\xbb\xbfhello\r\nworld"),
+        ("utf-16-le", True, b"\xff\xfe" + "你好\r\n世界".encode("utf-16-le")),
+        ("gb18030", False, "中文\r\n内容".encode("gb18030")),
+    ],
+)
+def test_editor_encoding_round_trip(tmp_path: Path, encoding: str, bom: bool, raw: bytes) -> None:
+    paths = ClientPaths(tmp_path / "data")
+    paths.ensure_session("session_x")
+    target = paths.session_workspace("session_x") / "note.txt"
+    target.write_bytes(raw)
+    store = SessionFileStore(paths, "session_x")
+
+    loaded = store.read_editor_file("workspace", "workspace:note.txt")
+    assert loaded["kind"] == "text"
+    assert loaded["encoding"] == encoding
+    assert loaded["bom"] is bom
+    saved = store.write_editor_file(
+        "workspace",
+        "workspace:note.txt",
+        content=str(loaded["content"]) + "!",
+        encoding=str(loaded["encoding"]),
+        bom=bool(loaded["bom"]),
+        newline=str(loaded["newline"]),
+        expected_version=str(loaded["version"]),
+    )
+    assert saved["kind"] == "text"
+    assert str(saved["content"]).endswith("!")
+    if bom:
+        assert target.read_bytes().startswith(raw[:2] if encoding.startswith("utf-16") else raw[:3])
+
+
+def test_editor_size_limit_and_version_conflict(tmp_path: Path) -> None:
+    paths = ClientPaths(tmp_path / "data")
+    paths.ensure_session("session_x")
+    target = paths.session_workspace("session_x") / "large.txt"
+    target.write_bytes(b"x" * (MAX_EDITABLE_FILE_BYTES + 1))
+    store = SessionFileStore(paths, "session_x")
+    assert store.read_editor_file("workspace", "workspace:large.txt")["kind"] == "too_large"
+
+    target.write_text("first", encoding="utf-8")
+    loaded = store.read_editor_file("workspace", "workspace:large.txt")
+    target.write_text("external", encoding="utf-8")
+    with pytest.raises(SessionFileConflict):
+        store.write_editor_file(
+            "workspace",
+            "workspace:large.txt",
+            content="browser",
+            encoding="utf-8",
+            bom=False,
+            newline="\n",
+            expected_version=str(loaded["version"]),
+        )
+    assert target.read_text(encoding="utf-8") == "external"
+
+
+def test_create_rename_and_cross_root_move_with_numbering(tmp_path: Path) -> None:
+    paths = ClientPaths(tmp_path / "data")
+    paths.ensure_session("session_x")
+    project = tmp_path / "project"
+    project.mkdir()
+    store = SessionFileStore(paths, "session_x", project_root=project)
+    created = store.create_entry("workspace", "workspace:", "note.txt", "file")
+    store.create_entry("project", "project:", "note.txt", "file")
+    store.create_entry("project", "project:", "note(1).txt", "file")
+
+    moved = store.move_entry("workspace", str(created["path"]), "project", "project:")
+    assert moved["path"] == "project:note(2).txt"
+    assert (project / "note(2).txt").is_file()
+    renamed = store.rename_entry("project", str(moved["path"]), "final.txt")
+    assert renamed["path"] == "project:final.txt"
+    with pytest.raises(SessionFileError):
+        store.create_entry("workspace", "workspace:../", "bad.txt", "file")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows recycle bin test")
+def test_recycle_entry_uses_real_windows_recycle_bin(tmp_path: Path) -> None:
+    paths = ClientPaths(tmp_path / "data")
+    paths.ensure_session("session_x")
+    target = paths.session_workspace("session_x") / "recycle-me.txt"
+    target.write_text("temporary test file", encoding="utf-8")
+    SessionFileStore(paths, "session_x").recycle_entry("workspace", "workspace:recycle-me.txt")
+    assert not target.exists()
+
+
+def test_recycle_failure_keeps_entry_and_returns_a_safe_error(tmp_path: Path, monkeypatch) -> None:
+    paths = ClientPaths(tmp_path / "data")
+    paths.ensure_session("session_x")
+    target = paths.session_workspace("session_x") / "keep.txt"
+    target.write_text("keep", encoding="utf-8")
+    monkeypatch.setattr("backend.api.session_files.store.send2trash", lambda _path: (_ for _ in ()).throw(OSError()))
+    with pytest.raises(SessionFileError, match="删除失败"):
+        SessionFileStore(paths, "session_x").recycle_entry("workspace", "workspace:keep.txt")
+    assert target.read_text(encoding="utf-8") == "keep"
