@@ -10,8 +10,10 @@
   flex: 0 0 auto;
   align-items: center;
   justify-content: flex-start;
-  width: 100%;
+  width: calc(100% - 30px);
+  max-width: 995px;
   min-width: 0;
+  margin: 0 auto;
   gap: 2px;
   padding: 4px 12px;
   border-bottom: 1px solid rgba(15, 23, 42, 0.08);
@@ -32,6 +34,8 @@
 }
 
 .chat-page--compact .trace-toolbar {
+  width: calc(100% - 14px);
+  max-width: 1011px;
   padding-inline: 8px;
 }
 
