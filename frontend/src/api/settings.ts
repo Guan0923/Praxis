@@ -36,6 +36,7 @@ export type TerminalType = "cmd" | "git_bash" | "powershell" | "pwsh" | "wsl";
 
 export interface RuntimeConfig {
   max_tool_calls: number;
+  max_tool_parellel: number;
   terminal_type: TerminalType;
 }
 

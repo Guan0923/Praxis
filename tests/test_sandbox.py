@@ -56,6 +56,10 @@ def test_permission_modes_use_only_the_three_level_contract(tmp_path: Path) -> N
 def test_limits_validate_hard_bounds() -> None:
     with pytest.raises(Exception):
         ResourceLimits(memory_mib=127).validate()
+    assert ResourceLimits().wall_seconds == 600
+    assert ResourceLimits.from_mapping({"wall_seconds": 600}).wall_seconds == 600
+    with pytest.raises(Exception, match="wall_seconds must be between 1 and 600"):
+        ResourceLimits(wall_seconds=601).validate()
     assert ResourceLimits.from_mapping({"memory_mib": 128}).memory_mib == 128
 
 

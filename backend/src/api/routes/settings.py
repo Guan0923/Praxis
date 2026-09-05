@@ -36,12 +36,13 @@ class AgentConfigPayload(BaseModel):
 
 
 class RuntimeConfigPayload(BaseModel):
-    max_tool_calls: StrictInt = Field(default=32, ge=1, le=1000)
+    max_tool_calls: StrictInt = Field(default=512, ge=1, le=1000)
+    max_tool_parellel: StrictInt = Field(default=16, ge=1)
     terminal_type: Literal["cmd", "git_bash", "powershell", "pwsh", "wsl"] = "cmd"
 
 
 class SandboxLimitsPayload(BaseModel):
-    wall_seconds: StrictInt = Field(default=300, ge=1, le=300)
+    wall_seconds: StrictInt = Field(default=600, ge=1, le=600)
     cpu_seconds: StrictInt = Field(default=300, ge=1, le=300)
     memory_mib: StrictInt = Field(default=4096, ge=128, le=4096)
     processes: StrictInt = Field(default=256, ge=1, le=256)

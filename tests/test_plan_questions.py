@@ -216,7 +216,7 @@ def test_invalid_question_answers_are_returned_to_model_for_recovery(tmp_path: P
     assert service.runtime.state.messages[-1].tool_messages[0].name == REQUEST_PLAN_REVIEW_NAME
 
 
-def test_request_user_input_must_not_be_mixed_with_execution_tools(tmp_path: Path) -> None:
+def test_request_user_input_uses_serial_lane_alongside_execution_tools(tmp_path: Path) -> None:
     planner = ScriptedPlanPlanner(
         [
             AssistantMessage(
@@ -235,15 +235,21 @@ def test_request_user_input_must_not_be_mixed_with_execution_tools(tmp_path: Pat
     service = build_service(tmp_path, planner)
     request_kinds: list[str] = []
 
+    def interrupt(request):
+        request_kinds.append(request.kind)
+        if request.kind == "question":
+            return InterruptDecision("answer", answers={"storage": ["JSONL"]})
+        return InterruptDecision("stay_in_plan_mode")
+
     result = service.run_task(
         "Plan the change",
         mode="plan",
-        interrupt=lambda request: request_kinds.append(request.kind) or InterruptDecision("stay_in_plan_mode"),
+        interrupt=interrupt,
     )
 
     assert result.status == "completed"
-    assert request_kinds == ["plan"]
+    assert request_kinds == ["question", "plan"]
     assert service.runtime is not None
-    rejected = service.runtime.state.messages[1]
-    assert [tool.status for tool in rejected.tool_messages] == ["failed", "failed"]
-    assert all("only tool call" in (tool.content or "") for tool in rejected.tool_messages)
+    mixed = service.runtime.state.messages[1]
+    assert [tool.status for tool in mixed.tool_messages] == ["succeeded", "failed"]
+    assert "Read-only Plan mode blocked" in (mixed.tool_messages[1].content or "")

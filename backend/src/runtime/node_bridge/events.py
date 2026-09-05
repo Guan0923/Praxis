@@ -77,6 +77,27 @@ class _EventProjectionMixin:
                 self._record_completed_item(message_idx, item_idx)
                 return
 
+    def _set_tool_call_stage(self, call_id: str, stage: str) -> None:
+        if self.assistant is None:
+            return
+        data_idx = self.assistant.current_data_idx
+        messages = self.assistant.data[data_idx]
+        for message_idx in range(len(messages) - 1, -1, -1):
+            message = messages[message_idx]
+            if message.get("role") != "assistant":
+                continue
+            items = message.get("content", [])
+            for item_idx in range(len(items) - 1, -1, -1):
+                item = items[item_idx]
+                if item.get("type") != "tool_call" or item.get("call_id") != call_id:
+                    continue
+                item["execution_stage"] = stage
+                if message_idx == self.assistant_message_idx and item_idx < len(self.assistant_blocks):
+                    self.assistant_blocks[item_idx]["execution_stage"] = stage
+                self.assistant = self.writer.persist(self.assistant)
+                self.last_node = self.assistant
+                return
+
     def _settle_running_items(self, status: str) -> None:
         if self.assistant is None:
             return
@@ -169,6 +190,9 @@ class _EventProjectionMixin:
         }
         if tool:
             result["tool"] = tool
+        for key in ("parallel_group_id", "parallel_index", "parallel_size", "execution_stage"):
+            if data.get(key) is not None:
+                result[key] = self._json_value(data[key])
         if isinstance(data.get("failure_code"), str):
             result["failure_code"] = str(data["failure_code"])
         if isinstance(data.get("retryable"), bool):
@@ -232,11 +256,30 @@ class _EventProjectionMixin:
                             "arguments": dict(tool.get("arguments") or {}),
                             "replay_safe": bool(tool.get("replay_safe", True)),
                             "status": "running",
+                            "execution_stage": str(tool.get("execution_stage") or "checking"),
+                            **(
+                                {"parallel_group_id": str(tool["parallel_group_id"])}
+                                if tool.get("parallel_group_id")
+                                else {}
+                            ),
+                            **(
+                                {"parallel_index": int(tool["parallel_index"])}
+                                if isinstance(tool.get("parallel_index"), int)
+                                else {}
+                            ),
+                            **(
+                                {"parallel_size": int(tool["parallel_size"])}
+                                if isinstance(tool.get("parallel_size"), int)
+                                else {}
+                            ),
                         }
                     )
             self._append_items(items)
+        elif kind == "tool_queued":
+            self._set_tool_call_stage(str(data.get("call_id") or "call_unknown"), "queued")
         elif kind == "tool_call":
             call_id = str(data.get("call_id") or "call_unknown")
+            self._set_tool_call_stage(call_id, "running")
             if not any(
                 item.get("type") == "tool_call" and item.get("call_id") == call_id for item in self.assistant_blocks
             ):
@@ -248,6 +291,22 @@ class _EventProjectionMixin:
                         "name": name,
                         "arguments": dict(data.get("arguments") or {}),
                         "status": "running",
+                        "execution_stage": str(data.get("execution_stage") or "running"),
+                        **(
+                            {"parallel_group_id": str(data["parallel_group_id"])}
+                            if data.get("parallel_group_id")
+                            else {}
+                        ),
+                        **(
+                            {"parallel_index": int(data["parallel_index"])}
+                            if isinstance(data.get("parallel_index"), int)
+                            else {}
+                        ),
+                        **(
+                            {"parallel_size": int(data["parallel_size"])}
+                            if isinstance(data.get("parallel_size"), int)
+                            else {}
+                        ),
                         "replay_safe": bool(
                             data.get(
                                 "replay_safe",
@@ -265,6 +324,8 @@ class _EventProjectionMixin:
             self.abort_category = self._error_category(data)
             self.abort_code = str(data.get("error_type") or "model_error")
         elif kind in {"approval_requested", "approval_granted"}:
+            if kind == "approval_requested" and data.get("tool"):
+                self._set_tool_call_stage(str(data.get("call_id") or "call_unknown"), "waiting_approval")
             # Tool approval lifecycle events remain in the Runtime log.  The
             # durable Turn stores only the interactive decision Item emitted
             # by ``handle_input`` so one approval cannot become three

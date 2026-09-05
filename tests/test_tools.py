@@ -98,7 +98,7 @@ def test_command_tool_uses_powershell_on_windows_and_workspace_cwd(tmp_path: Pat
     assert options["env"] == {"PATH": "C:\\Windows\\System32"}
     assert options["creationflags"] == getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
     assert "start_new_session" not in options
-    assert process.communicate_calls == [30]
+    assert process.communicate_calls == [60]
 
 
 @pytest.mark.parametrize(
@@ -489,8 +489,19 @@ def test_command_tool_requires_confirmation_and_validates_timeout(tmp_path: Path
     tools = ToolRegistry(tmp_path)
 
     tools.invoke("run_command", {"command": "mkdir demo"}, confirmed=True)
-    with pytest.raises(ToolError, match="between 1 and 120"):
+    WorkspaceCommand(
+        tmp_path,
+        is_windows=False,
+        popen_factory=lambda _args, **_kwargs: FakeProcess(),
+    ).run("true", timeout_seconds=600)
+    with pytest.raises(ToolError, match="between 1 and 600"):
         WorkspaceCommand(tmp_path, is_windows=False).run("mkdir demo", timeout_seconds=0)
+    with pytest.raises(ToolError, match="between 1 and 600"):
+        WorkspaceCommand(tmp_path, is_windows=False).run("mkdir demo", timeout_seconds=601)
+
+
+def test_default_job_admission_wait_is_ninety_seconds() -> None:
+    assert AdmissionPolicy().queue_timeout_seconds == 90.0
 
 
 def test_registry_wraps_unexpected_handler_exceptions_as_tool_error() -> None:

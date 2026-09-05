@@ -12,6 +12,7 @@ from backend.domain import (
 from backend.planning import LLMPlanner
 from backend.runtime import LegacyAgentRunner as AgentRunner
 from backend.runtime import PreparedResponse, RunnerSettings, RuntimeState
+from backend.runtime.execution.workflows.budgets import _tool_batch_fits
 from backend.tools import Tool, ToolRegistry
 
 
@@ -80,6 +81,19 @@ def test_default_budget_allows_one_plus_four_plus_six_plan_reads_then_answer() -
     assert planner.finalizations == 0
 
 
+def test_default_tool_budget_accepts_exactly_512_calls() -> None:
+    runtime = AgentRunner(BatchedPlanner([]), registry()).new_runtime(task="Inspect")
+    exact = AssistantMessage(
+        tool_messages=[ToolMessage(name="inspect", call_id=f"call_{index}") for index in range(512)]
+    )
+    over = AssistantMessage(
+        tool_messages=[ToolMessage(name="inspect", call_id=f"over_{index}") for index in range(513)]
+    )
+
+    assert _tool_batch_fits(runtime, exact) is True
+    assert _tool_batch_fits(runtime, over) is False
+
+
 def test_over_budget_tool_batch_is_rejected_atomically_and_finalized() -> None:
     calls: list[str] = []
     events = []
@@ -141,11 +155,12 @@ def test_budget_finalization_has_a_deterministic_fallback(planner) -> None:
 def test_settings_serialize_new_budgets_and_load_legacy_max_actions() -> None:
     state = RuntimeState(
         session_id="session_budget",
-        runner_settings=RunnerSettings(max_tool_calls=7),
+        runner_settings=RunnerSettings(max_tool_calls=7, max_tool_parellel=64),
     )
     payload = state.to_dict()
 
     assert payload["runner_settings"]["max_tool_calls"] == 7
+    assert payload["runner_settings"]["max_tool_parellel"] == 64
     assert "max_actions" not in payload["runner_settings"]
 
     payload["runner_settings"] = {
@@ -158,6 +173,7 @@ def test_settings_serialize_new_budgets_and_load_legacy_max_actions() -> None:
     }
     restored = RuntimeState.from_dict(payload)
     assert restored.runner_settings.max_tool_calls == 5
+    assert restored.runner_settings.max_tool_parellel == 16
     assert restored.runner_settings.max_transport_retries == 5
     assert not any(
         hasattr(restored.runner_settings, name)

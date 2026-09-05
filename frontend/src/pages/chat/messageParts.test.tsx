@@ -162,6 +162,40 @@ describe("subagent Assistant report", () => {
   });
 });
 
+describe("parallel tool groups", () => {
+  it("groups calls by call ID and keeps approval status outside the nested Collapse", async () => {
+    const group = "parallel:call-1";
+    const items: TurnItem[] = [
+      { type: "tool_call", call_id: "call-1", name: "read_file", arguments: { path: "one" }, status: "success", parallel_group_id: group, parallel_index: 0, parallel_size: 2, execution_stage: "succeeded" },
+      { type: "tool_call", call_id: "call-2", name: "read_file", arguments: { path: "two" }, status: "success", parallel_group_id: group, parallel_index: 1, parallel_size: 2, execution_stage: "succeeded" },
+      { type: "approval", event: "approval_resolved", approval_status: "allowed", call_id: "call-2", tool: "read_file", status: "success" },
+      { type: "tool_result", call_id: "call-2", tool: "read_file", content: "two", status: "success", parallel_group_id: group, parallel_index: 1, parallel_size: 2, execution_stage: "succeeded" },
+      { type: "tool_result", call_id: "call-1", tool: "read_file", content: "one", status: "success", parallel_group_id: group, parallel_index: 0, parallel_size: 2, execution_stage: "succeeded" },
+    ];
+    const view = render(renderAssistant(assistant(items)));
+    const outer = view.container.querySelector(".runtime-parallel-collapse")!;
+
+    expect(view.container.querySelectorAll(".runtime-parallel-collapse")).toHaveLength(1);
+    expect(outer.querySelector(":scope > .ant-collapse-item")).not.toHaveClass("ant-collapse-item-active");
+    expect(screen.getByText("已允许 read_file").closest(".runtime-parallel-collapse")).toBeNull();
+
+    fireEvent.click(outer.querySelector(":scope > .ant-collapse-item > .ant-collapse-header")!);
+    await waitFor(() => expect(outer.querySelector(":scope > .ant-collapse-item")).toHaveClass("ant-collapse-item-active"));
+    expect(screen.getAllByText("read_file")).toHaveLength(2);
+    expect(screen.getByText("call-1")).toBeInTheDocument();
+    expect(screen.getByText("call-2")).toBeInTheDocument();
+    const firstChild = outer.querySelector(".runtime-parallel-inner-collapse > .ant-collapse-item")!;
+    fireEvent.click(firstChild.querySelector(":scope > .ant-collapse-header")!);
+    await waitFor(() => expect(firstChild).toHaveClass("ant-collapse-item-active"));
+
+    const updated = assistant(items.map((item) => ({ ...item })));
+    updated.itemVersion = 1;
+    view.rerender(renderAssistant(updated));
+    expect(outer.querySelector(":scope > .ant-collapse-item")).toHaveClass("ant-collapse-item-active");
+    expect(firstChild).toHaveClass("ant-collapse-item-active");
+  });
+});
+
 describe("assistant Item presentation", () => {
   it("keeps Turn execution errors inside the assistant message bubble", () => {
     const message = assistant([]);

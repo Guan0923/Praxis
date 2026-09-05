@@ -200,7 +200,7 @@ def initialize_config(paths: ClientPaths, workspace: Path) -> dict[str, object]:
             "timezone": "Asia/Shanghai",
             "location_enabled": False,
         },
-        "runtime": {"log_full_messages": True, "max_tool_calls": 32},
+        "runtime": {"log_full_messages": True, "max_tool_calls": 512, "max_tool_parellel": 16},
         "capabilities": {"skills": True, "plugins": False, "mcp": False},
     }
     _atomic_write(paths.config_file, _to_toml(config))

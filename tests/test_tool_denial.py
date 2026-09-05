@@ -132,18 +132,18 @@ def _provider_payloads(messages):
     )
 
 
-def test_denial_stops_the_tool_batch_and_all_provider_pairs_remain_valid() -> None:
+def test_each_denial_skips_only_its_call_and_all_provider_pairs_remain_valid() -> None:
     _, state, planner, invocations, decisions = _run_denied_tools(["write_file", "run_command"])
 
     assert state.status == "completed"
     assert invocations == []
-    assert decisions == ["write_file"]
+    assert decisions == ["write_file", "run_command"]
     assert [tool.status for tool in planner.feedback] == ["failed", "failed"]
     assert [tool.retryable for tool in planner.feedback] == [False, False]
-    assert [tool.failure_code for tool in planner.feedback] == ["user_denied", "user_denied_batch"]
+    assert [tool.failure_code for tool in planner.feedback] == ["user_denied", "user_denied"]
     assert [tool.content for tool in planner.feedback] == [
         "The user denied this write_file tool call.",
-        "Not executed because tool execution was interrupted.",
+        "The user denied this run_command tool call.",
     ]
 
     history = [UserMessage(content="use tools"), AssistantMessage(tool_messages=planner.feedback)]
@@ -176,7 +176,7 @@ def test_denial_stops_the_tool_batch_and_all_provider_pairs_remain_valid() -> No
     assert [item["tool_use_id"] for item in message_results] == ["call_0", "call_1"]
     expected_errors = [
         "The user denied this write_file tool call.",
-        "Not executed because tool execution was interrupted.",
+        "The user denied this run_command tool call.",
     ]
     assert [item["content"] for item in chat_results] == expected_errors
     assert [item["output"] for item in response_results] == expected_errors

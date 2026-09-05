@@ -90,7 +90,7 @@ export const defaultSandboxConfig: SandboxConfig = {
   network_allowlist: [],
   proxy_port: 17831,
   limits: {
-    wall_seconds: 300,
+    wall_seconds: 600,
     cpu_seconds: 300,
     memory_mib: 4096,
     processes: 256,
@@ -121,7 +121,9 @@ export function normalizeSettings(next: UserSettings): UserSettings {
     provider_config: currentProvider,
     provider_configs: providers,
     runtime_config: {
-      ...(next.runtime_config ?? { max_tool_calls: 32, terminal_type: "cmd" }),
+      ...(next.runtime_config ?? { max_tool_calls: 512, max_tool_parellel: 16, terminal_type: "cmd" }),
+      max_tool_calls: next.runtime_config?.max_tool_calls ?? 512,
+      max_tool_parellel: next.runtime_config?.max_tool_parellel ?? 16,
       terminal_type: next.runtime_config?.terminal_type ?? "cmd",
     },
     sandbox_config: {
@@ -141,7 +143,7 @@ export function fallbackSettings(profile: LocalProfile): UserSettings {
     provider_config: defaultProvider,
     provider_configs: [],
     capability_config: {},
-    runtime_config: { max_tool_calls: 32, terminal_type: "cmd" },
+    runtime_config: { max_tool_calls: 512, max_tool_parellel: 16, terminal_type: "cmd" },
     sandbox_config: defaultSandboxConfig,
     terminal_options: [],
     terminal_notice: null,

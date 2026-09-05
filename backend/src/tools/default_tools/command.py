@@ -21,10 +21,10 @@ def command_tool(commands: WorkspaceCommand) -> Tool:
                 "timeout_seconds": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 120,
-                    "default": 30,
+                    "maximum": 600,
+                    "default": 60,
                     "description": (
-                        "The maximum number of seconds the command may run, from 1 to 120. Defaults to 30."
+                        "The maximum number of seconds the command may run, from 1 to 600. Defaults to 60."
                     ),
                 },
             },

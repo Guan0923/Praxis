@@ -306,6 +306,7 @@ describe("UserSettingsModal", () => {
 
     await waitFor(() => expect(api.updateRuntimeConfig).toHaveBeenCalledWith({
       max_tool_calls: 32,
+      max_tool_parellel: 16,
       terminal_type: "powershell",
     }));
   });

@@ -69,7 +69,7 @@ const limitFields: Array<{
   max: number;
   hint: string;
 }> = [
-  { key: "wall_seconds", label: "最长运行时间（秒）", min: 1, max: 300, hint: "1–300" },
+  { key: "wall_seconds", label: "最长运行时间（秒）", min: 1, max: 600, hint: "1–600" },
   { key: "cpu_seconds", label: "CPU 时间（秒）", min: 1, max: 300, hint: "1–300" },
   { key: "memory_mib", label: "内存（MiB）", min: 128, max: 4096, hint: "128–4096" },
   { key: "processes", label: "进程数", min: 1, max: 256, hint: "1–256" },

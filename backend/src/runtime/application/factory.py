@@ -316,6 +316,7 @@ def _build_runner(
         todo_store=todo_store,
         max_transport_retries=settings.max_transport_retries,
         max_tool_calls=settings.max_tool_calls,
+        max_tool_parellel=settings.max_tool_parellel,
         log_full_messages=settings.log_full_messages,
         checkpoints=checkpoints,
         skill_catalog=skills,
@@ -401,16 +402,20 @@ def _settings_for(
     if config_override is not None:
         runtime = config_override.get("runtime")
         runtime_values = runtime if isinstance(runtime, dict) else {}
-        max_tool_calls = runtime_values.get("max_tool_calls", 32)
+        max_tool_calls = runtime_values.get("max_tool_calls", 512)
+        max_tool_parellel = runtime_values.get("max_tool_parellel", 16)
         return RunnerSettings(
             max_tool_calls=max_tool_calls,  # type: ignore[arg-type]
+            max_tool_parellel=max_tool_parellel,  # type: ignore[arg-type]
             log_full_messages=bool(runtime_values.get("log_full_messages", True)),
         )
     config = load_config(paths.config_file)
     runtime = section(config, "runtime")
-    max_tool_calls = runtime.get("max_tool_calls", 32)
+    max_tool_calls = runtime.get("max_tool_calls", 512)
+    max_tool_parellel = runtime.get("max_tool_parellel", 16)
     return RunnerSettings(
         max_tool_calls=max_tool_calls,  # type: ignore[arg-type]
+        max_tool_parellel=max_tool_parellel,  # type: ignore[arg-type]
         log_full_messages=log_full_messages_from_toml(paths.config_file),
     )
 

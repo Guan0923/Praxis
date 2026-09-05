@@ -122,7 +122,7 @@ class LockedToolExecutor:
                 raise ToolError("Workspace mutation requires a path.")
             with self._locks.file(normalized_workspace_path(self._workspaces, path)):
                 return call()
-        if name in {"create_directory", "run_command"}:
+        if name == "create_directory":
             with self._locks.command():
                 return call()
         return call()

@@ -42,6 +42,7 @@ def completed_review_message(call_id: str = "review_1") -> AssistantMessage:
                 status="succeeded",
                 content="Plan submitted for review.",
                 retryable=False,
+                execution_stage="succeeded",
             )
         ]
     )

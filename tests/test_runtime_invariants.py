@@ -4,8 +4,7 @@ from backend.domain import AssistantMessage, PlanningError, ToolMessage
 from backend.runtime import AgentRunner, AgentRuntime
 from backend.runtime.core.contracts import InterruptDecision
 from backend.runtime.execution.steps import ToolStepResult
-from backend.runtime.execution.workflows import execution as execution_workflow
-from backend.runtime.execution.workflows import proposal as proposal_workflow
+from backend.runtime.execution.tool_batch import ToolBatchExecutor, ToolBatchResult
 from backend.runtime.planning.review import REQUEST_PLAN_REVIEW_NAME
 from backend.tools import Tool, ToolRegistry
 
@@ -194,18 +193,14 @@ def test_workflows_only_preserve_unwrapped_run_command_failures(
 ) -> None:
     error = "Command exited with code 7.\nstdout:\n0\n\nstderr:\nbad"
 
-    def fail_without_invoking_hooks(runtime: AgentRuntime, index: int, _executor: object) -> ToolStepResult:
-        message = runtime.state.active_message
-        assert message is not None
-        tool = message.tool_messages[index]
+    def fail_batch(_self, runtime: AgentRuntime, message: AssistantMessage) -> ToolBatchResult:
+        tool = message.tool_messages[0]
+        runtime.run.actions.append(tool)
         tool.status = "failed"
         tool.content = error
-        runtime.state.active_tool_index = index
-        runtime.run.actions.append(tool)
-        return ToolStepResult(success=False, error=error)
+        return ToolBatchResult((ToolStepResult(False, error=error),))
 
-    workflow = execution_workflow if mode == "agent" else proposal_workflow
-    monkeypatch.setattr(workflow, "_execute_tool", fail_without_invoking_hooks)
+    monkeypatch.setattr(ToolBatchExecutor, "execute", fail_batch)
 
     planner = RecoveringFailurePlanner(tool_name)
     runner = AgentRunner(planner, ToolRegistry([Tool(tool_name, "Unused", lambda: "unused")]))

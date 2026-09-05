@@ -114,6 +114,27 @@ function clickTurnHeader(turnId: string): void {
 }
 
 describe("TracePage", () => {
+  it("renders completed parallel tools as one outer group with call-ID children", async () => {
+    const latest = turn("turn-parallel", "2026-09-05T00:00:00Z");
+    const group = "parallel:call-1";
+    vi.mocked(getTurnTrace).mockResolvedValue(response(latest, 1, {
+      items: [
+        traceItem(1, 1, 0, "assistant", { type: "tool_call", call_id: "call-2", name: "read_file", status: "success", parallel_group_id: group, parallel_index: 1, parallel_size: 2 }),
+        traceItem(2, 1, 1, "assistant", { type: "tool_result", call_id: "call-2", tool: "read_file", content: "two", status: "success", parallel_group_id: group, parallel_index: 1, parallel_size: 2 }),
+        traceItem(3, 1, 2, "assistant", { type: "tool_call", call_id: "call-1", name: "read_file", status: "success", parallel_group_id: group, parallel_index: 0, parallel_size: 2 }),
+        traceItem(4, 1, 3, "assistant", { type: "tool_result", call_id: "call-1", tool: "read_file", content: "one", status: "success", parallel_group_id: group, parallel_index: 0, parallel_size: 2 }),
+      ],
+    }));
+
+    const { container } = render(<AntApp><TracePage turns={[latest]} /></AntApp>);
+    const groupTitle = await screen.findByTitle("并行调用工具");
+    fireEvent.click(groupTitle.closest(".ant-collapse-header")!);
+    await waitFor(() => expect(container.querySelectorAll(".trace-parallel-inner-collapse")).toHaveLength(1));
+    expect(container.querySelectorAll(".trace-parallel-inner-collapse")).toHaveLength(1);
+    expect(screen.getByTitle("read_file · call-1")).toBeInTheDocument();
+    expect(screen.getByTitle("read_file · call-2")).toBeInTheDocument();
+  });
+
   it("renders every Turn oldest first and loads only the latest Turn initially", async () => {
     const older = turn("turn-old", "2026-08-27T00:00:00Z");
     const sameTimestampA = turn("turn-a", "2026-08-28T00:00:00Z");

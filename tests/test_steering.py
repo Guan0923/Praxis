@@ -111,6 +111,7 @@ def test_cancellation_during_tool_marks_current_and_remaining_tools_failed() -> 
                 Tool("second", "Second", lambda: calls.append("second") or "second result"),
             ]
         ),
+        max_tool_parellel=1,
     )
     runtime = runner.new_runtime(task="start")
     runtime.services.cancel_requested = lambda: cancel_requested
@@ -124,7 +125,8 @@ def test_cancellation_during_tool_marks_current_and_remaining_tools_failed() -> 
     )
     assert [tool.status for tool in tool_turn.tool_messages] == ["failed", "failed"]
     assert tool_turn.tool_messages[0].content == "Tool invocation cancelled."
-    assert tool_turn.tool_messages[1].content == "Not executed because the run was cancelled."
+    assert tool_turn.tool_messages[1].content == "Tool was not started because this tool batch was interrupted."
+    assert tool_turn.tool_messages[1].failure_code == "tool_batch_interrupted"
 
 
 def test_conversation_persists_cooperatively_cancelled_run(tmp_path: Path) -> None:
@@ -189,6 +191,7 @@ def test_steering_during_tool_keeps_result_and_stops_remaining_actions() -> None
                 Tool("second", "Second", lambda: calls.append("second") or "second result"),
             ]
         ),
+        max_tool_parellel=1,
     )
     runtime = runner.new_runtime(task="start")
     runtime.services.steering = drain

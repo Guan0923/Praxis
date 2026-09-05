@@ -85,7 +85,7 @@ def canonical_network_host(value: str) -> str:
 class ResourceLimits:
     """Per-job limits. Values are intentionally bounded before admission."""
 
-    wall_seconds: int = 300
+    wall_seconds: int = 600
     cpu_seconds: int = 300
     memory_mib: int = 4096
     processes: int = 256
@@ -95,7 +95,7 @@ class ResourceLimits:
 
     def validate(self) -> None:
         ranges = {
-            "wall_seconds": (1, 300),
+            "wall_seconds": (1, 600),
             "cpu_seconds": (1, 300),
             "memory_mib": (128, 4096),
             "processes": (1, 256),

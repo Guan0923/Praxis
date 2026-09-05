@@ -105,9 +105,39 @@ function itemKind(entry: TurnTraceItem): SemanticKind {
 }
 
 function traceItemPanels(items: TurnTraceItem[]): NonNullable<CollapseProps["items"]> {
-  return items.map((entry) => {
+  const seenGroups = new Set<string>();
+  const result: NonNullable<CollapseProps["items"]> = [];
+  items.forEach((entry) => {
+    const groupId = typeof entry.item.parallel_group_id === "string" ? entry.item.parallel_group_id : "";
+    if (groupId && ["tool_call", "tool_result"].includes(entry.item.type)) {
+      if (seenGroups.has(groupId)) return;
+      seenGroups.add(groupId);
+      const groupEntries = items.filter((candidate) => candidate.item.parallel_group_id === groupId);
+      const calls = groupEntries
+        .filter((candidate) => candidate.item.type === "tool_call")
+        .sort((left, right) => Number(left.item.parallel_index ?? 0) - Number(right.item.parallel_index ?? 0));
+      const children = calls.map((call) => {
+        const callId = String(call.item.call_id ?? "call_unknown");
+        const related = groupEntries.filter((candidate) => candidate.item.call_id === callId);
+        const terminal = related.find((candidate) => candidate.item.type === "tool_result") ?? call;
+        const tool = String(call.item.name ?? terminal.item.tool ?? "工具");
+        return panel(`trace:${groupId}:${callId}`, "tool", `${tool} · ${callId}`, {
+          status: terminal.item.status,
+          timestamp: terminal.completed_at,
+          body: <pre className="trace-value">{json(related.map((candidate) => candidate.item))}</pre>,
+        });
+      });
+      const failed = groupEntries.some((candidate) => candidate.item.status === "failed");
+      const completedAt = groupEntries[groupEntries.length - 1]?.completed_at;
+      result.push(panel(`trace-group:${groupId}`, "tool", "并行调用工具", {
+        status: failed ? "failed" : "success",
+        timestamp: completedAt,
+        body: <Collapse className="trace-parallel-inner-collapse" items={children} />,
+      }));
+      return;
+    }
     const value = itemValue(entry.item);
-    return panel(
+    result.push(panel(
       `item:${entry.message_idx}:${entry.item_idx}`,
       itemKind(entry),
       value,
@@ -120,8 +150,9 @@ function traceItemPanels(items: TurnTraceItem[]): NonNullable<CollapseProps["ite
           </pre>
         ),
       },
-    );
+    ));
   });
+  return result;
 }
 
 function mergeTrace(current: TurnTraceResponse | null, incoming: TurnTraceResponse): TurnTraceResponse {

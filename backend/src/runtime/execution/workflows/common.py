@@ -151,17 +151,27 @@ def _publish_assistant_message(
 def _publish_tool_call(runtime: AgentRuntime, tool: ToolMessage) -> None:
     _publish(
         runtime,
-        RuntimeEvent("tool_call", tool.name, {"call_id": tool.call_id, "arguments": dict(tool.arguments)}),
+        RuntimeEvent("tool_call", tool.name, {**_tool_event_metadata(tool), "arguments": dict(tool.arguments)}),
     )
 
 
 def _publish_tool_result(runtime: AgentRuntime, tool: ToolMessage) -> None:
     result = tool.content or ""
-    _publish(runtime, RuntimeEvent("tool_result", result, {"tool": tool.name, "call_id": tool.call_id}))
+    _publish(runtime, RuntimeEvent("tool_result", result, {"tool": tool.name, **_tool_event_metadata(tool)}))
 
 
 def _publish_tool_failure(runtime: AgentRuntime, tool: ToolMessage, error: str) -> None:
-    _publish(runtime, RuntimeEvent("tool_failed", error, {"tool": tool.name, "call_id": tool.call_id}))
+    _publish(runtime, RuntimeEvent("tool_failed", error, {"tool": tool.name, **_tool_event_metadata(tool)}))
+
+
+def _tool_event_metadata(tool: ToolMessage) -> dict[str, object]:
+    return {
+        "call_id": tool.call_id,
+        "parallel_group_id": tool.parallel_group_id,
+        "parallel_index": tool.parallel_index,
+        "parallel_size": tool.parallel_size,
+        "execution_stage": tool.execution_stage,
+    }
 
 
 def _publish_tool_recovery(runtime: AgentRuntime, tool: ToolMessage, error: str) -> None:

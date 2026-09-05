@@ -58,6 +58,10 @@ class ToolMessage(Message):
     status: ToolStatus = "pending"
     retryable: bool | None = None
     failure_code: str | None = None
+    parallel_group_id: str | None = None
+    parallel_index: int | None = None
+    parallel_size: int | None = None
+    execution_stage: str | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -117,6 +121,10 @@ def tool_message_to_dict(message: ToolMessage) -> dict[str, Any]:
         "status": message.status,
         "retryable": message.retryable,
         "failure_code": message.failure_code,
+        "parallel_group_id": message.parallel_group_id,
+        "parallel_index": message.parallel_index,
+        "parallel_size": message.parallel_size,
+        "execution_stage": message.execution_stage,
         "provider_options": message.provider_options,
     }
 
@@ -138,6 +146,10 @@ def tool_message_from_dict(data: dict[str, Any], *, fallback_call_id: str | None
         status=status,
         retryable=data.get("retryable") if isinstance(data.get("retryable"), bool) else None,
         failure_code=data.get("failure_code") if isinstance(data.get("failure_code"), str) else None,
+        parallel_group_id=(data.get("parallel_group_id") if isinstance(data.get("parallel_group_id"), str) else None),
+        parallel_index=data.get("parallel_index") if isinstance(data.get("parallel_index"), int) else None,
+        parallel_size=data.get("parallel_size") if isinstance(data.get("parallel_size"), int) else None,
+        execution_stage=data.get("execution_stage") if isinstance(data.get("execution_stage"), str) else None,
     )
 
 

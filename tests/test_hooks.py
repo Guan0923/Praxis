@@ -527,6 +527,7 @@ def test_approved_command_uses_hook_decision_for_real_process_and_cleans_up(
         assert requests[0].data["network_target"]["mode"] == "no_network"
     assert launcher.policies[0].file_mode is FileAccessMode(permission_mode)
     assert launcher.policies[0].network_mode is NetworkMode.NO_NETWORK
+    assert launcher.policies[0].limits.wall_seconds == 600
     assert launcher._temp_dirs == {}
 
 
