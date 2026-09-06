@@ -555,7 +555,7 @@ export default function ChatPage({
     <div ref={chatPageRef} className={`chat-page${compact ? " chat-page--compact" : ""}`}>
       {currentThreadId ? (
         <ChatToolbar
-          visible={hasTurnTree || Boolean(agentThreadNavigation && conversation?.sessionId)}
+          visible={hasTurnTree || agentThreadView.isSubagent}
           currentThreadId={currentThreadId}
           compact={compact}
           mainView={visibleMainView}

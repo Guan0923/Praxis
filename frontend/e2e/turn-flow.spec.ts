@@ -1201,11 +1201,12 @@ test("first main Turn receives a dedicated model-generated title", async ({ page
 
   await page.goto("/app");
   await selectConversation(page, "新对话");
-  await expect(page.getByRole("navigation", { name: "主内容视图" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Thread", exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "主内容视图" })).toHaveCount(0);
   await expect(page.getByLabel("聊天输入")).toBeVisible();
   await send(page, "请生成这个对话的模型标题");
 
+  await expect(page.getByRole("navigation", { name: "主内容视图" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Thread", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "浏览器生成的新标题很", exact: true })).toBeVisible({ timeout: 15_000 });
   const nodes = await fetchRuntimeNodes(page, (await sidebar.json() as { session_id: string }).session_id);
   const firstTurn = nodes.find(isRuntimeTurnResponse);

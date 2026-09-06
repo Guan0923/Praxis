@@ -122,7 +122,13 @@ function Harness({
   );
 }
 
-function SubagentHarness({ onRun = vi.fn() }: { onRun?: ReturnType<typeof vi.fn> }) {
+function SubagentHarness({
+  onRun = vi.fn(),
+  includeChildTurn = true,
+}: {
+  onRun?: ReturnType<typeof vi.fn>;
+  includeChildTurn?: boolean;
+}) {
   const root = turn("turn-root-agent", "root task");
   root.status = "running";
   const child = {
@@ -136,7 +142,7 @@ function SubagentHarness({ onRun = vi.fn() }: { onRun?: ReturnType<typeof vi.fn>
     sessionId: "session-rewind",
     threadId: "session-rewind",
     title: "Agent Threads",
-    runtimeNodes: [root, child],
+    runtimeNodes: includeChildTurn ? [root, child] : [root],
     activeTurnId: root.id,
     lastNodeId: root.id,
     messagesLoaded: true,
@@ -1153,11 +1159,12 @@ describe("ChatPage queued message flushing", () => {
 });
 
 describe("ChatPage Trace navigation", () => {
-  function renderConversation(conversation: Conversation) {
+  function renderConversation(conversation: Conversation, agentThreadNavigation = false) {
     return (
       <AntApp>
         <ChatPage
           conversation={conversation}
+          agentThreadNavigation={agentThreadNavigation}
           onUpdate={() => undefined}
           onNew={async () => conversation.id}
           onNavigate={() => undefined}
@@ -1183,7 +1190,7 @@ describe("ChatPage Trace navigation", () => {
       thread_id: "session-empty",
       id: "turn-synthetic-root",
     };
-    const { rerender } = render(renderConversation(empty));
+    const { rerender } = render(renderConversation(empty, true));
 
     expect(screen.queryByRole("navigation", { name: "主内容视图" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("聊天输入")).toBeInTheDocument();
@@ -1457,6 +1464,17 @@ describe("ChatPage Agent Thread navigation", () => {
     await user.click(screen.getByRole("button", { name: "Thread" }));
     await user.click(await screen.findByText("root"));
     await waitFor(() => expect(screen.getByRole("button", { name: "暂停" })).toBeInTheDocument());
+  });
+
+  it("keeps the toolbar available on a selected Subagent without a Turn", async () => {
+    const user = userEvent.setup();
+    render(<SubagentHarness includeChildTurn={false} />);
+
+    await selectChild(user);
+
+    expect(screen.getByRole("navigation", { name: "主内容视图" })).toBeInTheDocument();
+    expect(screen.getByTitle("thread-child-agent")).toBeInTheDocument();
+    expect(screen.getByLabelText("聊天输入")).toBeInTheDocument();
   });
 
   it("restores the Subagent draft and displays the API failure", async () => {

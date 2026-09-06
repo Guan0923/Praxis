@@ -176,20 +176,68 @@
   overflow: auto;
 }
 
+.file-directory-tree .ant-tree-treenode {
+  min-height: 24px;
+  padding: 0;
+  align-items: center;
+}
+
+.file-directory-tree .ant-tree-switcher {
+  display: none;
+}
+
+.file-directory-tree .ant-tree-node-content-wrapper {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 24px;
+  padding-block: 0;
+  line-height: 24px;
+  overflow: hidden;
+}
+
+.file-directory-tree .ant-tree-iconEle {
+  flex: 0 0 auto;
+  height: 24px;
+  line-height: 24px;
+}
+
+.file-directory-tree .ant-tree-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  overflow: hidden;
+}
+
 .file-tree-node {
   display: flex;
   align-items: center;
   justify-content: space-between;
   min-width: 0;
+  height: 24px;
   width: 100%;
   gap: 6px;
+  overflow: hidden;
 }
 
-.file-tree-node > span:first-child {
+.file-tree-name {
+  display: block;
+  flex: 1 1 auto;
   min-width: 0;
+  height: 24px;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.file-tree-name-text {
+  display: inline-block;
+  min-width: max-content;
+  transform: translateX(0);
+}
+
+.file-tree-node:hover .file-tree-name--overflow .file-tree-name-text,
+.file-tree-node--active .file-tree-name--overflow .file-tree-name-text {
+  animation: file-tree-name-scroll var(--file-name-scroll-duration) ease-in-out 350ms infinite;
 }
 
 .file-tree-node-more {
@@ -200,6 +248,29 @@
 .file-tree-node:hover .file-tree-node-more,
 .file-tree-node:focus-within .file-tree-node-more {
   opacity: 1;
+}
+
+@keyframes file-tree-name-scroll {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+
+  58%,
+  82% {
+    transform: translateX(var(--file-name-scroll-distance));
+  }
+
+  100% {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-tree-node:hover .file-tree-name--overflow .file-tree-name-text,
+  .file-tree-node--active .file-tree-name--overflow .file-tree-name-text {
+    animation: none;
+  }
 }
 
 @media (max-width: 767px) {
