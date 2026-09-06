@@ -69,8 +69,25 @@ test("creates, edits, renames, and recycles a workspace file from the right pane
   await page.getByText("renamed-note.txt", { exact: true }).click({ button: "right" });
   await page.getByText("移动到", { exact: true }).click();
   const moveDialog = page.getByRole("dialog", { name: "移动到" });
-  await moveDialog.getByText("workspace", { exact: true }).click();
-  await moveDialog.getByText("target-dir", { exact: true }).click();
+  const moveWorkspace = moveDialog.getByText("workspace", { exact: true }).locator("xpath=ancestor::*[@role='treeitem'][1]");
+  await expect(moveWorkspace.locator(".ant-tree-switcher")).toHaveClass(/ant-tree-switcher_close/);
+  await moveWorkspace.locator(".ant-tree-switcher").click();
+  await expect(moveWorkspace.locator(".ant-tree-switcher")).toHaveClass(/ant-tree-switcher_open/);
+  const moveTarget = moveDialog.getByText("target-dir", { exact: true }).locator("xpath=ancestor::*[@role='treeitem'][1]");
+  const moveTargetContent = moveTarget.locator(".ant-tree-node-content-wrapper");
+  const moveTargetLayout = await Promise.all([
+    moveTarget.boundingBox(),
+    moveTarget.locator(".ant-tree-switcher").boundingBox(),
+    moveTargetContent.locator(".ant-tree-iconEle").boundingBox(),
+    moveTargetContent.locator(".file-tree-name").boundingBox(),
+  ]);
+  expect(moveTargetLayout[0]?.height).toBeCloseTo(24, 1);
+  expect(moveTargetLayout[1]?.width).toBeCloseTo(24, 1);
+  expect(Math.abs((moveTargetLayout[2]?.y ?? 0) + (moveTargetLayout[2]?.height ?? 0) / 2 - ((moveTargetLayout[3]?.y ?? 0) + (moveTargetLayout[3]?.height ?? 0) / 2))).toBeLessThanOrEqual(1);
+  await expect(moveTarget.locator(".ant-tree-switcher")).toHaveClass(/ant-tree-switcher_close/);
+  await moveTarget.locator(".ant-tree-switcher").click();
+  await expect(moveTarget.locator(".ant-tree-switcher")).toHaveClass(/ant-tree-switcher_open/);
+  await expect(moveTargetContent).toHaveClass(/ant-tree-node-selected/);
   await moveDialog.getByRole("button", { name: "确 定" }).click();
   await expect(moveDialog).toBeHidden();
 
@@ -126,11 +143,15 @@ test("uses compact rows and scrolls an overflowing filename on hover", async ({ 
   const content = row.locator(".ant-tree-node-content-wrapper");
   const icon = content.locator(".ant-tree-iconEle");
   const viewport = content.locator(".file-tree-name");
+  const switcher = row.locator(".ant-tree-switcher");
 
-  const layout = await Promise.all([row.boundingBox(), icon.boundingBox(), viewport.boundingBox()]);
+  const layout = await Promise.all([row.boundingBox(), switcher.boundingBox(), icon.boundingBox(), viewport.boundingBox()]);
   expect(layout[0]?.height).toBe(24);
-  expect(Math.abs((layout[1]?.y ?? 0) + (layout[1]?.height ?? 0) / 2 - ((layout[2]?.y ?? 0) + (layout[2]?.height ?? 0) / 2))).toBeLessThanOrEqual(1);
-  await expect(row.locator(".ant-tree-switcher")).toHaveCSS("display", "none");
+  expect(layout[1]?.width).toBe(24);
+  expect(layout[1]?.height).toBe(24);
+  expect(Math.abs((layout[2]?.y ?? 0) + (layout[2]?.height ?? 0) / 2 - ((layout[3]?.y ?? 0) + (layout[3]?.height ?? 0) / 2))).toBeLessThanOrEqual(1);
+  await expect(switcher).toHaveClass(/ant-tree-switcher-noop/);
+  await expect(switcher.locator("svg")).toHaveCount(0);
   await expect(viewport).toHaveClass(/file-tree-name--overflow/);
 
   await row.hover();
