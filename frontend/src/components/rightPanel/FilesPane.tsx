@@ -196,6 +196,7 @@ function DirectoryPicker({ sessionId, selected, onSelect }: DirectoryPickerProps
   return (
     <Tree<FileTreeNode>
       aria-label="移动目标目录"
+      activeKey={activeKey}
       blockNode
       className="file-directory-tree file-directory-tree--picker"
       defaultExpandedKeys={["files-root"]}
@@ -203,7 +204,6 @@ function DirectoryPicker({ sessionId, selected, onSelect }: DirectoryPickerProps
       loadData={load}
       selectedKeys={selected ? [selected] : []}
       showIcon
-      switcherIcon={null}
       titleRender={(node) => (
         <span
           className={`file-tree-node${node.key === activeKey ? " file-tree-node--active" : ""}`}
@@ -213,9 +213,19 @@ function DirectoryPicker({ sessionId, selected, onSelect }: DirectoryPickerProps
         </span>
       )}
       treeData={nodes}
-      onActiveChange={(key) => setActiveKey(key ?? null)}
+      onActiveChange={(key) => {
+        if (key != null) setActiveKey(key);
+      }}
+      onExpand={(_keys, info) => {
+        const node = info.node;
+        setActiveKey(node.key);
+        if (node.source && node.path && (node.kind === "root" || node.kind === "directory")) {
+          onSelect(node.source, node.path);
+        }
+      }}
       onSelect={(_keys, info) => {
         const node = info.node;
+        setActiveKey(node.key);
         if (node.source && node.path && (node.kind === "root" || node.kind === "directory")) {
           onSelect(node.source, node.path);
         }
@@ -715,6 +725,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
       </div>
       <Tree<FileTreeNode>
         aria-label="文件树"
+        activeKey={treeActiveKey}
         blockNode
         className="file-directory-tree file-directory-tree--main"
         expandAction="click"
@@ -723,13 +734,18 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
         loadData={loadNode}
         selectedKeys={selected ? [`${selected.source}:${selected.path}`] : []}
         showIcon
-        switcherIcon={null}
         titleRender={titleRender}
         treeData={treeNodes}
-        onActiveChange={(key) => setTreeActiveKey(key ?? null)}
-        onExpand={(keys) => setExpandedKeys(keys)}
+        onActiveChange={(key) => {
+          if (key != null) setTreeActiveKey(key);
+        }}
+        onExpand={(keys, info) => {
+          setExpandedKeys(keys);
+          setTreeActiveKey(info.node.key);
+        }}
         onLoad={(keys) => setLoadedKeys(keys)}
         onSelect={(_keys, info) => {
+          setTreeActiveKey(info.node.key);
           const entry = info.node.entry;
           if (entry?.kind === "file") {
             void openFile(entry).then(() => {

@@ -183,7 +183,13 @@
 }
 
 .file-directory-tree .ant-tree-switcher {
-  display: none;
+  display: inline-flex;
+  flex: 0 0 24px;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  line-height: 24px;
 }
 
 .file-directory-tree .ant-tree-node-content-wrapper {
@@ -236,7 +242,7 @@
 }
 
 .file-tree-node:hover .file-tree-name--overflow .file-tree-name-text,
-.file-tree-node--active .file-tree-name--overflow .file-tree-name-text {
+.file-directory-tree:focus-within .file-tree-node--active .file-tree-name--overflow .file-tree-name-text {
   animation: file-tree-name-scroll var(--file-name-scroll-duration) ease-in-out 350ms infinite;
 }
 
@@ -268,7 +274,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .file-tree-node:hover .file-tree-name--overflow .file-tree-name-text,
-  .file-tree-node--active .file-tree-name--overflow .file-tree-name-text {
+  .file-directory-tree:focus-within .file-tree-node--active .file-tree-name--overflow .file-tree-name-text {
     animation: none;
   }
 }
