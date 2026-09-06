@@ -32,7 +32,19 @@ import {
   Typography,
   type MenuProps,
 } from "antd";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type Key, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type Key,
+  type ReactNode,
+} from "react";
 import {
   createFileEntry,
   getFileRoots,
@@ -119,6 +131,44 @@ function rootNodes(roots: FileTreeRoot[]): FileTreeNode[] {
   }];
 }
 
+function ScrollingFileName({ name }: { name: string }) {
+  const viewportRef = useRef<HTMLSpanElement>(null);
+  const textRef = useRef<HTMLSpanElement>(null);
+  const [overflow, setOverflow] = useState(0);
+
+  const measure = useCallback(() => {
+    const viewport = viewportRef.current;
+    const text = textRef.current;
+    if (!viewport || !text) return;
+    const next = Math.max(0, text.scrollWidth - viewport.clientWidth);
+    setOverflow((current) => current === next ? current : next);
+  }, []);
+
+  useLayoutEffect(() => {
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    if (viewportRef.current) observer.observe(viewportRef.current);
+    if (textRef.current) observer.observe(textRef.current);
+    return () => observer.disconnect();
+  }, [measure, name]);
+
+  const style = {
+    "--file-name-scroll-distance": `-${overflow}px`,
+    "--file-name-scroll-duration": `${Math.min(14, Math.max(4, overflow / 32 + 3))}s`,
+  } as CSSProperties;
+
+  return (
+    <span
+      ref={viewportRef}
+      className={`file-tree-name${overflow > 0 ? " file-tree-name--overflow" : ""}`}
+      style={style}
+    >
+      <span ref={textRef} className="file-tree-name-text">{name}</span>
+    </span>
+  );
+}
+
 interface DirectoryPickerProps {
   sessionId: string;
   selected: string | null;
@@ -127,6 +177,7 @@ interface DirectoryPickerProps {
 
 function DirectoryPicker({ sessionId, selected, onSelect }: DirectoryPickerProps) {
   const [nodes, setNodes] = useState<FileTreeNode[]>(() => rootNodes(DEFAULT_ROOTS));
+  const [activeKey, setActiveKey] = useState<Key | null>(null);
   useEffect(() => {
     let active = true;
     void getFileRoots(sessionId).then((roots) => {
@@ -146,11 +197,23 @@ function DirectoryPicker({ sessionId, selected, onSelect }: DirectoryPickerProps
     <Tree<FileTreeNode>
       aria-label="移动目标目录"
       blockNode
+      className="file-directory-tree file-directory-tree--picker"
       defaultExpandedKeys={["files-root"]}
+      expandAction="click"
       loadData={load}
       selectedKeys={selected ? [selected] : []}
       showIcon
+      switcherIcon={null}
+      titleRender={(node) => (
+        <span
+          className={`file-tree-node${node.key === activeKey ? " file-tree-node--active" : ""}`}
+          title={node.path ?? node.title}
+        >
+          <ScrollingFileName name={node.title} />
+        </span>
+      )}
       treeData={nodes}
+      onActiveChange={(key) => setActiveKey(key ?? null)}
       onSelect={(_keys, info) => {
         const node = info.node;
         if (node.source && node.path && (node.kind === "root" || node.kind === "directory")) {
@@ -175,6 +238,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
   const [treeNodes, setTreeNodes] = useState<FileTreeNode[]>(() => rootNodes(DEFAULT_ROOTS));
   const [loadedKeys, setLoadedKeys] = useState<Key[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<Key[]>(["files-root"]);
+  const [treeActiveKey, setTreeActiveKey] = useState<Key | null>(null);
   const [selected, setSelected] = useState<FileTreeEntry | null>(null);
   const [document, setDocument] = useState<FileEditorDocument | null>(null);
   const [draft, setDraft] = useState("");
@@ -237,6 +301,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
     setDraft("");
     setDirty(false);
     setSaveState("idle");
+    setTreeActiveKey(null);
     void refreshRoots().catch((error) => void message.error(String((error as Error).message ?? error)));
   }, [message, refreshRoots]);
 
@@ -540,8 +605,11 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
 
   const titleRender = (node: FileTreeNode) => (
     <Dropdown menu={menuFor(node)} trigger={["contextMenu"]} disabled={node.disabled || readOnly}>
-      <span className="file-tree-node" title={node.path ?? node.title}>
-        <span>{node.title}</span>
+      <span
+        className={`file-tree-node${node.key === treeActiveKey ? " file-tree-node--active" : ""}`}
+        title={node.path ?? node.title}
+      >
+        <ScrollingFileName name={node.title} />
         {!node.disabled && !readOnly ? <MoreOutlined className="file-tree-node-more" /> : null}
       </span>
     </Dropdown>
@@ -648,13 +716,17 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
       <Tree<FileTreeNode>
         aria-label="文件树"
         blockNode
+        className="file-directory-tree file-directory-tree--main"
+        expandAction="click"
         expandedKeys={expandedKeys}
         loadedKeys={loadedKeys}
         loadData={loadNode}
         selectedKeys={selected ? [`${selected.source}:${selected.path}`] : []}
         showIcon
+        switcherIcon={null}
         titleRender={titleRender}
         treeData={treeNodes}
+        onActiveChange={(key) => setTreeActiveKey(key ?? null)}
         onExpand={(keys) => setExpandedKeys(keys)}
         onLoad={(keys) => setLoadedKeys(keys)}
         onSelect={(_keys, info) => {
