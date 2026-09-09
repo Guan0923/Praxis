@@ -7,6 +7,7 @@ from typing import Literal
 
 from backend.configuration import ClientPaths, LocalConfigStore, initialize_config, load_config, section
 from backend.domain import DEFAULT_TIME_ZONE, TodoListStore
+from backend.domain.memory import MemorySettings
 from backend.domain.terminal import DEFAULT_TERMINAL_TYPE
 from backend.jobs import JobRegistry, JobScope, JobScopeKind
 from backend.mcp.client import ExternalMcpResources, start_external_tools
@@ -20,6 +21,7 @@ from backend.sandbox import (
     WindowsBrokerClient,
 )
 from backend.skills import ProjectSkillGate, ProjectSkillTrustStore, SkillCatalog
+from backend.storage.memory import MemoryStore
 from backend.storage.settings import normalize_sandbox_config
 from backend.storage.sqlite import SQLiteSessionStore
 from backend.tools import ToolExecutor, WorkspaceFiles, build_tool_registry, delegation_tools
@@ -28,6 +30,7 @@ from backend.tools.terminal import effective_terminal_type
 from ..capability_settings import McpCapabilitySettings, SkillSettings, SubagentSettings
 from ..core.config import RunnerSettings, log_full_messages_from_toml
 from ..execution.runner import AgentRunner
+from ..memory import MemoryContextSelector, MemoryDiagnosticsRegistry, MemoryPromptInjector
 from ..subagents import SubagentCoordinator
 from .services import AgentApplication
 
@@ -65,6 +68,7 @@ def build_application(
     subagent_coordinator: SubagentCoordinator | None = None,
     sandbox_maintenance_gate: SandboxMaintenanceGate | None = None,
     todo_store: TodoListStore | None = None,
+    memory_diagnostics: MemoryDiagnosticsRegistry | None = None,
 ) -> AgentApplication:
     resolved_paths = paths or client_paths()
     base_config = initialize_config(resolved_paths, workspace)
@@ -101,6 +105,7 @@ def build_application(
             **({"subagent_coordinator": subagent_coordinator} if subagent_coordinator is not None else {}),
             **({"sandbox_maintenance_gate": sandbox_maintenance_gate} if sandbox_maintenance_gate is not None else {}),
             **({"todo_store": todo_store} if todo_store is not None else {}),
+            **({"memory_diagnostics": memory_diagnostics} if memory_diagnostics is not None else {}),
         )
     else:
         runner = _build_subagent_runner(
@@ -114,6 +119,7 @@ def build_application(
             **({"subagent_coordinator": subagent_coordinator} if subagent_coordinator is not None else {}),
             **({"sandbox_maintenance_gate": sandbox_maintenance_gate} if sandbox_maintenance_gate is not None else {}),
             **({"todo_store": todo_store} if todo_store is not None else {}),
+            **({"memory_diagnostics": memory_diagnostics} if memory_diagnostics is not None else {}),
         )
     return AgentApplication(
         runner,
@@ -165,11 +171,15 @@ def _build_subagent_runner(
     subagent_coordinator: SubagentCoordinator | None = None,
     sandbox_maintenance_gate: SandboxMaintenanceGate | None = None,
     todo_store: TodoListStore | None = None,
+    memory_diagnostics: MemoryDiagnosticsRegistry | None = None,
 ) -> AgentRunner:
     terminal_type = terminal_type or _terminal_type_for_config(config)
     resolved_paths = paths or client_paths()
     skill_settings = SkillSettings.from_config(config)
     subagent_settings = SubagentSettings.from_config(config)
+    memory_settings = MemorySettings.from_mapping(
+        config.get("memory") if isinstance(config.get("memory"), dict) else None
+    )
     sandbox_launcher, sandbox_config = _sandbox_runtime(
         config,
         paths=resolved_paths,
@@ -217,6 +227,8 @@ def _build_subagent_runner(
             sandbox_launcher=sandbox_launcher,
             sandbox_config=sandbox_config,
             todo_store=todo_store,
+            memory_diagnostics=memory_diagnostics,
+            memory_settings=memory_settings,
         )
 
     mcp_scope: JobScope | None = None
@@ -258,6 +270,8 @@ def _build_subagent_runner(
             sandbox_launcher=sandbox_launcher,
             sandbox_config=sandbox_config,
             todo_store=todo_store,
+            memory_diagnostics=memory_diagnostics,
+            memory_settings=memory_settings,
         )
         if sandbox_session_id is not None:
             coordinator.bind_session(sandbox_session_id, child_factory, workspace, project_cwd)
@@ -287,6 +301,8 @@ def _build_runner(
     sandbox_launcher: SandboxLauncher | None = None,
     sandbox_config: dict[str, object] | None = None,
     todo_store: TodoListStore | None = None,
+    memory_diagnostics: MemoryDiagnosticsRegistry | None = None,
+    memory_settings: MemorySettings | None = None,
 ) -> AgentRunner:
     skills = _user_skill_catalog(paths, skill_settings)
     project_skill_gate = (
@@ -301,11 +317,19 @@ def _build_runner(
     if planner_name == "rule":
         planner = RuleBasedPlanner()
     else:
+        memory_settings = memory_settings or MemorySettings()
+        memory_injector = MemoryPromptInjector(
+            MemoryContextSelector(MemoryStore(paths), memory_settings),
+            memory_settings,
+            project_id=project_id,
+            diagnostics=memory_diagnostics,
+        )
         planner = LLMPlanner(
             LLMClient(model_config or ModelConfig.from_toml(paths.config_file)),
             tools.specs(),
             tools.read_only_specs(),
             user_preferences=user_preferences,
+            memory_prompt_injector=memory_injector,
         )
     runner_scope = None
     if job_registry is not None:

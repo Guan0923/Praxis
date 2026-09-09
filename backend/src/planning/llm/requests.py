@@ -69,6 +69,7 @@ class RequestMixin:
         trace_system_message = system.content or ""
         runtime.exchange.context["trace_system_message"] = trace_system_message
         system = self._with_active_skills(runtime, system)
+        system = self._with_memory_context(runtime, system)
         canonical_nodes = runtime.model_nodes()
         canonical = runtime.model_messages() if canonical_nodes else []
         if canonical_nodes:
@@ -124,6 +125,7 @@ class RequestMixin:
         system = self._with_user_preferences(system)
         runtime.exchange.context["trace_system_message"] = system.content or ""
         system = self._with_active_skills(runtime, system)
+        system = self._with_memory_context(runtime, system)
         canonical_nodes = runtime.model_nodes()
         canonical = runtime.model_messages(current_turn_only=True) if canonical_nodes else []
         if canonical_nodes:
@@ -147,6 +149,19 @@ class RequestMixin:
             content=(system.content or "") + policy,
             provider_options=system.provider_options,
         )
+
+    def _with_memory_context(
+        self,
+        runtime: AgentRuntime,
+        system: SystemMessage,
+        *,
+        operation: str | None = None,
+    ) -> SystemMessage:
+        injector = getattr(self, "memory_prompt_injector", None)
+        inject = getattr(injector, "inject", None)
+        if not callable(inject):
+            return system
+        return inject(runtime, system, operation=operation or str(runtime.exchange.operation or "unknown"))
 
     @staticmethod
     def _with_workspace_context(runtime: AgentRuntime, system: SystemMessage) -> SystemMessage:
@@ -250,7 +265,11 @@ class RequestMixin:
             prepared = self._request(
                 runtime,
                 [
-                    self._with_user_preferences(SystemMessage(content=COMPACTION_INSTRUCTION)),
+                    self._with_memory_context(
+                        runtime,
+                        self._with_user_preferences(SystemMessage(content=COMPACTION_INSTRUCTION)),
+                        operation="summarize",
+                    ),
                     UserMessage(content=transcript),
                 ],
                 operation="summarize",

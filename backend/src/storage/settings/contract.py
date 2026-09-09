@@ -41,6 +41,16 @@ DEFAULT_PROVIDER_CONFIG: dict[str, object] = {
 }
 DEFAULT_CAPABILITY_CONFIG: dict[str, object] = {"skills": True, "mcp": False}
 DEFAULT_SKILL_CONFIG: dict[str, object] = {"disabled": []}
+DEFAULT_MEMORY_CONFIG: dict[str, object] = {
+    "enabled": False,
+    "disable_on_external_context": True,
+    "extraction_model": "",
+    "consolidation_model": "",
+    "retrieval_limit": 40,
+    "injection_max_items": 8,
+    "injection_max_tokens": 1200,
+    "injection_max_bytes": 8192,
+}
 DEFAULT_RUNTIME_CONFIG: dict[str, object] = {
     "max_tool_calls": 512,
     "max_tool_parellel": 16,

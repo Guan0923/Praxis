@@ -96,6 +96,7 @@ class WebAppState:
         from backend.storage.sqlite import SQLiteSessionStore
 
         agent_store = SQLiteSessionStore(self.paths, self.agent_thread_index)
+        self.session_store = agent_store
         self.agent_thread_events = AgentThreadEventHub(
             lambda frame, current: project_frame(agent_store, frame, current)
         )
@@ -117,6 +118,15 @@ class WebAppState:
 
         self.turn_message_worker = TurnMessageWorker(self)
         self.turn_message_worker.start()
+        from backend.runtime.memory import MemoryAutomationService, MemoryConversationSource, MemoryDiagnosticsRegistry
+        from backend.runtime.memory.provider_models import ProviderMemoryModel
+        from backend.storage.memory import MemoryStore
+
+        self.memory_store = MemoryStore(self.paths)
+        self.memory_source = MemoryConversationSource(self.session_store, self.projects)
+        self.memory_diagnostics = MemoryDiagnosticsRegistry()
+        self.memory_automation = MemoryAutomationService(self, lambda: ProviderMemoryModel(self.model_config()))
+        self.memory_automation.start()
 
     @staticmethod
     def _delivery_in_node(node: RuntimeState, delivery_id: str) -> bool:
@@ -342,6 +352,7 @@ class WebAppState:
         return {"runtime": self.settings.runtime_config()}
 
     def close(self) -> None:
+        self.memory_automation.close()
         self.turn_message_worker.close()
         self.runtime_event_relay.close()
         self.subagent_coordinator.close()
