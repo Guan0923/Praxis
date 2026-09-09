@@ -34,7 +34,6 @@ npm run dev
 | `npm run preview` | 本地预览构建产物 |
 | `npm run typecheck` | 运行 TypeScript `--noEmit` 检查 |
 | `npm test` | 运行 Vitest 单元/组件测试 |
-| `npm run test:e2e` | 运行 Playwright 真实 backend + Vite + 假模型流程 |
 
 生产本地模式由 backend 托管构建产物：
 
@@ -58,8 +57,6 @@ src/
 ├─ pages/BenchmarkPage.tsx  Benchmark 界面
 ├─ math/                    数学公式支持
 └─ styles/                  样式资源
-
-e2e/                        Playwright Turn 端到端测试
 ```
 
 请求、错误分类和持久化逻辑应留在现有 API/应用层，不在页面组件中重复实现。Runtime 事件由 backend 发布，展示与折叠逻辑留在前端。
@@ -78,7 +75,6 @@ e2e/                        Playwright Turn 端到端测试
 npm run typecheck
 npm test
 npm run build
-npm run test:e2e
 ```
 
-前三项是前端静态、单元/组件和生产构建验证；`test:e2e` 会启动真实本地 backend 与 Vite，但模型响应来自本地假服务，不产生模型 API 费用。
+以上命令分别验证类型、单元/组件行为和生产构建，不启动浏览器。

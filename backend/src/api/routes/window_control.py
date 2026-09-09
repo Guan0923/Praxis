@@ -36,25 +36,29 @@ async def window_control(websocket: WebSocket) -> None:
             if kind == "session.claim":
                 session_id = str(payload.get("session_id") or "").strip()
                 writable = bool(session_id) and await control.claim_session(window_id, generation, session_id)
-                await websocket.send_json({
-                    "type": "session.ownership",
-                    "request_id": request_id,
-                    "session_id": session_id,
-                    "writable": writable,
-                })
+                await websocket.send_json(
+                    {
+                        "type": "session.ownership",
+                        "request_id": request_id,
+                        "session_id": session_id,
+                        "writable": writable,
+                    }
+                )
             elif kind == "group.open":
                 group = str(payload.get("group") or "").strip()
                 if not group:
                     await websocket.close(code=1003)
                     return
                 state = await control.open_group(window_id, generation, group)
-                await websocket.send_json({
-                    "type": "group.ready",
-                    "request_id": request_id,
-                    "group": group,
-                    "seq": state.client_seq,
-                    "ack": state.server_seq,
-                })
+                await websocket.send_json(
+                    {
+                        "type": "group.ready",
+                        "request_id": request_id,
+                        "group": group,
+                        "seq": state.client_seq,
+                        "ack": state.server_seq,
+                    }
+                )
             else:
                 await websocket.close(code=1003)
                 return

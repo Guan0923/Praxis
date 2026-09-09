@@ -1,4 +1,4 @@
-"""Small stdio MCP server used only by the Playwright Trace audit flow."""
+"""Small stdio MCP server used by local MCP settings tests."""
 
 from mcp.server import MCPServer
 

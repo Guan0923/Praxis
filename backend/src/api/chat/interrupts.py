@@ -127,37 +127,41 @@ def make_interactive_interrupt(
             }
             for question in request.questions
         ]
-        sink(
-            {
-                "type": "event",
-                "kind": "decision_requested",
-                "message": request.message,
-                "data": {
-                    "decision_id": decision_id,
-                    "kind": request.kind,
-                    "call_id": request.data.get("call_id"),
-                    "tool": request.data.get("tool"),
-                    "arguments": request.data.get("arguments", {}),
-                    "questions": questions,
-                    "plan": request.data.get("plan"),
-                    "goal": request.data.get("goal"),
-                    "steps": request.data.get("steps", []),
-                    "details": request.data.get("details"),
-                    "skill": request.data.get("skill"),
-                    "description": request.data.get("description"),
-                    "project_id": request.data.get("project_id"),
-                    "workspace_sha256": request.data.get("workspace_sha256"),
-                    "tree_sha256": request.data.get("tree_sha256"),
-                    "path": request.data.get("path"),
-                },
-            }
-        )
         pending = registry.register(
             decision_id,
             request_kind=request.kind,
             approval_context=approval_context,
             approval_store=active_approval_store,
         )
+        try:
+            sink(
+                {
+                    "type": "event",
+                    "kind": "decision_requested",
+                    "message": request.message,
+                    "data": {
+                        "decision_id": decision_id,
+                        "kind": request.kind,
+                        "call_id": request.data.get("call_id"),
+                        "tool": request.data.get("tool"),
+                        "arguments": request.data.get("arguments", {}),
+                        "questions": questions,
+                        "plan": request.data.get("plan"),
+                        "goal": request.data.get("goal"),
+                        "steps": request.data.get("steps", []),
+                        "details": request.data.get("details"),
+                        "skill": request.data.get("skill"),
+                        "description": request.data.get("description"),
+                        "project_id": request.data.get("project_id"),
+                        "workspace_sha256": request.data.get("workspace_sha256"),
+                        "tree_sha256": request.data.get("tree_sha256"),
+                        "path": request.data.get("path"),
+                    },
+                }
+            )
+        except BaseException:
+            registry.discard(decision_id)
+            raise
         deadline = monotonic() + timeout
         while True:
             if pending.event.wait(timeout=min(0.1, max(0.0, deadline - monotonic()))):

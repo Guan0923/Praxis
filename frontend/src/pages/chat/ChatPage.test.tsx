@@ -113,7 +113,7 @@ function Harness({
         onEnsureSession={async () => conversation.sessionId!}
         onRewind={onRewind}
         onReload={onReload}
-        onRun={async (request) => { onRun(request); }}
+        onRun={async (request) => { await onRun(request); }}
       />
       <output data-testid="runtime-node-ids">{conversation.runtimeNodes?.map((node) => node.id).join(",")}</output>
       <output data-testid="active-turn-id">{conversation.activeTurnId}</output>
@@ -658,6 +658,35 @@ describe("ChatPage rewind projection", () => {
 
     await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
     expect(screen.getByTestId("conversation-title")).toHaveTextContent("新对话");
+  });
+
+  it("unlocks sending after admission without letting an older stream unlock a newer request", async () => {
+    const user = userEvent.setup();
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstRun = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const secondRun = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const onRun = vi.fn().mockReturnValueOnce(firstRun).mockReturnValueOnce(secondRun);
+    render(<Harness onRun={onRun} onRewind={vi.fn()} />);
+
+    try {
+      await user.type(screen.getByLabelText("聊天输入"), "first message");
+      await user.click(screen.getByRole("button", { name: "发送" }));
+      await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByRole("button", { name: "发送" }));
+      expect(onRun).toHaveBeenCalledTimes(1);
+
+      await act(async () => onRun.mock.calls[0][0].onAccepted());
+      await user.type(screen.getByLabelText("聊天输入"), "second message");
+      await user.click(screen.getByRole("button", { name: "发送" }));
+      await waitFor(() => expect(onRun).toHaveBeenCalledTimes(2));
+
+      await act(async () => releaseFirst());
+      await user.click(screen.getByRole("button", { name: "发送" }));
+      expect(onRun).toHaveBeenCalledTimes(2);
+    } finally {
+      await act(async () => { releaseFirst(); releaseSecond(); });
+    }
   });
 
   it("keeps the composer draft when Redis rejects admission", async () => {

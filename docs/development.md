@@ -69,7 +69,7 @@ npm test -- --run
 npm run build
 ```
 
-Playwright Turn 流程使用真实 backend、Vite 和本地假模型服务；不要调用付费模型 API。Provider transport 测试同样使用 mock 或本地假服务。
+HTTP 与 Provider transport 测试使用 mock 或本地假服务，不调用付费模型 API。
 
 重点契约：
 

@@ -59,6 +59,7 @@ class SQLiteSidebarThreadMixin:
                 or directory.is_symlink()
                 or (directory / "state.db").is_symlink()
                 or not (directory / "state.db").is_file()
+                or (directory / "state.db").stat().st_size == 0
             ):
                 continue
             result.extend(self._sidebar_summaries_for_session(directory.name))

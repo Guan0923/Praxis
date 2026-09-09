@@ -119,13 +119,6 @@ npm test
 npm run build
 ```
 
-真实浏览器 Turn 流程使用真实 backend、Vite 和本地假模型服务：
-
-```powershell
-cd frontend
-npm run test:e2e
-```
-
-HTTP、Provider 和 E2E 测试不会调用付费模型 API。Windows 若 pytest 临时目录 ACL 阻止创建目录，请指定一个当前用户可写、此前不存在的唯一 `--basetemp`。
+HTTP 与 Provider 测试不会调用付费模型 API。Windows 若 pytest 临时目录 ACL 阻止创建目录，请指定一个当前用户可写、此前不存在的唯一 `--basetemp`。
 
 更多设计约束见 [`docs/architecture.md`](docs/architecture.md) 与 [`docs/development.md`](docs/development.md)。

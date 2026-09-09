@@ -18,7 +18,7 @@ class SQLiteBaseMixin:
         self.paths.ensure()
 
     @contextmanager
-    def _connection(self, session_id: str) -> Iterator[sqlite3.Connection]:
+    def _connection(self, session_id: str, *, initialize: bool = False) -> Iterator[sqlite3.Connection]:
         path = self.paths.session_db(session_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(path)
@@ -30,7 +30,8 @@ class SQLiteBaseMixin:
             # Inspect before DDL: unsupported databases remain untouched.
             self._assert_supported_schema(connection)
             self._prepare_schema(connection)
-            connection.executescript(SCHEMA)
+            # Publish a new schema and its initial session metadata together.
+            connection.executescript(("BEGIN IMMEDIATE;\n" if initialize else "") + SCHEMA)
             self._validate_schema(connection)
             baseline_changes = connection.total_changes
             yield connection

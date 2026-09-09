@@ -84,7 +84,7 @@ npm test -- --run
 npm run build
 ```
 
-业务代码除 mock 外还要做真实本地测试。HTTP/provider 测试不得调用付费模型 API；Playwright 使用真实 backend、Vite 和本地假模型服务。Windows 临时目录 ACL 失败时使用当前用户可写的唯一 `--basetemp`，不得删除其他任务目录。
+业务代码除 mock 外还要做真实本地测试。HTTP/provider 测试不得调用付费模型 API。Windows 临时目录 ACL 失败时使用当前用户可写的唯一 `--basetemp`，不得删除其他任务目录。
 
 ## 安全
 

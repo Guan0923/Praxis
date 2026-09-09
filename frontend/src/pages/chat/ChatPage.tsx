@@ -452,6 +452,12 @@ export default function ChatPage({
   async function send() {
     if (compactionPending || sandboxBlocked || sessionReadOnly || sendPendingRef.current) return;
     sendPendingRef.current = true;
+    let released = false;
+    const releaseSend = () => {
+      if (released) return;
+      released = true;
+      sendPendingRef.current = false;
+    };
     try {
     const prompt = input.trim();
     // A running assistant no longer blocks the composer: a draft is handed
@@ -468,6 +474,7 @@ export default function ChatPage({
         undefined,
         undefined,
         true,
+        releaseSend,
       );
       return;
     }
@@ -510,10 +517,11 @@ export default function ChatPage({
       () => {
         clearComposer();
         setPendingUploads([]);
+        releaseSend();
       },
     );
     } finally {
-      sendPendingRef.current = false;
+      releaseSend();
     }
   }
 

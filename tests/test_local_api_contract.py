@@ -89,14 +89,28 @@ def test_browser_writes_require_an_allowed_loopback_origin_but_cli_writes_do_not
             ).status_code
             == 403
         )
-        assert (
-            client.post(
-                "/api/sidebar-threads",
-                json={},
-                headers={"Origin": "http://127.0.0.1:5173"},
-            ).status_code
-            == 201
-        )
+        with client.websocket_connect(
+            "/api/window-control/ws?window_id=origin-test",
+            headers={"Origin": "http://127.0.0.1:5173"},
+        ) as websocket:
+            ready = websocket.receive_json()
+            group = "resource:/api/sidebar-threads"
+            websocket.send_json({"type": "group.open", "group": group, "request_id": "group"})
+            opened = websocket.receive_json()
+            headers = {
+                "Origin": "http://127.0.0.1:5173",
+                "X-Mini-Agent-Window": "origin-test",
+                "X-Mini-Agent-Window-Generation": str(ready["generation"]),
+                "X-Mini-Agent-Operation-Group": group,
+                "X-Mini-Agent-Seq": str(opened["seq"]),
+                "X-Mini-Agent-Ack": str(opened["ack"]),
+            }
+            rejected = client.post(
+                "/api/sidebar-threads", json={}, headers={**headers, "Origin": "https://outside.example"}
+            )
+            assert rejected.status_code == 403
+            accepted = client.post("/api/sidebar-threads", json={}, headers=headers)
+            assert accepted.status_code == 201
         assert client.post("/api/sidebar-threads", json={}).status_code == 201
 
         preflight = client.options(

@@ -41,7 +41,7 @@ class SQLiteSessionMixin:
         root = self.paths.ensure_session(session.session_id)
         document = self._session_payload(session)
         try:
-            with self._connection(session.session_id) as connection:
+            with self._connection(session.session_id, initialize=True) as connection:
                 connection.execute(
                     "INSERT INTO store_metadata(session_id,schema_version,created_at,updated_at) VALUES (?,?,?,?)",
                     (session.session_id, SCHEMA_VERSION, timestamp, timestamp),
@@ -103,7 +103,8 @@ class SQLiteSessionMixin:
         connection.execute("UPDATE store_metadata SET updated_at=? WHERE session_id=?", (timestamp, session_id))
 
     def get_session(self, session_id: str) -> Session | None:
-        if not self.paths.session_db(session_id).is_file():
+        path = self.paths.session_db(session_id)
+        if not path.is_file() or path.stat().st_size == 0:
             return None
         with self._connection(session_id) as connection:
             payload = read_json_object(connection, session_id, "session", session_id)

@@ -8,6 +8,6 @@ export default defineConfig({
     setupFiles: "./src/test-setup.ts",
     globals: true,
     testTimeout: 20_000,
-    exclude: ["**/node_modules/**", "**/dist/**", "**/e2e/**"],
+    exclude: ["**/node_modules/**", "**/dist/**"],
   },
 });

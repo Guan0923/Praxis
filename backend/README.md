@@ -100,4 +100,4 @@ uv run python -m ruff format --check .
 uv run python -m pytest -q
 ```
 
-HTTP 与 Provider 测试使用 mock 或本地假服务，不调用付费模型 API。涉及浏览器的真实流程由 `frontend` 包的 `npm run test:e2e` 覆盖。
+HTTP 与 Provider 测试使用 mock 或本地假服务，不调用付费模型 API。

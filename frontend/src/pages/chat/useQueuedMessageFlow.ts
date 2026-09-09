@@ -206,6 +206,7 @@ export function useQueuedMessageFlow({
           void onQueuedMessagesRefresh(conversation.id);
         },
       });
+      await onQueuedMessagesRefresh(conversation.id);
       if (!acknowledged) queueAutoBlockedRef.current = true;
     } catch (error) {
       onSetLast({ error: String((error as Error).message ?? error), running: false, decision: undefined });
