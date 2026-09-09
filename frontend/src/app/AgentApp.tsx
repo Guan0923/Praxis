@@ -26,6 +26,7 @@ import type { ArchiveReadState } from "./storage";
 import AgentShell from "./AgentShell";
 import { createRunController } from "./runController";
 import { effectiveDisplayMode } from "./displayMode";
+import { useInitialSettings } from "./AppearanceProvider";
 import { isRuntimeTurnNode } from "./runtime/runtimeNodeNormalization";
 import { withLoadedTurns } from "./conversationProjection";
 import { createConversationActions } from "./conversationActions";
@@ -50,6 +51,7 @@ import type {
 export const ACTION_ERROR_MESSAGE_KEY = "mini-agent-action-error";
 
 function AgentApp() {
+  const initialSettings = useInitialSettings();
   const { message } = AntApp.useApp();
   const [profile, setProfile] = useState<LocalProfile>({ display_name: "本地用户", agent_preferences: "" });
   const [page, setPage] = useState<Page>("chat");
@@ -97,7 +99,7 @@ function AgentApp() {
 
   useEffect(() => {
     let active = true;
-    void getSettings()
+    void (initialSettings ? Promise.resolve(initialSettings) : getSettings())
       .then((settings) => {
         if (active) {
           setDisplayMode(effectiveDisplayMode(settings.agent_config.display_mode));
@@ -112,7 +114,7 @@ function AgentApp() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [initialSettings]);
 
   useEffect(() => {
     localStorage.setItem(ARCHIVE_READ_KEY, JSON.stringify(archiveReadState));

@@ -28,7 +28,6 @@ import {
   Spin,
   Splitter,
   Tree,
-  Tooltip,
   Typography,
   type MenuProps,
 } from "antd";
@@ -685,9 +684,8 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
         <Typography.Text ellipsis title={selected?.path}>{selected?.path ?? "未选择文件"}</Typography.Text>
         <Space size={4}>
           {saveLabel ? <Typography.Text type={saveState === "failed" || saveState === "conflict" ? "danger" : "secondary"}>{saveLabel}</Typography.Text> : null}
-          {saveState === "failed" ? <Tooltip title="重试保存"><Button type="text" size="small" icon={<ReloadOutlined />} disabled={readOnly} onClick={() => void saveNow()} /></Tooltip> : null}
-          {selected ? <Tooltip title="下载"><Button type="text" size="small" icon={<DownloadOutlined />} href={sessionFileContentUrl(sessionId, selected.source, selected.path, true)} /></Tooltip> : null}
-          <Tooltip title={treeCollapsed ? "展开文件树" : "收起文件树"}>
+          {saveState === "failed" ? <Button type="text" size="small" aria-label="重试保存" icon={<ReloadOutlined />} disabled={readOnly} onClick={() => void saveNow()} /> : null}
+          {selected ? <Button type="text" size="small" aria-label="下载" icon={<DownloadOutlined />} href={sessionFileContentUrl(sessionId, selected.source, selected.path, true)} /> : null}
             <Button
               type="text"
               size="small"
@@ -695,7 +693,6 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
               icon={treeCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
               onClick={() => setTreeCollapsed((value) => !value)}
             />
-          </Tooltip>
         </Space>
       </div>
       {saveState === "conflict" && document?.kind === "text" ? (
@@ -719,8 +716,8 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
       <div className="file-tree-toolbar">
         <Typography.Text strong>文件</Typography.Text>
         <Space size={4}>
-          <Tooltip title="刷新"><Button type="text" size="small" aria-label="刷新文件树" icon={<ReloadOutlined />} onClick={() => void refreshAll(true)} /></Tooltip>
-          <Tooltip title="收起文件树"><Button type="text" size="small" aria-label="收起文件树" icon={<MenuFoldOutlined />} onClick={() => setTreeCollapsed(true)} /></Tooltip>
+          <Button type="text" size="small" aria-label="刷新文件树" icon={<ReloadOutlined />} onClick={() => void refreshAll(true)} />
+          <Button type="text" size="small" aria-label="收起文件树" icon={<MenuFoldOutlined />} onClick={() => setTreeCollapsed(true)} />
         </Space>
       </div>
       <Tree<FileTreeNode>

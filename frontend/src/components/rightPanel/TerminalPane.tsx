@@ -3,6 +3,8 @@ import { Alert, Typography } from "antd";
 import type { Terminal as XtermTerminal } from "@xterm/xterm";
 import { terminalWebSocketUrl } from "../../api";
 import type { RightPanelWindow } from "../../types";
+import { useAppearanceMode } from "../../app/AppearanceProvider";
+import { terminalTheme } from "../../app/theme";
 
 interface TerminalPaneProps {
   panelWindow: RightPanelWindow;
@@ -10,6 +12,9 @@ interface TerminalPaneProps {
 }
 
 export default function TerminalPane({ panelWindow, readOnly = false }: TerminalPaneProps) {
+  const mode = useAppearanceMode();
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<XtermTerminal | null>(null);
   const sequenceRef = useRef(0);
@@ -40,7 +45,7 @@ export default function TerminalPane({ panelWindow, readOnly = false }: Terminal
         fontFamily: "Cascadia Mono, Consolas, monospace",
         fontSize: 13,
         scrollback: 10_000,
-        theme: { background: "#111827", foreground: "#f3f4f6" },
+        theme: terminalTheme(modeRef.current),
       });
       const fit = new FitAddon();
       terminal.loadAddon(fit);
@@ -101,6 +106,10 @@ export default function TerminalPane({ panelWindow, readOnly = false }: Terminal
       terminalRef.current = null;
     };
   }, [panelWindow.terminal_id, readOnly]);
+
+  useEffect(() => {
+    if (terminalRef.current) terminalRef.current.options.theme = terminalTheme(mode);
+  }, [mode]);
 
   return (
     <div className="right-panel-terminal">

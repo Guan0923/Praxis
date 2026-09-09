@@ -24,10 +24,10 @@ const CAPABILITY_LABEL: Record<string, string> = {
 };
 
 function scoreColor(score: number | null | undefined): string {
-  if (score == null) return "#999";
-  if (score >= 0.9) return "#16a34a";
-  if (score >= 0.5) return "#d97706";
-  return "#dc2626";
+  if (score == null) return "var(--muted)";
+  if (score >= 0.9) return "var(--success)";
+  if (score >= 0.5) return "var(--warning)";
+  return "var(--error)";
 }
 
 function ResultCard({ result }: { result: BenchmarkResult }) {

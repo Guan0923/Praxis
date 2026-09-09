@@ -9,7 +9,7 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  margin-top: 4px;
+  margin-top: 0;
 }
 
 .event-list {
@@ -32,7 +32,7 @@
 
 .runtime-retry-item {
   margin: 2px 0 6px;
-  color: #a8a9aa;
+  color: var(--muted);
   font-size: 12.5px;
 }
 
@@ -48,19 +48,19 @@
 }
 
 .runtime-agent-report.failed {
-  border-color: var(--ant-color-error-border, #ffccc7);
-  background: var(--ant-color-error-bg, #fff2f0);
-  color: var(--ant-color-error-text, #a8071a);
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error);
 }
 
 .runtime-compaction-notice {
   margin-bottom: 6px;
-  color: #a8a9aa;
+  color: var(--muted);
   font-size: 12.5px;
 }
 
 .runtime-compaction-progress {
-  color: #a8a9aa;
+  color: var(--muted);
   font-size: 12.5px;
 }
 
@@ -115,16 +115,16 @@
 .runtime-collapse .tool-call-id,
 .runtime-collapse .mono,
 .runtime-collapse .error-text {
-  color: #a8a9aa !important;
+  color: var(--muted) !important;
 }
 
 .runtime-collapse .ant-collapse-header:hover,
 .runtime-collapse .markdown a {
-  color: #a8a9aa !important;
+  color: var(--muted) !important;
 }
 
 .runtime-collapse .shimmer-text:not(.is-active) {
-  color: #a8a9aa !important;
+  color: var(--muted) !important;
 }
 
 .runtime-collapse .ant-collapse-title,
@@ -136,7 +136,7 @@
 
 .runtime-collapse .tool-line.failed,
 .runtime-collapse .error-text {
-  color: #dc2626 !important;
+  color: var(--error) !important;
 }
 
 .runtime-parallel-inner-collapse {
@@ -182,7 +182,7 @@
 }
 
 .thinking-content {
-  color: #a8a9aa;
+  color: var(--muted);
   line-height: 1.5;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -200,18 +200,18 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #a8a9aa;
+  color: var(--muted);
 }
 
 .shimmer-text.is-active {
   color: transparent;
   background-image: linear-gradient(
     90deg,
-    #a8a9aa 0%,
-    #a8a9aa 34%,
-    #ffffff 50%,
-    #a8a9aa 66%,
-    #a8a9aa 100%
+    var(--muted) 0%,
+    var(--muted) 34%,
+    var(--shimmer-highlight) 50%,
+    var(--muted) 66%,
+    var(--muted) 100%
   );
   background-position: 100% 0;
   background-repeat: no-repeat;
@@ -233,7 +233,7 @@
   min-width: 0;
   align-items: center;
   gap: 4px;
-  color: #a8a9aa;
+  color: var(--muted);
 }
 
 .runtime-status-label .shimmer-text,
@@ -288,7 +288,7 @@
   width: 3px;
   height: 3px;
   border-radius: 50%;
-  background-color: #a8a9aa;
+  background-color: var(--muted);
   animation: runtime-status-dot 900ms ease-in-out infinite;
 }
 
@@ -303,18 +303,18 @@
 @keyframes runtime-status-dot {
   0%, 60%, 100% {
     transform: translateY(0);
-    background-color: #a8a9aa;
+    background-color: var(--muted);
   }
   30% {
     transform: translateY(-3px);
-    background-color: #ffffff;
+    background-color: var(--shimmer-highlight);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .shimmer-text.is-active {
     animation: none;
-    color: #a8a9aa;
+    color: var(--muted);
     background: none;
     -webkit-text-fill-color: currentColor;
   }
@@ -322,14 +322,14 @@
   .runtime-status-dot {
     animation: none;
     transform: none;
-    background-color: #a8a9aa;
+    background-color: var(--muted);
   }
 }
 
 .tool-line {
   font-size: 12.5px;
-  color: #a8a9aa;
-  background: #f7f8fa;
+  color: var(--muted);
+  background: var(--surface-subtle);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 5px 10px;
@@ -341,14 +341,14 @@
 }
 
 .tool-line.failed {
-  color: #dc2626;
-  background: #fef2f2;
-  border-color: #fecaca;
+  color: var(--error);
+  background: var(--error-bg);
+  border-color: var(--error-border);
 }
 
 .tool-line.is-active {
   color: var(--accent);
-  border-color: rgba(79, 107, 255, 0.3);
+  border-color: var(--accent-border);
 }
 
 .runtime-approval-status {
@@ -376,12 +376,12 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #f7f8fa;
-  color: #a8a9aa;
+  background: var(--surface-subtle);
+  color: var(--muted);
 }
 
 .tool-result-label {
-  color: #6b7280;
+  color: var(--muted);
   font-size: 12.5px;
   font-weight: 600;
 }
@@ -389,7 +389,7 @@
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -397,7 +397,7 @@
 
 .tool-result summary {
   font-size: 12.5px;
-  color: #6b7280;
+  color: var(--muted);
   cursor: pointer;
   padding: 4px 0;
 }
@@ -409,7 +409,7 @@ pre.tool-result {
   max-width: 100%;
   box-sizing: border-box;
   font-size: 12px;
-  background: #f7f8fa;
+  background: var(--surface-subtle);
   border-radius: 8px;
   padding: 10px;
   margin: 0;

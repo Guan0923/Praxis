@@ -11,7 +11,7 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: #fff;
+  background: var(--surface);
   border-left: 1px solid var(--border);
 }
 
@@ -66,7 +66,7 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: #111827;
+  background: var(--surface);
 }
 
 .right-panel-terminal-meta {
@@ -74,7 +74,7 @@
   justify-content: space-between;
   gap: 12px;
   padding: 6px 10px;
-  background: #f5f5f5;
+  background: var(--surface-subtle);
 }
 
 .right-panel-terminal-meta > :first-child {
@@ -122,7 +122,7 @@
   height: 100%;
   min-width: 0;
   min-height: 0;
-  background: #fff;
+  background: var(--surface);
 }
 
 .file-tree-pane {
@@ -276,11 +276,5 @@
   .file-tree-node:hover .file-tree-name--overflow .file-tree-name-text,
   .file-directory-tree:focus-within .file-tree-node--active .file-tree-name--overflow .file-tree-name-text {
     animation: none;
-  }
-}
-
-@media (max-width: 767px) {
-  .right-panel-launcher {
-    top: 52px;
   }
 }

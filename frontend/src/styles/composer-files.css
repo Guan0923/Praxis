@@ -15,7 +15,7 @@
   padding: 3px 8px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: #fafafa;
+  background: var(--surface-subtle);
   font-size: 12.5px;
 }
 
@@ -54,18 +54,18 @@
 }
 
 .composer-upload.status-error {
-  border-color: #fecaca;
-  background: #fff7f7;
+  border-color: var(--error-border);
+  background: var(--error-bg);
 }
 
 .composer-upload-error {
-  color: #b91c1c;
+  color: var(--error);
   font-size: 12px;
 }
 
 .composer-box.is-dragging {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(64, 112, 244, 0.25);
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 .history-empty,

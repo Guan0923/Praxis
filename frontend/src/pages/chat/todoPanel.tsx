@@ -2,14 +2,17 @@ import { Collapse } from "antd";
 import { CheckCircleTwoTone, ClockCircleTwoTone, CloseOutlined, LoadingOutlined } from "@ant-design/icons";
 import { useState } from "react";
 import IconAction from "../../components/IconAction";
+import { useAppearanceMode } from "../../app/AppearanceProvider";
+import { palettes } from "../../app/theme";
 import type { ChatMessage, TodoItem, TodoStatus, ToolEvent } from "../../types";
 
 const TODO_STATUSES: readonly TodoStatus[] = ["pending", "in_progress", "completed"];
 
 function StatusIcon({ status }: { status: TodoStatus }) {
-  if (status === "completed") return <CheckCircleTwoTone twoToneColor="#52c41a" />;
+  const colors = palettes[useAppearanceMode()];
+  if (status === "completed") return <CheckCircleTwoTone twoToneColor={[colors.success, colors["success-bg"]]} />;
   if (status === "in_progress") return <LoadingOutlined spin />;
-  return <ClockCircleTwoTone twoToneColor="#bfbfbf" />;
+  return <ClockCircleTwoTone twoToneColor={[colors.muted, colors["surface-subtle"]]} />;
 }
 
 function eventTool(event: ToolEvent): string {

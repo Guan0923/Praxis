@@ -3,6 +3,8 @@ import { Button, Popover, Tree, Tooltip } from "antd";
 import { useEffect, useState, type Key, type ReactNode } from "react";
 import { listAgentThreadChildren } from "../../api";
 import type { AgentThreadSummary } from "../../types";
+import ScrollingText from "../../components/ScrollingText";
+import { useButtonTooltips } from "../../components/ButtonTooltipContext";
 
 interface PickerNode {
   key: string;
@@ -22,7 +24,7 @@ interface AgentThreadPickerProps {
 
 function nodeTitle(summary: AgentThreadSummary): ReactNode {
   const label = `${summary.thread_path} · ${summary.thread_status}`;
-  return <Tooltip title={summary.task_result || undefined}>{label}</Tooltip>;
+  return <Tooltip title={summary.task_result || undefined}><span className="thread-node-label"><ScrollingText text={label} /></span></Tooltip>;
 }
 
 function updateNode(nodes: PickerNode[], key: Key, children: PickerNode[]): PickerNode[] {
@@ -40,6 +42,7 @@ export default function AgentThreadPicker({
   invalidation,
   onSelect,
 }: AgentThreadPickerProps) {
+  const showButtonTooltips = useButtonTooltips();
   const [open, setOpen] = useState(false);
   const [treeData, setTreeData] = useState<PickerNode[]>([
     { key: rootThreadId, title: "root", isLeaf: false },
@@ -63,6 +66,7 @@ export default function AgentThreadPicker({
     <Tree<PickerNode>
       key={`${rootThreadId}:${invalidation}`}
       aria-label="Agent Thread 树"
+      className="agent-thread-tree"
       blockNode
       loadData={loadChildren}
       selectedKeys={[selectedThreadId]}
@@ -78,14 +82,16 @@ export default function AgentThreadPicker({
 
   return (
     <Popover
+      classNames={{ root: "agent-thread-popover" }}
+      styles={{ container: { padding: 8, borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", boxShadow: "0 4px 12px var(--shadow-soft)" } }}
       content={picker}
       open={open}
-      placement="bottomLeft"
+      placement="bottom"
       trigger="click"
       onOpenChange={setOpen}
     >
-      <Tooltip title={compact ? `Thread：${selectedThreadId}` : undefined}>
-        <Button type="text" aria-label="Thread" icon={compact ? <BranchesOutlined /> : undefined}>
+      <Tooltip title={showButtonTooltips && compact ? "Thread" : undefined} open={open || !showButtonTooltips ? false : undefined}>
+        <Button type="text" aria-label="Thread" aria-description={selectedThreadId} icon={compact ? <BranchesOutlined /> : undefined}>
           {compact ? null : "Thread"}
         </Button>
       </Tooltip>

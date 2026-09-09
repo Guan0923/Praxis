@@ -18,7 +18,7 @@
 
 .benchmark-page .page-header {
   margin-bottom: 20px;
-  background: rgba(255, 255, 255, 0.82);
+  background: var(--surface-overlay);
 }
 
 .benchmark-page .task-card,
@@ -110,7 +110,7 @@
 }
 .sidebar-utility-links {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   width: 100%;
 }

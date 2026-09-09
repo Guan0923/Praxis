@@ -216,6 +216,7 @@ def initialize_config(paths: ClientPaths, workspace: Path) -> dict[str, object]:
         return LocalConfigStore(paths.config_file).ensure_defaults({})
     config: dict[str, dict[str, object]] = {
         "profile": {"display_name": "本地用户", "agent_preferences": ""},
+        "appearance": {"mode": "light"},
         "agent": {
             "tone": "balanced",
             "verbosity": "balanced",

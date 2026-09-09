@@ -4,6 +4,7 @@ import { StrictMode, useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "../../types";
 import ConversationTimeline, { buildTimelineEntries, fmtTime, timelineTextOf } from "./ConversationTimeline";
+import { ButtonTooltipContext } from "../../components/ButtonTooltipContext";
 
 let timelineClientHeight = 96;
 
@@ -78,6 +79,14 @@ afterEach(() => {
 });
 
 describe("ConversationTimeline", () => {
+  it("keeps side-chat tick navigation without a hover preview", async () => {
+    render(<ButtonTooltipContext.Provider value={false}><TimelineHarness messages={[message("side-user", "user", "side message")]} /></ButtonTooltipContext.Provider>);
+    const tick = await screen.findByRole("button", { name: "跳转到消息：side message" });
+    fireEvent.mouseEnter(tick);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    fireEvent.click(tick);
+    expect(document.querySelector('[data-chat-anchor-key="side-user"]')).toHaveClass("conversation-timeline-hit");
+  });
   it("keeps every user message, including steering, in transcript order", () => {
     const messages = [
       message("assistant", "assistant", "ignored"),
