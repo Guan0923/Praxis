@@ -20,6 +20,7 @@ import {
   clearMemories,
   consolidateMemory,
   deleteMemory,
+  discoverProviderModels,
   dryRunMemory,
   extractMemory,
   getSettings,
@@ -37,6 +38,7 @@ import {
   type MemoryInjectionRecord,
   type MemoryItem,
   type MemoryJob,
+  type ProviderConfig,
 } from "../api";
 import type { SidebarThread } from "../types";
 
@@ -59,6 +61,10 @@ export default function MemorySettingsSection() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [config, setConfig] = useState<MemoryConfig | null>(null);
+  const [provider, setProvider] = useState<ProviderConfig | null>(null);
+  const [models, setModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
   const [items, setItems] = useState<MemoryItem[]>([]);
   const [jobs, setJobs] = useState<MemoryJob[]>([]);
   const [threads, setThreads] = useState<SidebarThread[]>([]);
@@ -84,6 +90,7 @@ export default function MemorySettingsSection() {
         listMemoryInjectionHistory(),
       ]);
       setConfig(settings.memory_config);
+      setProvider(settings.provider_config);
       setItems(memoryItems);
       setJobs(memoryJobs.slice().reverse());
       setThreads(sessionItems.filter((value) => !value.archived_at && !value.deleted_at));
@@ -96,6 +103,38 @@ export default function MemorySettingsSection() {
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  useEffect(() => {
+    if (!provider) return;
+    let cancelled = false;
+    setModels([]);
+    setModelsLoading(true);
+    setModelsError(null);
+    void discoverProviderModels({
+      config_id: provider.id,
+      provider_name: provider.provider_name,
+      protocol: provider.protocol,
+      base_url: provider.base_url,
+    }).then((result) => {
+      if (!cancelled) setModels(result.models);
+    }).catch((value: unknown) => {
+      if (!cancelled) setModelsError(value instanceof Error ? value.message : String(value));
+    }).finally(() => {
+      if (!cancelled) setModelsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [provider]);
+
+  const modelOptions = [
+    { value: "", label: provider?.model ? `使用当前模型（${provider.model}）` : "使用当前模型" },
+    ...Array.from(new Set([
+      ...models,
+      provider?.model,
+      config?.extraction_model,
+      config?.consolidation_model,
+    ].filter((value): value is string => Boolean(value))))
+      .map((value) => ({ value, label: value })),
+  ];
 
   const projectIds = useMemo(
     () => Array.from(new Set(items.map((item) => item.project_id).filter((value): value is string => Boolean(value)))),
@@ -166,21 +205,30 @@ export default function MemorySettingsSection() {
                 <Switch aria-label="启用记忆" checked={config.enabled} loading={saving} onChange={(checked) => void saveConfig({ ...config, enabled: checked })} />
                 <Typography.Text strong>启用记忆</Typography.Text>
               </Space>
-              <Input
+              {modelsError ? <Alert type="warning" showIcon title={`获取模型列表失败：${modelsError}`} /> : null}
+              <label htmlFor="memory-extraction-model">提取模型</label>
+              <Select
+                id="memory-extraction-model"
                 aria-label="提取模型"
-                addonBefore="提取模型"
-                placeholder="留空使用当前模型"
+                style={{ width: "100%" }}
+                showSearch={{ optionFilterProp: "label" }}
+                loading={modelsLoading}
+                disabled={saving}
+                options={modelOptions}
                 value={config.extraction_model}
-                onChange={(event) => setConfig({ ...config, extraction_model: event.target.value })}
-                onBlur={() => void saveConfig(config)}
+                onChange={(value) => void saveConfig({ ...config, extraction_model: value })}
               />
-              <Input
+              <label htmlFor="memory-consolidation-model">整理模型</label>
+              <Select
+                id="memory-consolidation-model"
                 aria-label="整理模型"
-                addonBefore="整理模型"
-                placeholder="留空使用当前模型"
+                style={{ width: "100%" }}
+                showSearch={{ optionFilterProp: "label" }}
+                loading={modelsLoading}
+                disabled={saving}
+                options={modelOptions}
                 value={config.consolidation_model}
-                onChange={(event) => setConfig({ ...config, consolidation_model: event.target.value })}
-                onBlur={() => void saveConfig(config)}
+                onChange={(value) => void saveConfig({ ...config, consolidation_model: value })}
               />
             </Space>
           ) : null}
