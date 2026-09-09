@@ -9,17 +9,25 @@
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  justify-content: flex-start;
-  width: calc(100% - 30px);
-  max-width: 995px;
+  justify-content: space-between;
+  width: 100%;
   min-width: 0;
   margin: 0 auto;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px var(--chat-gutter);
+  padding-right: 56px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.chat-toolbar-actions {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 75%;
+  align-items: center;
   gap: 2px;
-  padding: 4px 12px;
-  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 4px 18px rgba(15, 23, 42, 0.08);
-  backdrop-filter: blur(10px);
 }
 
 .trace-toolbar .ant-btn {
@@ -34,9 +42,7 @@
 }
 
 .chat-page--compact .trace-toolbar {
-  width: calc(100% - 14px);
-  max-width: 1011px;
-  padding-inline: 8px;
+  gap: 8px;
 }
 
 .chat-page--compact .trace-toolbar .ant-btn {
@@ -46,21 +52,116 @@
   padding: 0;
 }
 
-.trace-toolbar-thread-id {
-  flex: 0 1 auto;
+.chat-toolbar-title {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: var(--muted);
-  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ant-popover .ant-tree[aria-label="Agent Thread 树"] {
-  min-width: 260px;
-  max-width: min(420px, 80vw);
+.app-shell--sidebar-collapsed .trace-toolbar {
+  padding-left: 60px;
+}
+
+.agent-thread-popover {
+  width: 320px;
+  max-width: calc(100vw - 24px);
+}
+
+.agent-thread-tree {
+  width: 100%;
+  min-width: 0;
   max-height: 360px;
   overflow: auto;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.agent-thread-tree .ant-tree-treenode {
+  min-width: 0;
+  min-height: 32px;
+  align-items: center;
+}
+
+.agent-thread-tree .ant-tree-node-content-wrapper {
+  min-width: 0;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.agent-thread-tree .ant-tree-title,
+.thread-node-label {
+  display: block;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.agent-thread-tree .ant-tree-node-content-wrapper:hover {
+  background: var(--hover);
+}
+
+.agent-thread-tree .ant-tree-node-content-wrapper.ant-tree-node-selected {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.thread-scroll {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.thread-scroll-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: translateX(0);
+}
+
+.trace-toolbar-thread-id {
+  flex: 0 1 200px;
+  max-width: 200px;
+  color: var(--muted);
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.chat-page--compact .trace-toolbar-thread-id {
+  flex-basis: 88px;
+  max-width: 88px;
+}
+
+.thread-scroll--overflow:hover .thread-scroll-text,
+.thread-scroll--overflow:focus .thread-scroll-text,
+.agent-thread-tree:focus-within .ant-tree-treenode-active .thread-scroll--overflow .thread-scroll-text {
+  width: max-content;
+  overflow: visible;
+  text-overflow: clip;
+  animation: thread-text-scroll var(--thread-scroll-duration) ease-in-out 350ms infinite;
+}
+
+@keyframes thread-text-scroll {
+  0%, 12%, 100% { transform: translateX(0); }
+  58%, 82% { transform: translateX(var(--thread-scroll-distance)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-scroll--overflow:hover .thread-scroll-text,
+  .thread-scroll--overflow:focus .thread-scroll-text,
+  .agent-thread-tree:focus-within .ant-tree-treenode-active .thread-scroll--overflow .thread-scroll-text {
+    width: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    animation: none;
+  }
 }
 
 .trace-page {
@@ -68,7 +169,7 @@
   min-height: 0;
   overflow: auto;
   padding: 16px 24px 32px;
-  background: #fafbfc;
+  background: var(--surface-subtle);
 }
 
 .trace-version-controls,
@@ -99,7 +200,7 @@
 .trace-turn-collapse {
   max-width: 1100px;
   margin: 0 auto;
-  background: #ffffff;
+  background: var(--surface);
 }
 
 .trace-turn-collapse > .ant-collapse-item > .ant-collapse-header {
@@ -150,7 +251,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #4b5563;
+  color: var(--muted);
 }
 
 .trace-value {
@@ -159,7 +260,7 @@
   padding: 12px;
   overflow: auto;
   border-radius: 8px;
-  background: #f7f8fa;
+  background: var(--surface-subtle);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

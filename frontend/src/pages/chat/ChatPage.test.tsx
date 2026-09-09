@@ -1241,7 +1241,8 @@ describe("ChatPage Trace navigation", () => {
     rerender(renderConversation(populated));
 
     expect(screen.getByRole("navigation", { name: "主内容视图" })).toBeInTheDocument();
-    expect(screen.getByTitle(node.thread_id)).toHaveClass("trace-toolbar-thread-id");
+    expect(screen.getByTitle(populated.title)).toHaveClass("chat-toolbar-title");
+    expect(screen.getByLabelText(node.thread_id)).toHaveClass("trace-toolbar-thread-id");
   });
 
   it("returns to Chat when switching from Trace to an empty conversation", async () => {
@@ -1368,7 +1369,7 @@ describe("ChatPage Trace navigation", () => {
       expect(screen.getByRole("button", { name: "思考等级：中" })).toBeInTheDocument();
 
       for (const [name, tooltip] of [
-        ["Thread", "Thread：session-rewind"],
+        ["Thread", "Thread"],
         ["Chat", "Chat"],
         ["Trace", "Trace"],
         ["运行模式：Agent", "运行模式：Agent"],
@@ -1466,7 +1467,7 @@ describe("ChatPage Agent Thread navigation", () => {
     expect(screen.getByRole("button", { name: "暂停" })).toBeInTheDocument();
 
     await selectChild(user);
-    expect(screen.getByTitle("thread-child-agent")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Thread" })).toHaveAttribute("aria-description", "thread-child-agent");
     expect(screen.getByText("child task", { selector: "p" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "暂停" })).not.toBeInTheDocument();
@@ -1475,7 +1476,7 @@ describe("ChatPage Agent Thread navigation", () => {
     expect(screen.getByTestId("subagent-canonical-active")).toHaveTextContent("turn-root-agent");
 
     await user.click(screen.getByRole("button", { name: "Trace" }));
-    expect(screen.getByTitle("thread-child-agent")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Thread" })).toHaveAttribute("aria-description", "thread-child-agent");
     expect(screen.queryByLabelText("聊天输入")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Chat" }));
 
@@ -1502,7 +1503,7 @@ describe("ChatPage Agent Thread navigation", () => {
     await selectChild(user);
 
     expect(screen.getByRole("navigation", { name: "主内容视图" })).toBeInTheDocument();
-    expect(screen.getByTitle("thread-child-agent")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Thread" })).toHaveAttribute("aria-description", "thread-child-agent");
     expect(screen.getByLabelText("聊天输入")).toBeInTheDocument();
   });
 

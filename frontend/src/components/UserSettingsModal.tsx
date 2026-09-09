@@ -10,9 +10,11 @@ import { SandboxSettingsSection } from "./settings/SandboxSettingsSection";
 import { SkillSettingsSection } from "./settings/SkillSettingsSection";
 import type { SettingsSection, UserSettingsModalProps } from "./settings/contracts";
 import { useUserSettingsState } from "./settings/useUserSettingsState";
+import { AppearanceSettingsSection } from "./settings/AppearanceSettingsSection";
 
 const menuItems = [
   { key: "profile", label: "个人简介" },
+  { key: "appearance", label: "外观" },
   { key: "agent", label: "Agent 配置" },
   { key: "runtime", label: "运行配置" },
   { key: "sandbox", label: "沙箱" },
@@ -41,6 +43,7 @@ export default function UserSettingsModal(props: UserSettingsModalProps) {
       </nav>
       <section className="user-settings-detail">
         {state.section === "profile" ? <ProfileSettingsSection state={state} /> : null}
+        {state.section === "appearance" ? <AppearanceSettingsSection /> : null}
         {state.section === "agent" ? <AgentSettingsSection state={state} /> : null}
         {state.section === "runtime" ? <RuntimeSettingsSection state={state} /> : null}
         {state.section === "sandbox" ? <SandboxSettingsSection state={state} /> : null}
@@ -63,7 +66,7 @@ export default function UserSettingsModal(props: UserSettingsModalProps) {
       mask={{ closable: true }}
       keyboard={false}
       onCancel={state.requestClose}
-      footer={["provider_manage", "skills", "mcp"].includes(state.section) ? null : (
+      footer={["appearance", "provider_manage", "skills", "mcp"].includes(state.section) ? null : (
         <Space>
           <Button
             type="primary"

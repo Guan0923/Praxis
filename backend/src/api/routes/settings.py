@@ -20,6 +20,12 @@ class ProfilePayload(BaseModel):
     agent_preferences: str = Field(default="", max_length=4000)
 
 
+class AppearanceConfigPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["light", "dark"]
+
+
 class AgentConfigPayload(BaseModel):
     tone: str = Field(default="balanced", max_length=40)
     verbosity: str = Field(default="balanced", max_length=40)
@@ -139,6 +145,11 @@ def update_agent(body: AgentConfigPayload, request: Request) -> dict[str, object
         return _settings(request).update_agent_config(body.model_dump())
     except ValueError as exc:
         raise _value_error(exc) from exc
+
+
+@router.put("/appearance")
+def update_appearance(body: AppearanceConfigPayload, request: Request) -> dict[str, str]:
+    return _settings(request).update_appearance_config(body.mode)
 
 
 @router.put("/runtime")

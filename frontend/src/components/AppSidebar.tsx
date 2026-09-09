@@ -177,7 +177,7 @@ export default function AppSidebar({
   return (
     <div
       className="app-sidebar"
-      style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, padding: 16, background: "#f4f7f8" }}
+      style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, padding: "20px 12px 12px", background: "var(--sidebar-bg)" }}
     >
       <div className={`sidebar-reveal-shell${page === "chat" ? " sidebar-reveal-active" : ""}`} key={revealKey}>
         <div className="sidebar-header sidebar-reveal-item" data-reveal-index="0">
@@ -201,7 +201,7 @@ export default function AppSidebar({
             新建对话
           </Button>
           <Button
-            type="default"
+            type="text"
             className="sidebar-create-button"
             block
             icon={<FolderOpenOutlined />}
@@ -216,7 +216,7 @@ export default function AppSidebar({
 
         <div className="sidebar-project-history sidebar-reveal-item" data-reveal-index="2">
           <Typography.Text type="secondary" style={{ margin: "20px 8px 8px", fontSize: 12 }}>项目对话</Typography.Text>
-          <div className="project-history-list" style={{ minHeight: 0, maxHeight: 360, overflowY: "auto" }}>
+          <div className="project-history-list" style={{ minHeight: 0, overflowY: "auto" }}>
             <Collapse
               ghost
               activeKey={expandedProjectIds}

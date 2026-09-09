@@ -1,17 +1,17 @@
 /* ---------- Input composer (one unified box) ---------- */
 .composer {
   position: relative;
-  max-width: 1025px;
+  max-width: var(--chat-content-width);
   width: 100%;
   margin: 0 auto;
-  padding: 0 20px 24px;
+  padding: 0 var(--chat-gutter) 16px;
 }
 .composer-box {
   position: relative;
   border: 1px solid var(--border);
-  border-radius: 16px;
-  background: #fff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: none;
   overflow: hidden;
 }
 
@@ -53,19 +53,19 @@
   gap: 3px;
   margin: 0 2px;
   padding: 1px 5px 1px 7px;
-  border: 1px solid #c7d2fe;
+  border: 1px solid var(--accent-border);
   border-radius: 7px;
-  background: #eef2ff;
-  color: #3730a3;
+  background: var(--accent-soft);
+  color: var(--accent);
   font-size: 0.94em;
   line-height: 1.35;
   vertical-align: baseline;
 }
 
 .file-mention-bubble.upload {
-  border-color: #bae6fd;
-  background: #ecfeff;
-  color: #155e75;
+  border-color: var(--info-border);
+  background: var(--info-bg);
+  color: var(--info);
 }
 
 .file-mention-label {
@@ -91,7 +91,7 @@
 }
 
 .file-mention-remove:hover {
-  background: rgba(15, 23, 42, 0.12);
+  background: var(--shadow);
 }
 
 .composer-box .send-btn {
@@ -106,17 +106,17 @@
   height: 36px;
   padding: 0;
   border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--on-accent);
   font: inherit;
   cursor: pointer;
   transition: background-color 160ms ease, color 160ms ease, opacity 160ms ease;
 }
 
 .composer-box .send-btn:hover:not(:disabled) {
-  background: rgba(8, 127, 141, 0.1);
-  color: var(--accent-dark);
+  background: var(--accent-dark);
+  color: var(--on-accent);
 }
 
 .composer-box .send-btn:focus-visible {
@@ -130,12 +130,13 @@
 }
 
 .composer-box .send-btn.stop {
-  color: #dc2626;
+  background: var(--error-bg);
+  color: var(--error);
 }
 
 .composer-box .send-btn.stop:hover:not(:disabled) {
-  background: rgba(220, 38, 38, 0.1);
-  color: #b91c1c;
+  background: var(--error-bg);
+  color: var(--error);
 }
 
 .composer-toolbar {
@@ -168,7 +169,7 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: #f8fafc;
+  background: var(--surface-subtle);
 }
 
 .queued-message-header { margin-bottom: 5px; color: var(--muted); font-size: 12px; }
@@ -181,5 +182,5 @@
   display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
   padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer;
 }
-.queued-message-button:hover, .queued-message-button:focus-visible { background: rgba(8, 127, 141, 0.1); color: var(--accent-dark); }
-.queued-message-button.danger:hover, .queued-message-button.danger:focus-visible { background: rgba(220, 38, 38, 0.1); color: #b91c1c; }
+.queued-message-button:hover, .queued-message-button:focus-visible { background: var(--accent-soft); color: var(--accent-dark); }
+.queued-message-button.danger:hover, .queued-message-button.danger:focus-visible { background: var(--error-bg); color: var(--error); }

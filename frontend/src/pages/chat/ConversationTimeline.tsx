@@ -18,6 +18,7 @@ import {
 } from "react";
 import type { ChatMessage } from "../../types";
 import css from "./TimelineTicks.module.css";
+import { useButtonTooltips } from "../../components/ButtonTooltipContext";
 
 export const ROW_H = 12;
 export const TICK_BASE_W = 18;
@@ -106,6 +107,7 @@ function hitTarget(key: string): void {
 }
 
 export default function ConversationTimeline({ messages, scrollContainerRef }: ConversationTimelineProps) {
+  const showButtonTooltips = useButtonTooltips();
   const entries = useMemo(() => buildTimelineEntries(messages), [messages]);
   const fingerprints = useMemo(() => entries.map((entry) => entry.fingerprint), [entries]);
   const [rect, setRect] = useState<StripRect | null>(null);
@@ -220,14 +222,11 @@ export default function ConversationTimeline({ messages, scrollContainerRef }: C
   const tickStyle = (index: number): CSSProperties => {
     const weight = hover < 0 ? 0 : gaussWeight(Math.abs(index - hover));
     const width = Math.round((TICK_BASE_W + TICK_AMP * weight) * 10) / 10;
-    const base = { r: 50, g: 50, b: 50, a: 0.55 };
-    const selected = { r: 0x36, g: 0x11, b: 0x15, a: 1 };
-    const t = 1 - weight;
-    const r = Math.round(selected.r + (base.r - selected.r) * t);
-    const g = Math.round(selected.g + (base.g - selected.g) * t);
-    const b = Math.round(selected.b + (base.b - selected.b) * t);
-    const alpha = selected.a + (base.a - selected.a) * t;
-    return { width: `${width}px`, backgroundColor: `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(2)})` };
+    return {
+      width: `${width}px`,
+      backgroundColor: `color-mix(in srgb, var(--accent) ${(weight * 100).toFixed(1)}%, var(--muted))`,
+      opacity: 0.55 + 0.45 * weight,
+    };
   };
 
   return (
@@ -274,7 +273,7 @@ export default function ConversationTimeline({ messages, scrollContainerRef }: C
           ))}
         </div>
       </div>
-      {activeEntry ? (
+      {activeEntry && showButtonTooltips ? (
         <div
           ref={tipRef}
           className={css.tip}

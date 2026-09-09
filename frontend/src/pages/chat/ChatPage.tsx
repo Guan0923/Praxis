@@ -38,11 +38,13 @@ import { useChatScroll } from "./useChatScroll";
 import { useQueuedMessageFlow } from "./useQueuedMessageFlow";
 import { useResponsiveChatLayout } from "./useResponsiveChatLayout";
 import { useSessionOwnership } from "../../app/useSessionOwnership";
+import { ButtonTooltipContext } from "../../components/ButtonTooltipContext";
 
 export { composerAction } from "./contracts";
 export { CHAT_COMPACT_WIDTH } from "./useResponsiveChatLayout";
 
 export default function ChatPage({
+  showButtonTooltips = true,
   conversation: canonicalConversation,
   agentThreadNavigation = false,
   displayMode: configuredDisplayMode,
@@ -560,11 +562,13 @@ export default function ChatPage({
   }
 
   return (
+    <ButtonTooltipContext.Provider value={showButtonTooltips}>
     <div ref={chatPageRef} className={`chat-page${compact ? " chat-page--compact" : ""}`}>
       {currentThreadId ? (
         <ChatToolbar
           visible={hasTurnTree || agentThreadView.isSubagent}
           currentThreadId={currentThreadId}
+          conversationTitle={conversation?.title || "新对话"}
           compact={compact}
           mainView={visibleMainView}
           agentThread={agentThreadNavigation && conversation?.sessionId && agentThreadView.rootThreadId && agentThreadView.selectedThreadId ? {
@@ -615,7 +619,7 @@ export default function ChatPage({
           <FloatButton
             className="chat-scroll-bottom-button"
             icon={<VerticalAlignBottomOutlined />}
-            tooltip="滚动到底部"
+            tooltip={showButtonTooltips ? "滚动到底部" : undefined}
             aria-label="滚动到底部"
             onClick={scrollToBottom}
           />
@@ -686,5 +690,6 @@ export default function ChatPage({
       />
       </>}
     </div>
+    </ButtonTooltipContext.Provider>
   );
 }

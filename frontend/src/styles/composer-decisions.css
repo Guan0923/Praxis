@@ -19,9 +19,9 @@
 .decision-card {
   margin: 10px 0;
   padding: 13px;
-  border: 1px solid #cfd7ff;
+  border: 1px solid var(--accent-border);
   border-radius: 12px;
-  background: #f8f9ff;
+  background: var(--accent-soft);
 }
 
 .decision-title {
@@ -35,13 +35,15 @@
   overflow: auto;
   padding: 9px;
   border-radius: 8px;
-  background: #f0f2f7;
+  background: var(--hover);
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 12px;
 }
 
 .decision-card input {
+  color: var(--text);
+  background: var(--surface);
   width: 100%;
   margin-top: 7px;
   padding: 8px 10px;
@@ -64,13 +66,13 @@
   border: none;
   border-radius: 8px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
   font-size: 12px;
 }
 
 .decision-actions button.secondary {
-  background: #e5e7eb;
+  background: var(--border);
   color: var(--text);
 }
 
@@ -83,7 +85,7 @@
 .question-block {
   margin-top: 12px;
   padding-top: 10px;
-  border-top: 1px solid #dbe1ff;
+  border-top: 1px solid var(--accent-border);
 }
 
 .question-block p {
@@ -99,18 +101,18 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  background: #eef1ff;
+  background: var(--accent-soft);
   color: var(--accent-dark);
   text-align: left;
 }
 
 .question-options button.selected {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .question-options button.selected small {
-  color: #eef1ff;
+  color: var(--on-accent);
 }
 
 .question-options input {

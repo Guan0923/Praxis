@@ -21,7 +21,7 @@
   padding: 16px 18px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: #fff;
+  background: var(--surface);
 }
 
 .trash-card h2 {
@@ -45,7 +45,7 @@
   padding: 7px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #fff;
+  background: var(--surface);
   color: var(--text);
   font: inherit;
   cursor: pointer;
@@ -58,7 +58,7 @@
 }
 
 .danger-text {
-  color: #dc2626 !important;
+  color: var(--error) !important;
 }
 
 /* ---------- Benchmark page ---------- */
@@ -99,7 +99,7 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   font-size: 14px;
-  background: #fff;
+  background: var(--surface);
 }
 
 .run-all {
@@ -137,7 +137,7 @@
 }
 
 .capability-badge {
-  background: #e8ecff;
+  background: var(--selected);
   color: var(--accent-dark);
   border-radius: 999px;
   font-size: 12px;
@@ -155,7 +155,7 @@
 }
 
 .source-badge {
-  background: #f3f4f6;
+  background: var(--surface-subtle);
   color: var(--muted);
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -203,7 +203,7 @@
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #f7f8fa;
+  background: var(--surface-subtle);
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 12px;
@@ -233,7 +233,7 @@
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #fff;
+  background: var(--surface);
 }
 
 .benchmark-trace-head {
@@ -291,11 +291,11 @@
 }
 
 .verdicts .ok {
-  color: #16a34a;
+  color: var(--success);
 }
 
 .verdicts .no {
-  color: #dc2626;
+  color: var(--error);
 }
 
 .final-answer summary {
@@ -307,7 +307,7 @@
 
 .final-answer pre {
   font-size: 12px;
-  background: #f7f8fa;
+  background: var(--surface-subtle);
   border-radius: 8px;
   padding: 10px;
   white-space: pre-wrap;
@@ -322,7 +322,7 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #d1d5db;
+  background: var(--border-strong);
   border-radius: 4px;
 }
 

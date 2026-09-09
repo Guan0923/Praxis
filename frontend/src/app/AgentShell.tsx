@@ -179,7 +179,10 @@ export default function AgentShell(props: AgentShellProps) {
       onReorder={(projectId, orderedThreadIds) => userBackendRequest(() => props.onReorderSidebar(projectId, orderedThreadIds))}
       onSort={(projectId, sortBy) => userBackendRequest(() => props.onSortSidebar(projectId, sortBy))}
       onProfileUpdate={(profile) => userBackendRequest(() => props.onProfileUpdate(profile))}
-      onOpenSettings={() => userBackendRequest(() => props.setSettingsOpen(true))}
+      onOpenSettings={() => {
+        closeMobile();
+        userBackendRequest(() => props.setSettingsOpen(true));
+      }}
       collapsed={sidebarCollapsed}
       onToggleCollapse={() => {
         if (isMobile) closeMobile();
@@ -242,6 +245,7 @@ export default function AgentShell(props: AgentShellProps) {
     return (
       <div className="right-panel-side-chat">
         <ChatPage
+          showButtonTooltips={false}
           conversation={conversation}
           mode={conversation ? props.modeBySession[conversation.threadId ?? conversation.id] ?? "agent" : "agent"}
           displayMode={props.displayMode}
@@ -270,7 +274,7 @@ export default function AgentShell(props: AgentShellProps) {
   const panelOpen = props.page === "chat" && Boolean(props.current?.sessionId) && panel.payload?.state.collapsed === false;
   return (
     <Layout className={`app-shell${sidebarCollapsed && !isMobile ? " app-shell--sidebar-collapsed" : ""}`} style={{ minHeight: "100vh", height: "100vh" }}>
-      {!isMobile && <Layout.Sider id="chat-sidebar" width={280} collapsed={sidebarCollapsed} collapsedWidth={0} trigger={null} theme="light" style={{ background: "#f4f7f8", boxShadow: "4px 0 12px rgba(0, 0, 0, 0.08)", zIndex: 1 }}>{sidebar}</Layout.Sider>}
+      {!isMobile && <Layout.Sider id="chat-sidebar" width={280} collapsed={sidebarCollapsed} collapsedWidth={0} trigger={null} style={{ background: "var(--sidebar-bg)", borderRight: "1px solid var(--border)", zIndex: 1 }}>{sidebar}</Layout.Sider>}
       {isMobile && <Drawer title="会话列表" placement="left" size={280} open={mobileSidebarOpen} onClose={closeMobile} styles={{ body: { padding: 0 } }}>{sidebar}</Drawer>}
       <Layout style={{ minWidth: 0, minHeight: 0 }}>
         {sidebarCollapsed && !isMobile ? <Button className="sidebar-reopen-button" type="default" size="small" onClick={() => setSidebarCollapsed(false)} aria-label="展开侧边栏" aria-expanded={false} aria-controls="chat-sidebar" icon={<MenuOutlined />} /> : null}

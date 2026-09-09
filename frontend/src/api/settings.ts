@@ -3,6 +3,12 @@ import { requestJson, requestOptionalJson, requestVoid } from "./transport/reque
 
 export type UserProfile = LocalProfile;
 
+export type AppearanceMode = "light" | "dark";
+
+export interface AppearanceConfig {
+  mode: AppearanceMode;
+}
+
 export interface AgentConfig {
   tone: string;
   verbosity: string;
@@ -70,6 +76,7 @@ export interface TerminalOption {
 }
 
 export interface UserSettings {
+  appearance_config: AppearanceConfig;
   profile: UserProfile;
   agent_config: AgentConfig;
   provider_config: ProviderConfig;
@@ -138,6 +145,14 @@ export interface McpServerInput {
 
 export function getSettings(): Promise<UserSettings> {
   return requestJson<UserSettings>("/api/settings");
+}
+
+export function updateAppearanceConfig(mode: AppearanceMode): Promise<AppearanceConfig> {
+  return requestJson<AppearanceConfig>("/api/settings/appearance", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
 }
 
 export function getSkillSettings(): Promise<SkillSettingsResponse> {

@@ -259,9 +259,6 @@ export default function RightPanel({
   }));
   const extra = (
     <Space size={4}>
-      <Tooltip title="文件">
-        <Button type="text" size="small" icon={<FileOutlined />} aria-label="打开文件" disabled={controller.writable === false} onClick={() => run("files")} />
-      </Tooltip>
       <Dropdown
         menu={{ items: creationItems(run, sourceAvailable, terminalAvailable, terminalReason, controller.writable !== false) }}
         trigger={["click"]}
@@ -283,7 +280,7 @@ export default function RightPanel({
         <Space>
           <Button icon={<CommentOutlined />} disabled={!sourceAvailable || controller.writable === false} loading={controller.loading} onClick={() => run("side_chat")}>创建侧边聊天</Button>
           <Button icon={<ProductOutlined />} disabled={!terminalAvailable || controller.writable === false} loading={controller.loading} onClick={() => run("terminal")}>打开终端</Button>
-          <Button icon={<FileOutlined />} disabled={controller.writable === false} loading={controller.loading} onClick={() => run("files")}>打开文件</Button>
+          <Button aria-label="打开文件" icon={<FileOutlined />} disabled={controller.writable === false} loading={controller.loading} onClick={() => run("files")}>打开文件</Button>
         </Space>
         {!sourceAvailable ? <Typography.Text type="secondary">当前主聊天没有可用 Turn，暂时不能创建右栏窗口。</Typography.Text> : null}
         {sourceAvailable && !terminalAvailable ? <Typography.Text type="secondary">{terminalReason}</Typography.Text> : null}

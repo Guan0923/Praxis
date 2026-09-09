@@ -1,10 +1,12 @@
 /* ---------- Chat page ---------- */
 .chat-page {
+  --chat-content-width: 900px;
+  --chat-gutter: 32px;
   flex: 1;
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #ffffff;
+  background: var(--surface);
 }
 
 /* ---------- Message file references ---------- */
@@ -23,7 +25,7 @@
   padding: 3px 8px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.65);
+  background: var(--surface-overlay);
   font-size: 12.5px;
   color: var(--text);
   text-decoration: none;
@@ -45,7 +47,7 @@
 }
 
 .message-reference-unavailable {
-  color: #b91c1c;
+  color: var(--error);
   font-size: 11.5px;
   flex-shrink: 0;
 }
@@ -63,13 +65,13 @@
   left: 50%;
   bottom: 12px;
   transform: translateX(-50%);
-  background: rgba(255, 255, 255, 0.78);
+  background: var(--surface-overlay);
   transition: background-color 160ms ease;
 }
 
 .chat-scroll-bottom-button.ant-float-btn:hover,
 .chat-scroll-bottom-button.ant-float-btn:focus-visible {
-  background: #ffffff;
+  background: var(--surface);
 }
 
 .chat-scroll {
@@ -115,9 +117,9 @@
 .message {
   display: flex;
   gap: 12px;
-  max-width: 1038px;
-  margin: 0 auto 22px;
-  padding: 0 20px;
+  max-width: var(--chat-content-width);
+  margin: 0 auto 24px;
+  padding: 0 var(--chat-gutter);
   font-size: 17px;
 }
 
@@ -130,7 +132,7 @@
   flex-direction: column;
   align-items: flex-start;
   min-width: 0;
-  max-width: 72%;
+  max-width: 88%;
 }
 
 .message.user .message-content {
@@ -139,7 +141,7 @@
 
 .message.user .bubble {
   background: var(--user-bubble);
-  border-radius: 16px 4px 16px 16px;
+  border-radius: 8px;
   padding: 12px 16px;
   max-width: 100%;
   line-height: 1.6;
@@ -153,7 +155,7 @@
 }
 
 .message.user .user-bubble:hover {
-  box-shadow: 0 0 0 1px rgba(79, 107, 255, 0.28);
+  box-shadow: 0 0 0 1px var(--accent-glow);
 }
 
 .message.user.is-pending .user-bubble {
@@ -173,9 +175,9 @@
   box-sizing: border-box;
   padding: 10px;
   border: 1px solid var(--accent);
-  border-radius: 14px 4px 14px 14px;
+  border-radius: 8px;
   background: var(--user-bubble);
-  box-shadow: 0 2px 8px rgba(79, 107, 255, 0.12);
+  box-shadow: 0 2px 8px var(--accent-glow);
 }
 
 .message.user .message-content.is-editing {
@@ -189,9 +191,9 @@
   min-height: 66px;
   max-height: 240px;
   padding: 8px 9px;
-  border: 1px solid rgba(79, 107, 255, 0.3);
+  border: 1px solid var(--accent-border);
   border-radius: 8px;
-  background: #fff;
+  background: var(--surface);
   color: var(--text);
   font: inherit;
   line-height: 1.5;
@@ -215,7 +217,7 @@
   padding: 5px 9px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: #f8f9fb;
+  background: var(--surface-subtle);
   color: var(--text);
   font: inherit;
   font-size: 12px;
@@ -225,7 +227,7 @@
 .message-edit-actions button:last-child {
   border-color: var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .message-edit-actions button:disabled {
@@ -236,16 +238,29 @@
 .message.assistant .bubble {
   flex: 1;
   min-width: 0;
-  padding-top: 4px;
+  padding-top: 0;
   line-height: 1.7;
-  color: #000000;
+  color: var(--text);
 }
 
 .assistant-run-frame {
   position: relative;
   min-width: 0;
-  padding: 12px 14px 8px;
-  border: 1px solid transparent;
-  border-radius: 12px;
-  background: #fff;
+  padding: 0 0 8px;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+}
+
+.assistant-name {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.chat-page--compact {
+  --chat-gutter: 16px;
 }

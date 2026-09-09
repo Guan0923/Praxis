@@ -25,10 +25,11 @@ vi.mock("../api", async (importOriginal) => ({
 }));
 
 vi.mock("../components/AppSidebar", () => ({
-  default: (props: { collapsed?: boolean; onToggleCollapse?: () => void; onNew?: () => Promise<string> }) => (
+  default: (props: { collapsed?: boolean; onToggleCollapse?: () => void; onNew?: () => Promise<string>; onOpenSettings?: () => void }) => (
     <div data-testid="mock-sidebar">
       {!props.collapsed ? <button type="button" aria-label="折叠侧边栏" onClick={props.onToggleCollapse}>侧边栏</button> : null}
       <button type="button" aria-label="测试新建对话" onClick={() => void props.onNew?.()}>新建</button>
+      <button type="button" onClick={props.onOpenSettings}>用户设置</button>
     </div>
   ),
 }));
@@ -121,6 +122,17 @@ function makeProps(overrides: Partial<AgentShellProps> = {}): AgentShellProps {
 }
 
 describe("AgentShell sidebar collapse", () => {
+  it("closes the mobile sidebar before opening user settings", async () => {
+    vi.mocked(Grid.useBreakpoint).mockReturnValue({ md: false } as ReturnType<typeof Grid.useBreakpoint>);
+    const props = makeProps();
+    render(<AgentShell {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "打开会话列表" }));
+    expect(document.querySelector(".ant-drawer-open")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "用户设置" }));
+    expect(props.setSettingsOpen).toHaveBeenCalledWith(true);
+    await waitFor(() => expect(document.querySelector(".ant-drawer-open")).not.toBeInTheDocument());
+  });
+
   it("signals user backend activity before a user action", async () => {
     const props = makeProps();
     render(<AgentShell {...props} />);

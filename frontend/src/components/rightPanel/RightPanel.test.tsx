@@ -87,6 +87,21 @@ beforeEach(() => {
 });
 
 describe("RightPanel tabs", () => {
+  it("removes the top file shortcut while keeping the plus-menu file entry and tab hint", async () => {
+    const controller: RightPanelController = {
+      payload: payload([sideWindow("window-1", "Side")]), loading: false,
+      createWindow: vi.fn().mockResolvedValue(undefined), closeWindow: vi.fn(),
+      renameWindow: vi.fn(), setActive: vi.fn(), setLayout: vi.fn(),
+    };
+    render(<App><RightPanel controller={controller} sourceAvailable terminalAvailable terminalReason="" renderSideChat={() => null} /></App>);
+    expect(screen.queryByRole("button", { name: "打开文件" })).not.toBeInTheDocument();
+    fireEvent.mouseEnter(screen.getByText("Side"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("双击重命名");
+    fireEvent.mouseLeave(screen.getByText("Side"));
+    fireEvent.click(screen.getByRole("button", { name: "新增右栏窗口" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /文件$/ }));
+    expect(controller.createWindow).toHaveBeenCalledWith("files");
+  });
   it("opens the panel directly from the main launcher without creating a window", () => {
     const controller: RightPanelController = {
       payload: payload([], true),

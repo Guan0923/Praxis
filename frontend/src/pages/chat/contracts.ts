@@ -15,6 +15,7 @@ import type { ComposerActionMode } from "./Composer";
 import type { SandboxHealthState } from "../../app/useSandboxHealth";
 
 export interface ChatPageProps {
+  showButtonTooltips?: boolean;
   conversation: Conversation | null;
   agentThreadNavigation?: boolean;
   displayMode?: DisplayMode;

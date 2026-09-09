@@ -53,6 +53,7 @@ class LocalSettingsStore:
         self.config_store.ensure_defaults(
             {
                 "profile": {"display_name": "本地用户", "agent_preferences": ""},
+                "appearance": {"mode": "light"},
                 "agent": dict(DEFAULT_AGENT_CONFIG),
                 "runtime": {"log_full_messages": True, **DEFAULT_RUNTIME_CONFIG},
                 "sandbox": dict(DEFAULT_SANDBOX_CONFIG),
@@ -104,6 +105,20 @@ class LocalSettingsStore:
             raise ValueError("profile is too long")
         result = {"display_name": name, "agent_preferences": preferences}
         self.config_store.update({"profile": result})
+        return result
+
+    def appearance_config(self) -> dict[str, str]:
+        raw = self.config_store.read().get("appearance", {})
+        mode = raw.get("mode", "light") if isinstance(raw, Mapping) else "light"
+        if mode not in ("light", "dark"):
+            raise ValueError("appearance mode must be light or dark")
+        return {"mode": str(mode)}
+
+    def update_appearance_config(self, mode: str) -> dict[str, str]:
+        if mode not in ("light", "dark"):
+            raise ValueError("appearance mode must be light or dark")
+        result = {"mode": mode}
+        self.config_store.update({"appearance": result})
         return result
 
     def agent_config(self) -> dict[str, object]:
@@ -358,6 +373,7 @@ class LocalSettingsStore:
     def settings(self) -> dict[str, object]:
         return {
             "profile": self.profile(),
+            "appearance_config": self.appearance_config(),
             "agent_config": self.agent_config(),
             "provider_config": self.provider_config(),
             "provider_configs": self.provider_configs(),

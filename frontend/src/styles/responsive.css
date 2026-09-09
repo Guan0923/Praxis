@@ -4,7 +4,7 @@
   }
 
   .composer {
-    padding: 0 12px 14px;
+    padding: 0 var(--chat-gutter) 16px;
   }
 
   .composer.has-todo {
@@ -73,7 +73,7 @@
 }
 
 .user-settings-nav {
-  border-right: 1px solid #e5e7eb;
+  border-right: 1px solid var(--border);
   padding: 12px 8px 12px 0;
 }
 
@@ -124,13 +124,15 @@
   }
 
   .user-settings-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     min-height: 0;
   }
 
   .user-settings-nav {
+    min-width: 0;
     border-right: 0;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border);
     padding: 0 0 8px;
   }
 
@@ -138,11 +140,13 @@
     display: flex;
     flex-wrap: nowrap;
     overflow-x: auto;
-    min-width: max-content;
+    min-width: 0;
+    width: 100%;
   }
 
   .user-settings-nav .ant-menu-item {
     flex: 0 0 auto;
+    width: auto;
   }
 
   .user-settings-detail {

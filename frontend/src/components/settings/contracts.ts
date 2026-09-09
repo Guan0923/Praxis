@@ -4,6 +4,7 @@ import type { LocalProfile } from "../../types";
 
 export type SettingsSection =
   | "profile"
+  | "appearance"
   | "agent"
   | "runtime"
   | "sandbox"
@@ -138,6 +139,7 @@ export function normalizeSettings(next: UserSettings): UserSettings {
 
 export function fallbackSettings(profile: LocalProfile): UserSettings {
   return {
+    appearance_config: { mode: "light" },
     profile: { display_name: profile.display_name, agent_preferences: profile.agent_preferences },
     agent_config: defaultAgent,
     provider_config: defaultProvider,
