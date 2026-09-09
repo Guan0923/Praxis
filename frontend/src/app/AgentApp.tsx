@@ -329,9 +329,11 @@ function AgentApp() {
     updateLastMessage,
     rebindRunSession,
     refreshSessions: () => refreshSessions(),
+    refreshQueuedMessages,
     updateConversation,
     recoverConversation,
     checkSandboxHealth: sandboxHealth.check,
+    onControlError: setActionError,
   });
 
   useSandboxRunLifecycle({

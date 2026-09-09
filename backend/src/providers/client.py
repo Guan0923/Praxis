@@ -7,6 +7,7 @@ import json
 import logging
 import time
 from collections.abc import Callable, Iterator
+from threading import Event
 from time import perf_counter
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -177,7 +178,7 @@ class LLMClient:
                 self._publish_request_failure(runtime, exc, publish)
                 raise
             except ModelTransportError as exc:
-                if runtime.stop_requested():
+                if runtime.operation_interrupted():
                     raise
                 if exc.retryable and attempt < max_transport_retries:
                     delay = exc.retry_after if exc.retry_after is not None else 0.5 * (2**attempt)
@@ -193,7 +194,19 @@ class LLMClient:
                             },
                         )
                     )
-                    time.sleep(delay)
+                    interrupted = Event()
+                    register = runtime.services.register_operation_abort
+                    unregister = register(interrupted.set) if register is not None else None
+                    try:
+                        if register is not None:
+                            interrupted.wait(delay)
+                        else:
+                            time.sleep(delay)
+                        if runtime.operation_interrupted():
+                            raise
+                    finally:
+                        if unregister is not None:
+                            unregister()
                     continue
                 logger.warning(
                     "model transport failed provider=%s model=%s operation=%s status_code=%s error_type=%s message=%s",
@@ -261,7 +274,7 @@ class LLMClient:
                     self.llm.headers,
                     payload,
                     self.llm.timeout_seconds,
-                    cancel_requested=runtime.stop_requested,
+                    cancel_requested=runtime.operation_interrupted,
                     register_abort=runtime.services.register_operation_abort,
                 )
                 recorded_stream = _RecordedStream(source)
@@ -272,7 +285,7 @@ class LLMClient:
                     self.llm.headers,
                     payload,
                     self.llm.timeout_seconds,
-                    cancel_requested=runtime.stop_requested,
+                    cancel_requested=runtime.operation_interrupted,
                     register_abort=runtime.services.register_operation_abort,
                 )
             runtime.exchange.raw_response = raw

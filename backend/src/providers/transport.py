@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import copy
 import json
+import socket
 from collections.abc import Callable, Iterator
+from contextvars import ContextVar
 from time import perf_counter
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
 from backend.domain import safe_error_message
 
@@ -24,10 +29,54 @@ _TERMINAL_EVENTS = frozenset(
     }
 )
 
+_request_abort: ContextVar[Callable | None] = ContextVar("model_request_abort", default=None)
+
+
+class _InterruptibleConnection:
+    def getresponse(self):
+        register = _request_abort.get()
+        sock = self.sock
+        unregister = register(lambda: _abort_socket(sock)) if register is not None and sock is not None else None
+        try:
+            return super().getresponse()
+        finally:
+            if unregister is not None:
+                unregister()
+
+
+class _HttpConnection(_InterruptibleConnection, HTTPConnection):
+    pass
+
+
+class _HttpsConnection(_InterruptibleConnection, HTTPSConnection):
+    pass
+
+
+class _HttpPool(HTTPConnectionPool):
+    ConnectionCls = _HttpConnection
+
+
+class _HttpsPool(HTTPSConnectionPool):
+    ConnectionCls = _HttpsConnection
+
+
+class _InterruptibleAdapter(HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        super().init_poolmanager(*args, **kwargs)
+        self.poolmanager.pool_classes_by_scheme = {"http": _HttpPool, "https": _HttpsPool}
+
+    def proxy_manager_for(self, *args, **kwargs):
+        manager = super().proxy_manager_for(*args, **kwargs)
+        manager.pool_classes_by_scheme = {"http": _HttpPool, "https": _HttpsPool}
+        return manager
+
 
 class JsonHttpTransport:
     def __init__(self, session: requests.Session | None = None) -> None:
         self.session = session or requests.Session()
+        if session is None:
+            self.session.mount("http://", _InterruptibleAdapter())
+            self.session.mount("https://", _InterruptibleAdapter())
         self.last_metadata: dict[str, Any] = {}
 
     def post_json(
@@ -43,6 +92,7 @@ class JsonHttpTransport:
         started = perf_counter()
         response: requests.Response | None = None
         unregister: Callable[[], None] | None = None
+        abort_token = _request_abort.set(register_abort)
         try:
             _raise_if_cancelled(cancel_requested, stream_started=False)
             response = self.session.post(
@@ -55,7 +105,7 @@ class JsonHttpTransport:
             )
             close_response = getattr(response, "close", None)
             if register_abort is not None and callable(close_response):
-                unregister = register_abort(close_response)
+                unregister = register_abort(lambda: _abort_response(response))
             _raise_if_cancelled(cancel_requested, stream_started=False)
             response.raise_for_status()
             data = response.json()
@@ -73,6 +123,7 @@ class JsonHttpTransport:
                 raise _paused_error(stream_started=False) from None
             raise
         finally:
+            _request_abort.reset(abort_token)
             if unregister is not None:
                 unregister()
             _close_response(response)
@@ -100,6 +151,7 @@ class JsonHttpTransport:
         saw_done = False
         saw_event = False
         unregister: Callable[[], None] | None = None
+        abort_token = _request_abort.set(register_abort)
         try:
             _raise_if_cancelled(cancel_requested, stream_started=False)
             response = self.session.post(
@@ -112,11 +164,11 @@ class JsonHttpTransport:
             )
             close_response = getattr(response, "close", None)
             if register_abort is not None and callable(close_response):
-                unregister = register_abort(close_response)
+                unregister = register_abort(lambda: _abort_response(response))
             _raise_if_cancelled(cancel_requested, stream_started=False)
             response.raise_for_status()
             pending_event: str | None = None
-            for line in response.iter_lines(decode_unicode=False):
+            for line in response.iter_lines(chunk_size=1, decode_unicode=False):
                 _raise_if_cancelled(cancel_requested, stream_started=saw_event)
                 if not line:
                     pending_event = None
@@ -181,6 +233,7 @@ class JsonHttpTransport:
                 raise _paused_error(stream_started=saw_event) from None
             raise
         finally:
+            _request_abort.reset(abort_token)
             if unregister is not None:
                 unregister()
             _close_response(response)
@@ -203,6 +256,27 @@ def _close_response(response: Any) -> None:
     close = getattr(response, "close", None)
     if callable(close):
         close()
+
+
+def _abort_response(response: Any) -> None:
+    raw = getattr(response, "raw", None)
+    sock = getattr(getattr(raw, "_sock_shutdown", None), "__self__", None)
+    if isinstance(sock, socket.socket):
+        _abort_socket(sock)
+    else:
+        _close_response(response)
+
+
+def _abort_socket(sock: socket.socket) -> None:
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    # A response makefile keeps socket.close() alive. Detach the handle to
+    # also unblock a Windows reader that is waiting for headers or a packet.
+    handle = sock.detach()
+    if handle != -1:
+        socket.close(handle)
 
 
 _RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})

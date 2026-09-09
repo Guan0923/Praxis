@@ -66,6 +66,8 @@ class PlanProposalWorkflow(PlanControlMixin):
             _consume_agent_reports(runtime)
             if cancel_if_requested(runtime):
                 return None
+            if consume_steering(runtime, phase="before_model_request") is not None:
+                continue
             if not _ensure_tool_budget(runtime):
                 return None
             if not _claim_model_turn(runtime, "decision"):
@@ -78,6 +80,9 @@ class PlanProposalWorkflow(PlanControlMixin):
                 _publish_repairs(runtime, capabilities)
                 if cancel_if_requested(runtime):
                     return None
+                interrupted = runtime.operation_interrupted()
+                if consume_steering(runtime, phase="interrupted_model_response") is not None or interrupted:
+                    continue
                 fail_run(runtime, exc, **planning_failure_data(exc, capabilities.name))
                 return None
             except BaseException:

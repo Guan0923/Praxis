@@ -340,6 +340,7 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
             if any(value.get("role") == "user" and value.get("delivery_id") == delivery_id for value in selected):
                 return
             message["delivery_id"] = delivery_id
+        self._ensure_assistant_message()
         self.assistant = self.writer.append_message(self.assistant, message, persist=True)
         self.last_node = self.assistant
         message_idx = len(self.assistant.data[self.assistant.current_data_idx]) - 1

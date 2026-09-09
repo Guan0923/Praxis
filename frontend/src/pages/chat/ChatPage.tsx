@@ -67,7 +67,10 @@ export default function ChatPage({
   sandboxHealth = { phase: "healthy", detail: null },
 }: ChatPageProps) {
   const { message } = AntApp.useApp();
-  const sendPendingRef = useRef(false);
+  const sendPendingRef = useRef<object | null>(null);
+  const [sendPending, setSendPending] = useState(false);
+  const createdConversationRef = useRef<string | null>(null);
+  useEffect(() => { sendPendingRef.current = null; setSendPending(false); }, [canonicalConversation?.id]);
   const agentThreadView = useAgentThreadView({
     canonical: canonicalConversation,
     enabled: agentThreadNavigation,
@@ -104,7 +107,11 @@ export default function ChatPage({
   const [dismissedTodoPanels, setDismissedTodoPanels] = useState<Set<string>>(() => new Set());
   const [mainView, setMainView] = useState<ChatMainView>("chat");
 
-  const messages = conversation?.messages ?? [];
+  const [unboundMessages, setUnboundMessages] = useState<Record<string, ChatMessage>>({});
+  const unboundMessage = unboundMessages[conversation?.id ?? ""];
+  const messages = unboundMessage
+    ? [...(conversation?.messages ?? []), unboundMessage]
+    : conversation?.messages ?? [];
   const { chatScrollRef, handleScroll: handleChatScroll, isAtBottom, scrollToBottom } = useChatScroll(
     conversation?.id,
     messages,
@@ -122,6 +129,11 @@ export default function ChatPage({
     conversationId: conversation?.id,
     sessionId: conversation?.sessionId,
     completionDisabled,
+    preserveDraft: (id) => {
+      if (!id || createdConversationRef.current !== id) return false;
+      createdConversationRef.current = null;
+      return true;
+    },
     onTextChanged: (change) => {
       setCommandTriggerState(commandTrigger(change.prompt, change.caret));
       setCommandMenuDismissedFor((dismissed) => dismissed === change.prompt ? dismissed : null);
@@ -257,7 +269,7 @@ export default function ChatPage({
   } = messageEditing;
   const hasDraft = Boolean(input.trim() || references.length > 0 || pendingUploads.some((upload) => upload.status === "done"));
   const composerActionState = composerAction(
-    agentThreadView.isSubagent ? undefined : activeRuntimeNode?.status,
+    agentThreadView.isSubagent ? undefined : busy ? "running" : activeRuntimeNode?.status,
     hasDraft,
     pendingUploads.some((upload) => upload.status === "uploading"),
   );
@@ -339,6 +351,7 @@ export default function ChatPage({
   async function ensureSession(): Promise<{ conversationId: string; sessionId: string }> {
     if (!conversation) {
       const id = await onNew();
+      createdConversationRef.current = id;
       return { conversationId: id, sessionId: id };
     }
     const conversationId = conversation.id;
@@ -366,30 +379,31 @@ export default function ChatPage({
     deliveryId?: string,
     onAccepted?: () => void,
     onAdmissionRejected?: () => void,
+    turnId: string = crypto.randomUUID(),
   ) {
     if (sandboxBlocked) throw new Error("沙箱 Broker 尚未确认健康。");
     if (!onRun) throw new Error("ChatPage requires the Turn run controller.");
     await onRun({
-        conversationId,
-        sessionId,
-        prompt,
-        resume,
-        mode,
-        permissionMode,
-        reasoningEffort,
-        providerName: requestProviderName,
-        model: requestModel,
-        sourceNodeId: sourceNodeId ?? undefined,
-        threadId: conversation?.threadId ?? sessionId,
-        turnId: crypto.randomUUID(),
-        references,
-        rewindTurnId,
-        waitForActiveRun,
-        onBaseline,
-        queuedDelivery,
-        deliveryId,
-        onAccepted,
-        onAdmissionRejected,
+      conversationId,
+      sessionId,
+      prompt,
+      resume,
+      mode,
+      permissionMode,
+      reasoningEffort,
+      providerName: requestProviderName,
+      model: requestModel,
+      sourceNodeId: sourceNodeId ?? undefined,
+      threadId: conversation?.threadId ?? sessionId,
+      turnId,
+      references,
+      rewindTurnId,
+      waitForActiveRun,
+      onBaseline,
+      queuedDelivery,
+      deliveryId,
+      onAccepted,
+      onAdmissionRejected,
     });
   }
 
@@ -398,13 +412,31 @@ export default function ChatPage({
     target?: { conversationId: string; sessionId: string; sourceNodeId?: string; rewindTurnId?: string },
     references?: FileReference[],
     onAccepted?: () => void,
+    retryMessage?: ChatMessage,
   ) {
-    const { conversationId, sessionId } = target ?? await ensureSession();
-    const deliveryId = crypto.randomUUID();
-    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content: prompt, events: [], references, deliveryId, pending: true };
-    const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "", events: [], running: true };
+    const deliveryId = retryMessage?.deliveryId ?? crypto.randomUUID();
+    const userMessage: ChatMessage = { id: retryMessage?.id ?? crypto.randomUUID(), role: "user", content: prompt, events: [], references, deliveryId, pending: true, sourceNodeId: retryMessage ? retryMessage.sourceNodeId : defaultSourceNodeId() };
+    const localKey = target?.conversationId ?? conversation?.id ?? "";
+    setUnboundMessages((current) => ({ ...current, [localKey]: userMessage }));
+    let resolved: { conversationId: string; sessionId: string };
+    try {
+      resolved = target ?? await ensureSession();
+    } catch (error) {
+      setUnboundMessages((current) => current[localKey] === userMessage
+        ? { ...current, [localKey]: { ...userMessage, pending: false, error: String((error as Error).message ?? error) } }
+        : current);
+      throw error;
+    }
+    const { conversationId, sessionId } = resolved;
+    setUnboundMessages((current) => {
+      if (current[localKey] !== userMessage) return current;
+      const next = { ...current };
+      delete next[localKey];
+      return next;
+    });
+    const assistantMessage: ChatMessage = { id: `${userMessage.id}:response`, role: "assistant", content: "", events: [], running: true };
     onUpdate(conversationId, (current) => {
-      let visibleMessages = current.messages;
+      let visibleMessages = current.messages.filter((item) => item.id !== userMessage.id && item.id !== assistantMessage.id);
       let runtimeNodes = current.runtimeNodes;
       if (target?.rewindTurnId) {
         if (current.runtimeNodes) {
@@ -428,98 +460,143 @@ export default function ChatPage({
         lastNodeId: target?.rewindTurnId ?? current.lastNodeId,
       };
     });
-    await dispatchRun(
-      conversationId,
-      sessionId,
-      prompt,
-      false,
-      target ? target.sourceNodeId ?? null : defaultSourceNodeId() ?? null,
-      references,
-      target?.rewindTurnId,
-      Boolean(activeRuntimeNode && activeRuntimeNode.status !== "running"),
-      undefined,
-      undefined,
-      target ? undefined : deliveryId,
-      onAccepted,
-      () => onUpdate(conversationId, (current) => ({
+    const reject = () => {
+      onAccepted?.();
+      onUpdate(conversationId, (current) => ({
         ...current,
-        messages: current.messages.filter((message) => message.id !== userMessage.id && message.id !== assistantMessage.id),
-      })),
-    );
+        messages: current.messages.map((item) => item.id === userMessage.id
+          ? { ...item, pending: false, error: "发送失败" }
+          : item.id === assistantMessage.id ? { ...item, running: false } : item),
+      }));
+    };
+    try {
+      await dispatchRun(
+        conversationId,
+        sessionId,
+        prompt,
+        false,
+        target ? target.sourceNodeId ?? null : userMessage.sourceNodeId ?? null,
+        references,
+        target?.rewindTurnId,
+        Boolean(retryMessage || (activeRuntimeNode && activeRuntimeNode.status !== "running")),
+        undefined,
+        undefined,
+        target ? undefined : deliveryId,
+        () => {
+          onUpdate(conversationId, (current) => ({
+            ...current,
+            messages: current.messages.map((item) => item.id === userMessage.id ? { ...item, pending: false } : item),
+          }));
+          onAccepted?.();
+        },
+        reject,
+        userMessage.id,
+      );
+    } catch (error) {
+      reject();
+      throw error;
+    }
   }
 
+  async function retryFailedMessage(item: ChatMessage) {
+    if (sendPendingRef.current || interactionBusy || sessionReadOnly) return;
+    const attempt = {};
+    sendPendingRef.current = attempt;
+    setSendPending(true);
+    const release = () => {
+      if (sendPendingRef.current === attempt) {
+        sendPendingRef.current = null;
+        setSendPending(false);
+      }
+    };
+    try {
+      if (agentThreadView.isSubagent) {
+        await agentThreadView.sendMessage({ content: item.content, references: item.references, mode, permissionMode, providerName: requestProviderName, model: requestModel }, item);
+      } else {
+        await runPrompt(item.content, undefined, item.references, release, item);
+      }
+    } catch (error) {
+      void message.error(String((error as Error).message ?? error));
+    } finally {
+      release();
+    }
+  }
 
   async function send() {
     if (compactionPending || sandboxBlocked || sessionReadOnly || sendPendingRef.current) return;
-    sendPendingRef.current = true;
-    let released = false;
+    const attempt = {};
+    sendPendingRef.current = attempt;
+    setSendPending(true);
     const releaseSend = () => {
-      if (released) return;
-      released = true;
-      sendPendingRef.current = false;
+      if (sendPendingRef.current === attempt) {
+        sendPendingRef.current = null;
+        setSendPending(false);
+      }
     };
     try {
-    const prompt = input.trim();
-    // A running assistant no longer blocks the composer: a draft is handed
-    // to the in-memory FIFO queue below.  Only an in-progress upload prevents
-    // submission because its final reference is not available yet.
-    if (pendingUploads.some((upload) => upload.status === "uploading")) return;
-    if (actionMode === "resume" && conversation?.sessionId && activeRuntimeNode) {
-      await dispatchRun(
-        conversation.id,
-        conversation.sessionId,
-        null,
-        true,
-        activeRuntimeNode.id,
+      const prompt = input.trim();
+      // A running assistant no longer blocks the composer: a draft is handed
+      // to the in-memory FIFO queue below.  Only an in-progress upload prevents
+      // submission because its final reference is not available yet.
+      if (pendingUploads.some((upload) => upload.status === "uploading")) return;
+      if (actionMode === "resume" && conversation?.sessionId && activeRuntimeNode) {
+        await dispatchRun(
+          conversation.id,
+          conversation.sessionId,
+          null,
+          true,
+          activeRuntimeNode.id,
+          undefined,
+          undefined,
+          true,
+          releaseSend,
+        );
+        return;
+      }
+      const mergedReferences = collectedReferences();
+      if (!prompt && mergedReferences.length === 0) return;
+      // Slash commands are control actions, not conversational turns.  They
+      // must never be persisted into the running FIFO queue.  Keep command
+      // handling ahead of the running branch so `/compact`, `/trace`, etc. remain
+      // explicit commands even while an assistant is active.
+      const command = parseCommand(prompt);
+      if (command && prompt) {
+        await chatCommands.executeCommand(command.name);
+        return;
+      }
+      if (agentThreadView.isSubagent) {
+        clearComposer();
+        setPendingUploads([]);
+        try {
+          await agentThreadView.sendMessage({
+            content: prompt,
+            references: mergedReferences.length > 0 ? mergedReferences : undefined,
+            mode,
+            permissionMode,
+            providerName: requestProviderName,
+            model: requestModel,
+          });
+        } catch (error) {
+          void message.error(String((error as Error).message ?? error));
+        }
+        return;
+      }
+      if (busy || activeRuntimeNode?.status === "running") {
+        const queued = queuedMessageFlow.queueCurrentPrompt(prompt, mergedReferences);
+        releaseSend();
+        await queued;
+        return;
+      }
+      clearComposer();
+      setPendingUploads([]);
+      await runPrompt(
+        prompt,
         undefined,
-        undefined,
-        true,
+        mergedReferences.length > 0 ? mergedReferences : undefined,
         releaseSend,
       );
-      return;
-    }
-    const mergedReferences = collectedReferences();
-    if (!prompt && mergedReferences.length === 0) return;
-    // Slash commands are control actions, not conversational turns.  They
-    // must never be persisted into the running FIFO queue.  Keep command
-    // handling ahead of the running branch so `/compact`, `/trace`, etc. remain
-    // explicit commands even while an assistant is active.
-    const command = parseCommand(prompt);
-    if (command && prompt) {
-      await chatCommands.executeCommand(command.name);
-      return;
-    }
-    if (agentThreadView.isSubagent) {
-      try {
-        await agentThreadView.sendMessage({
-          content: prompt,
-          references: mergedReferences.length > 0 ? mergedReferences : undefined,
-          mode,
-          permissionMode,
-          providerName: requestProviderName,
-          model: requestModel,
-        });
-        clearComposer();
-        setPendingUploads([]);
-      } catch (error) {
-        void message.error(String((error as Error).message ?? error));
-      }
-      return;
-    }
-    if (activeRuntimeNode?.status === "running") {
-      await queuedMessageFlow.queueCurrentPrompt(prompt, mergedReferences);
-      return;
-    }
-    await runPrompt(
-      prompt,
-      undefined,
-      mergedReferences.length > 0 ? mergedReferences : undefined,
-      () => {
-        clearComposer();
-        setPendingUploads([]);
-        releaseSend();
-      },
-    );
+    } catch (error) {
+      void message.error(String((error as Error).message ?? error));
     } finally {
       releaseSend();
     }
@@ -580,6 +657,7 @@ export default function ChatPage({
       {visibleMainView === "trace" ? <TracePage key={currentThreadId} turns={traceTurns} /> : <>
       <div className="chat-content">
         <ChatMessageList
+          onRetrySend={(item) => void retryFailedMessage(item)}
           messages={messages}
           sessionId={conversation?.sessionId}
           display={display}
@@ -654,7 +732,7 @@ export default function ChatPage({
         onStop={queuedMessageFlow.pauseOrSteer}
         onSend={() => void send()}
         actionMode={actionMode}
-        submitDisabled={sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || composerActionState.disabled}
+        submitDisabled={sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || composerActionState.disabled || (sendPending && actionMode === "send")}
         disabled={sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly}
         disabledReason={sandboxBlocked
           ? sandboxHealth.phase === "checking" ? "正在检查沙箱 Broker" : "沙箱 Broker 不可用"

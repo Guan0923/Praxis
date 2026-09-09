@@ -41,4 +41,7 @@ export interface QueuedMessage {
   state: "pending" | "dispatched";
   created_at: string;
   updated_at: string;
+  saving?: boolean;
+  error?: string;
+  editing?: boolean;
 }

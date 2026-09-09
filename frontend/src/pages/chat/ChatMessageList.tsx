@@ -1,4 +1,4 @@
-import { LeftOutlined, RightOutlined } from "@ant-design/icons";
+import { LeftOutlined, ReloadOutlined, RightOutlined } from "@ant-design/icons";
 import { Button, Input } from "antd";
 import type { TextAreaRef } from "antd/es/input/TextArea";
 import type { MouseEvent as ReactMouseEvent, RefObject, UIEventHandler } from "react";
@@ -32,6 +32,7 @@ interface ChatMessageListProps {
   onDecision: (request: DecisionRequest, choice: string, options?: { supplement?: string; answers?: Record<string, string[]> }) => Promise<void>;
   onFork?: (messageId: string) => void;
   sandboxFailure?: string | null;
+  onRetrySend?: (message: ChatMessage) => void;
 }
 
 export function ChatMessageList({
@@ -58,6 +59,7 @@ export function ChatMessageList({
   onDecision,
   onFork,
   sandboxFailure,
+  onRetrySend,
 }: ChatMessageListProps) {
   return (
     <div className="chat-scroll" ref={chatScrollRef} data-conversation-scroll onScroll={onScroll}>
@@ -115,7 +117,13 @@ export function ChatMessageList({
                         ))}
                       </div>
                     ) : null}
-                    {message.pending ? <span className="agent-message-pending" role="status">正在交给主 Agent 转发…</span> : null}
+                    {message.pending ? <span className="agent-message-pending" role="status">发送中…</span> : null}
+                    {message.error ? (
+                      <span role="alert">
+                        {message.error}
+                        <Button type="text" size="small" icon={<ReloadOutlined />} title="重试发送" aria-label="重试发送" disabled={interactionBusy} onClick={(event) => { event.stopPropagation(); onRetrySend?.(message); }} />
+                      </span>
+                    ) : null}
                   </div>
                 )}
                 {editingMessageId !== message.id ? (

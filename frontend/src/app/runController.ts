@@ -9,12 +9,30 @@ export interface RunControllerCallbacks {
   updateLastMessage: (conversationId: string, updater: (message: ChatMessage) => ChatMessage) => void;
   rebindRunSession: (conversationId: string, sessionId: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
+  refreshQueuedMessages?: (conversationId: string) => Promise<void>;
   updateConversation?: (conversationId: string, updater: (conversation: import("../types").Conversation) => import("../types").Conversation) => void;
   recoverConversation: (conversationId: string, sessionId: string, turnId?: string) => Promise<void>;
   checkSandboxHealth?: () => Promise<unknown>;
+  onControlError?: (message: string) => void;
 }
 
 export function createRunController(callbacks: RunControllerCallbacks) {
+  function requestPause(conversationId: string, active: ActiveRun): void {
+    if (!active.turnId || active.cancelIssued) return;
+    active.cancelIssued = true;
+    void pauseTurn(active.turnId, active.sessionId).catch((error) => {
+      if (callbacks.activeRuns.get(conversationId) !== active) return;
+      active.stopRequested = false;
+      active.cancelIssued = false;
+      const message = `暂停失败，请重试：${String((error as Error).message ?? error)}`;
+      callbacks.onControlError?.(message);
+      callbacks.updateLastMessage(conversationId, (item) => ({
+        ...item,
+        error: message,
+      }));
+    });
+  }
+
   async function runConversation(request: ChatRunRequest): Promise<void> {
     const previous = callbacks.activeRuns.get(request.conversationId);
     if (previous) {
@@ -27,7 +45,7 @@ export function createRunController(callbacks: RunControllerCallbacks) {
     const settled = new Promise<void>((resolve) => {
       releaseSettled = resolve;
     });
-    const active: ActiveRun = { controller, sessionId: request.sessionId, turnId: request.turnId, settled };
+    const active: ActiveRun = { controller, sessionId: request.sessionId, turnId: request.attach ? request.turnId : undefined, settled };
     callbacks.activeRuns.set(request.conversationId, active);
     const accumulator = runtimeNodeAccumulator();
     const pendingTurns = new Map<string, RuntimeStateNode>();
@@ -108,9 +126,8 @@ export function createRunController(callbacks: RunControllerCallbacks) {
         || message.patch?.current_data_idx !== undefined
         || message.operations?.some((operation) => operation.op === "append_message") === true;
       scheduleFrameFlush();
-      if (active.stopRequested && !active.cancelIssued) {
-        active.cancelIssued = true;
-        void pauseTurn(turn.id, request.sessionId).catch(() => undefined);
+      if (active.stopRequested && !active.cancelIssued && turn.status === "running") {
+        requestPause(request.conversationId, active);
       }
     };
 
@@ -227,6 +244,7 @@ export function createRunController(callbacks: RunControllerCallbacks) {
         callbacks.activeRuns.delete(request.conversationId);
       }
       await callbacks.refreshSessions().catch(() => undefined);
+      await callbacks.refreshQueuedMessages?.(request.conversationId).catch(() => undefined);
       releaseSettled();
     }
   }
@@ -235,10 +253,7 @@ export function createRunController(callbacks: RunControllerCallbacks) {
     const active = callbacks.activeRuns.get(id);
     if (!active || active.stopRequested) return;
     active.stopRequested = true;
-    if (active.turnId) {
-      active.cancelIssued = true;
-      void pauseTurn(active.turnId, active.sessionId).catch(() => undefined);
-    }
+    requestPause(id, active);
   }
 
   return { runConversation, stopConversation };

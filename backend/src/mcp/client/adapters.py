@@ -8,14 +8,21 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel
 
-from backend.tools import ToolError
+from backend.tools import ToolError, ToolInvocationContext
 
 from ..config import McpServerConfig
 from ..controlled_stdio import StdioServerParameters
 
 
 class _McpCaller(Protocol):
-    def call(self, server_name: str, tool_name: str, arguments: dict[str, Any]) -> str: ...
+    def call(
+        self,
+        server_name: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        context: ToolInvocationContext | None = None,
+    ) -> str: ...
 
 
 _MAX_RESULT_CHARS = 20_000
@@ -24,6 +31,13 @@ _MAX_RESULT_CHARS = 20_000
 def _handler(manager: _McpCaller, server_name: str, tool_name: str):
     def invoke(**arguments: Any) -> str:
         return manager.call(server_name, tool_name, arguments)
+
+    return invoke
+
+
+def _context_handler(manager: _McpCaller, server_name: str, tool_name: str):
+    def invoke(context: ToolInvocationContext, **arguments: Any) -> str:
+        return manager.call(server_name, tool_name, arguments, context=context)
 
     return invoke
 

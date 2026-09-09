@@ -13,6 +13,7 @@ interface ComposerFilesOptions {
   conversationId?: string;
   sessionId?: string;
   completionDisabled: boolean;
+  preserveDraft?: (conversationId?: string) => boolean;
   onTextChanged: (change: FileMentionChange) => void;
 }
 
@@ -20,6 +21,7 @@ export function useComposerFiles({
   conversationId,
   sessionId,
   completionDisabled,
+  preserveDraft,
   onTextChanged,
 }: ComposerFilesOptions) {
   const [input, setInput] = useState("");
@@ -41,6 +43,7 @@ export function useComposerFiles({
     && fileCandidates.length > 0;
 
   useEffect(() => {
+    if (preserveDraft?.(conversationId)) return;
     for (const upload of pendingUploads) {
       if (upload.status === "uploading") discardedUploadUidsRef.current.add(upload.uid);
     }

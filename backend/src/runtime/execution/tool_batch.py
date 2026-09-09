@@ -223,6 +223,7 @@ class ToolBatchExecutor:
                 execution_slot=lambda: execution_slot(index),
                 commit_lock=commit_lock,
                 action_number=action_offset + index + 1,
+                cancel_requested=lambda: stop.is_set() or runtime.operation_interrupted(),
             )
 
         with steering_lock:
