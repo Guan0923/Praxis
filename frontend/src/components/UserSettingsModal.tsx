@@ -8,16 +8,20 @@ import { ProviderAddSection, ProviderManageSection } from "./settings/ProviderSe
 import { McpSettingsSection } from "./settings/McpSettingsSection";
 import { SandboxSettingsSection } from "./settings/SandboxSettingsSection";
 import { SkillSettingsSection } from "./settings/SkillSettingsSection";
+import MemorySettingsSection from "../pages/MemoryPage";
 import type { SettingsSection, UserSettingsModalProps } from "./settings/contracts";
 import { useUserSettingsState } from "./settings/useUserSettingsState";
+import { AppearanceSettingsSection } from "./settings/AppearanceSettingsSection";
 
 const menuItems = [
   { key: "profile", label: "个人简介" },
+  { key: "appearance", label: "外观" },
   { key: "agent", label: "Agent 配置" },
   { key: "runtime", label: "运行配置" },
   { key: "sandbox", label: "沙箱" },
   { key: "skills", label: "Skill" },
   { key: "mcp", label: "MCP" },
+  { key: "memory", label: "记忆" },
   { key: "provider_add", label: "添加提供商" },
   { key: "provider_manage", label: "Provider 与模型" },
 ];
@@ -41,11 +45,13 @@ export default function UserSettingsModal(props: UserSettingsModalProps) {
       </nav>
       <section className="user-settings-detail">
         {state.section === "profile" ? <ProfileSettingsSection state={state} /> : null}
+        {state.section === "appearance" ? <AppearanceSettingsSection /> : null}
         {state.section === "agent" ? <AgentSettingsSection state={state} /> : null}
         {state.section === "runtime" ? <RuntimeSettingsSection state={state} /> : null}
         {state.section === "sandbox" ? <SandboxSettingsSection state={state} /> : null}
         {state.section === "skills" ? <SkillSettingsSection /> : null}
         {state.section === "mcp" ? <McpSettingsSection /> : null}
+        {state.section === "memory" ? <MemorySettingsSection /> : null}
         {state.section === "provider_add" ? <ProviderAddSection state={state} /> : null}
         {state.section === "provider_manage" ? <ProviderManageSection state={state} /> : null}
         {state.error ? <Typography.Text type="danger">{state.error}</Typography.Text> : null}
@@ -63,7 +69,7 @@ export default function UserSettingsModal(props: UserSettingsModalProps) {
       mask={{ closable: true }}
       keyboard={false}
       onCancel={state.requestClose}
-      footer={["provider_manage", "skills", "mcp"].includes(state.section) ? null : (
+      footer={["appearance", "provider_manage", "skills", "mcp", "memory"].includes(state.section) ? null : (
         <Space>
           <Button
             type="primary"

@@ -11,6 +11,7 @@ class TurnPauseController:
 
     def __init__(self) -> None:
         self._requested = Event()
+        self._steering = Event()
         self._lock = RLock()
         self._aborters: set[Callable[[], None]] = set()
 
@@ -18,10 +19,36 @@ class TurnPauseController:
         return self._requested.is_set()
 
     def request_pause(self) -> bool:
+        return self._interrupt(self._requested)
+
+    def request_steering(self) -> bool:
+        return self._interrupt(self._steering)
+
+    def clear_steering(self) -> None:
+        self._steering.clear()
+
+    def dispatch_steering(self, dispatch: Callable[[], object]) -> None:
         with self._lock:
-            if self._requested.is_set():
+            if self.is_requested():
+                raise ValueError("Turn is being paused.")
+            dispatch()
+            self.request_steering()
+
+    def take_steering(self, take: Callable[[], list]) -> list:
+        with self._lock:
+            if self.is_requested():
+                return []
+            self.clear_steering()
+            return take()
+
+    def operation_interrupted(self) -> bool:
+        return self._requested.is_set() or self._steering.is_set()
+
+    def _interrupt(self, signal: Event) -> bool:
+        with self._lock:
+            if self._requested.is_set() or signal.is_set():
                 return False
-            self._requested.set()
+            signal.set()
             aborters = tuple(self._aborters)
         for abort in aborters:
             try:
@@ -32,7 +59,7 @@ class TurnPauseController:
 
     def register_abort(self, abort: Callable[[], None]) -> Callable[[], None]:
         with self._lock:
-            if self._requested.is_set():
+            if self.operation_interrupted():
                 abort_now = True
             else:
                 self._aborters.add(abort)

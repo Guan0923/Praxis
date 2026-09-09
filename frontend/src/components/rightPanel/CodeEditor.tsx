@@ -1,6 +1,34 @@
 import { useEffect, useRef } from "react";
 import { basicSetup, EditorView } from "codemirror";
-import { EditorState, type Extension } from "@codemirror/state";
+import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
+import { useAppearanceMode } from "../../app/AppearanceProvider";
+import { palettes } from "../../app/theme";
+import type { AppearanceMode } from "../../api/settings";
+
+function editorAppearance(mode: AppearanceMode): Extension {
+  const p = palettes[mode];
+  return [
+    EditorView.theme({
+      "&": { color: p.text, backgroundColor: p.surface },
+      ".cm-gutters": { color: p.muted, backgroundColor: p["surface-subtle"], borderColor: p.border },
+      ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: p.hover },
+      ".cm-cursor, .cm-dropCursor": { borderLeftColor: p.accent },
+      "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": { backgroundColor: p.selected },
+      ".cm-tooltip, .cm-panels": { color: p.text, backgroundColor: p.surface, borderColor: p.border },
+      ".cm-searchMatch": { backgroundColor: p["accent-soft"], outline: `1px solid ${p["accent-border"]}` },
+    }, { dark: mode === "dark" }),
+    syntaxHighlighting(HighlightStyle.define([
+      { tag: tags.keyword, color: p.info },
+      { tag: [tags.string, tags.regexp], color: p.success },
+      { tag: [tags.number, tags.bool, tags.null], color: p.warning },
+      { tag: tags.comment, color: p.muted },
+      { tag: [tags.typeName, tags.className, tags.function(tags.variableName)], color: p.accent },
+      { tag: tags.invalid, color: p.error },
+    ])),
+  ];
+}
 
 interface CodeEditorProps {
   value: string;
@@ -40,6 +68,10 @@ async function languageFor(filename: string): Promise<Extension[]> {
 }
 
 export default function CodeEditor({ value, filename, newline, readOnly = false, onChange }: CodeEditorProps) {
+  const mode = useAppearanceMode();
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const appearanceRef = useRef(new Compartment());
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const syncingRef = useRef(false);
@@ -54,6 +86,7 @@ export default function CodeEditor({ value, filename, newline, readOnly = false,
         doc: value,
         extensions: [
           basicSetup,
+          appearanceRef.current.of(editorAppearance(modeRef.current)),
           ...language,
           EditorState.lineSeparator.of(newline),
           EditorState.readOnly.of(readOnly),
@@ -76,6 +109,10 @@ export default function CodeEditor({ value, filename, newline, readOnly = false,
       viewRef.current = null;
     };
   }, [filename, newline, readOnly]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: appearanceRef.current.reconfigure(editorAppearance(mode)) });
+  }, [mode]);
 
   useEffect(() => {
     const view = viewRef.current;

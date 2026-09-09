@@ -12,12 +12,15 @@ vi.mock("./app/AgentApp", () => ({
 
 describe("local-only routes", () => {
   it("renders Chat directly at root and redirects removed account pages without auth requests", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      JSON.stringify({ appearance_config: { mode: "light" } }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
     window.history.replaceState({}, "", "/login");
 
     render(<App />);
 
-    expect(screen.getByTestId("chat-page")).toBeInTheDocument();
+    expect(await screen.findByTestId("chat-page")).toBeInTheDocument();
     await waitFor(() => expect(window.location.pathname).toBe("/"));
     expect(screen.queryByText(/登录|注册|退出|云同步/)).not.toBeInTheDocument();
     expect(fetchSpy.mock.calls.some(([input]) => String(input).includes("/api/auth/"))).toBe(false);

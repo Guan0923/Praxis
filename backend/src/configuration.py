@@ -54,6 +54,22 @@ class ClientPaths:
         return self.runtime_dir / "projects.db"
 
     @property
+    def memories_dir(self) -> Path:
+        return self.root / "memories"
+
+    @property
+    def memory_db(self) -> Path:
+        return self.memories_dir / "memory.db"
+
+    @property
+    def raw_memories_file(self) -> Path:
+        return self.memories_dir / "raw_memories.md"
+
+    @property
+    def rollout_summaries_dir(self) -> Path:
+        return self.memories_dir / "rollout_summaries"
+
+    @property
     def runtime_dir(self) -> Path:
         """Runtime data used by the local application."""
 
@@ -164,6 +180,15 @@ class ClientPaths:
                 raise ConfigurationError(f"User data path must be a file: {file}")
             file.touch(exist_ok=True)
 
+    def ensure_memories(self) -> Path:
+        for directory in (self.memories_dir, self.rollout_summaries_dir):
+            if directory.is_symlink():
+                raise ConfigurationError("Memory data directories cannot be symbolic links.")
+            if directory.exists() and not directory.is_dir():
+                raise ConfigurationError("Memory data paths must be directories.")
+            directory.mkdir(parents=True, exist_ok=True)
+        return self.memories_dir
+
 
 def load_config(path: Path) -> dict[str, object]:
     """Load TOML without reading `.env` or process environment values."""
@@ -191,6 +216,7 @@ def initialize_config(paths: ClientPaths, workspace: Path) -> dict[str, object]:
         return LocalConfigStore(paths.config_file).ensure_defaults({})
     config: dict[str, dict[str, object]] = {
         "profile": {"display_name": "本地用户", "agent_preferences": ""},
+        "appearance": {"mode": "light"},
         "agent": {
             "tone": "balanced",
             "verbosity": "balanced",

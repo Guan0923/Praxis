@@ -34,7 +34,18 @@ class SQLiteRuntimeEventMixin:
             "turn_id": node.id,
             "sequence": sequence,
             "frame": frame.to_dict(),
-            "current": node.to_dict(),
+            "status": node.status,
+            "report_delivery_ids": sorted(
+                {
+                    str(item["delivery_id"])
+                    for version in node.data
+                    for message in version
+                    for item in message.get("content", [])
+                    if item.get("type") == "subagent"
+                    and item.get("event") == "agent_report"
+                    and item.get("delivery_id")
+                }
+            ),
         }
         self._put_json_object(
             connection,

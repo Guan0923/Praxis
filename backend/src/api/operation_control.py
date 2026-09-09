@@ -133,7 +133,10 @@ class OperationControl:
     async def open_group(self, window_id: str, generation: int, group: str) -> OperationSequence:
         async with self._lock:
             current = self._require_connection_locked(window_id, generation)
-            return current.groups.setdefault(group, OperationSequence())
+            state = current.groups.setdefault(group, OperationSequence())
+        # A lost HTTP response may still be completing when the client reconnects.
+        async with state.lock:
+            return state
 
     async def operation(
         self,
@@ -229,18 +232,20 @@ async def canonical_operation_session(request, state, claimed_session: str | Non
     thread = re.match(r"^/api/sidebar-threads/([^/]+)", path)
     if thread and thread.group(1) != "order":
         thread_id = thread.group(1)
-        item = store.get_sidebar_thread(thread_id)
+        item = await asyncio.to_thread(store.get_sidebar_thread, thread_id)
         if item is not None:
             resolved = item.session_id
         else:
-            for summary in store.list_sessions(state="all"):
-                panel = store.active_right_panel_window_for_thread(summary.session_id, thread_id)
+            for summary in await asyncio.to_thread(store.list_sessions, state="all"):
+                panel = await asyncio.to_thread(
+                    store.active_right_panel_window_for_thread, summary.session_id, thread_id
+                )
                 if panel is not None:
                     resolved = panel.session_id
                     break
     turn = re.match(r"^/api/turns/([^/]+)", path)
     if turn:
-        item = store.find_node(turn.group(1))
+        item = await asyncio.to_thread(store.find_node, turn.group(1))
         if item is not None:
             resolved = item.session_id
     agent_thread = re.match(r"^/api/agent-threads/([^/]+)", path)

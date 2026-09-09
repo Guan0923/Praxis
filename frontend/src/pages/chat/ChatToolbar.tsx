@@ -1,6 +1,9 @@
 import { BranchesOutlined, CommentOutlined, NodeIndexOutlined } from "@ant-design/icons";
 import { Button, Dropdown, Tooltip } from "antd";
 import AgentThreadPicker from "./AgentThreadPicker";
+import { useState } from "react";
+import ScrollingText from "../../components/ScrollingText";
+import { useButtonTooltips } from "../../components/ButtonTooltipContext";
 
 export type ChatMainView = "chat" | "trace";
 
@@ -15,6 +18,7 @@ interface AgentThreadPickerState {
 interface ChatToolbarProps {
   visible: boolean;
   currentThreadId: string;
+  conversationTitle: string;
   compact: boolean;
   mainView: ChatMainView;
   agentThread?: AgentThreadPickerState;
@@ -24,14 +28,18 @@ interface ChatToolbarProps {
 export function ChatToolbar({
   visible,
   currentThreadId,
+  conversationTitle,
   compact,
   mainView,
   agentThread,
   onMainViewChange,
 }: ChatToolbarProps) {
-  if (!visible) return null;
+  const showButtonTooltips = useButtonTooltips();
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
-    <div className="trace-toolbar" role="navigation" aria-label="主内容视图">
+    <header className="trace-toolbar">
+      <span className="chat-toolbar-title" title={conversationTitle}>{conversationTitle}</span>
+      {visible ? <nav className="chat-toolbar-actions" aria-label="主内容视图">
       {agentThread ? (
         <AgentThreadPicker
           sessionId={agentThread.sessionId}
@@ -44,21 +52,22 @@ export function ChatToolbar({
       ) : (
         <Dropdown
           trigger={["click"]}
+          onOpenChange={setMenuOpen}
           menu={{
             selectable: true,
             selectedKeys: [currentThreadId],
             items: [{ key: currentThreadId, label: currentThreadId }],
           }}
         >
-          <Tooltip title={compact ? `Thread：${currentThreadId}` : undefined}>
-            <Button type="text" aria-label="Thread" icon={compact ? <BranchesOutlined /> : undefined}>
+          <Tooltip title={showButtonTooltips && compact ? "Thread" : undefined} open={menuOpen || !showButtonTooltips ? false : undefined}>
+            <Button type="text" aria-label="Thread" aria-description={currentThreadId} icon={compact ? <BranchesOutlined /> : undefined}>
               {compact ? null : "Thread"}
             </Button>
           </Tooltip>
         </Dropdown>
       )}
-      <span className="trace-toolbar-thread-id" title={currentThreadId}>{currentThreadId}</span>
-      <Tooltip title={compact ? "Chat" : undefined}>
+      <ScrollingText text={currentThreadId} className="trace-toolbar-thread-id" focusable />
+      <Tooltip title={showButtonTooltips && compact ? "Chat" : undefined}>
         <Button
           type="text"
           aria-label="Chat"
@@ -69,7 +78,7 @@ export function ChatToolbar({
           {compact ? null : "Chat"}
         </Button>
       </Tooltip>
-      <Tooltip title={compact ? "Trace" : undefined}>
+      <Tooltip title={showButtonTooltips && compact ? "Trace" : undefined}>
         <Button
           type="text"
           aria-label="Trace"
@@ -80,6 +89,7 @@ export function ChatToolbar({
           {compact ? null : "Trace"}
         </Button>
       </Tooltip>
-    </div>
+      </nav> : null}
+    </header>
   );
 }

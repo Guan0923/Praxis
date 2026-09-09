@@ -10,7 +10,7 @@ from backend.jobs import JobRegistry, JobScope
 from backend.tools import Tool, ToolError
 
 from ..config import McpServerConfig, McpSettings, read_server_configs, valid_tool_name
-from .adapters import _handler
+from .adapters import _context_handler, _handler
 from .features import feature_tools
 from .manager import ExternalMcpResources
 
@@ -96,6 +96,7 @@ def start_external_tools(
                         f"MCP {server.name}: {getattr(definition, 'description', None) or definition_name}",
                         _handler(manager, server.name, definition_name),
                         schema,
+                        context_handler=_context_handler(manager, server.name, definition_name),
                         requires_confirmation=True,
                         read_only=False,
                         trace_origin={"kind": "mcp", "server": server.name, "tool": definition_name},

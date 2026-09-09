@@ -550,13 +550,13 @@ describe("assistant Item presentation", () => {
     const activeRule = css.slice(css.indexOf(".shimmer-text.is-active"), css.indexOf("@keyframes runtime-summary-shimmer"));
     const reducedMotion = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
 
-    expect(activeRule).toContain("#ffffff");
+    expect(activeRule).toContain("var(--shimmer-highlight)");
     expect(activeRule).toMatch(/animation:\s*runtime-summary-shimmer/);
     expect(activeRule).toMatch(/background-repeat:\s*no-repeat/);
     expect(css).toMatch(/\.runtime-status-dot\s*{[^}]*animation:\s*runtime-status-dot 900ms ease-in-out infinite;/s);
     expect(css).toMatch(/\.runtime-status-dot:nth-child\(2\)\s*{[^}]*animation-delay:\s*120ms;/s);
     expect(css).toMatch(/\.runtime-status-dot:nth-child\(3\)\s*{[^}]*animation-delay:\s*240ms;/s);
-    expect(css).toMatch(/@keyframes runtime-status-dot[\s\S]*transform:\s*translateY\(-3px\);[\s\S]*background-color:\s*#ffffff;/);
+    expect(css).toMatch(/@keyframes runtime-status-dot[\s\S]*transform:\s*translateY\(-3px\);[\s\S]*background-color:\s*var\(--shimmer-highlight\);/);
     expect(reducedMotion).toMatch(/\.shimmer-text\.is-active\s*{[^}]*animation:\s*none;/s);
     expect(reducedMotion).toMatch(/-webkit-text-fill-color:\s*currentColor/);
     expect(reducedMotion).toMatch(/\.runtime-status-dot\s*{[^}]*animation:\s*none;/s);

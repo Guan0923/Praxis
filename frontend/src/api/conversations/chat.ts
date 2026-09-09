@@ -286,7 +286,7 @@ export async function streamAttachedTurn(
 export async function pauseTurn(turnId: string, sessionId?: string): Promise<void> {
   await requestJson(`/api/turns/${encodeURIComponent(turnId)}/pause`, {
     method: "POST",
-    operation: { sessionId },
+    operation: { sessionId, group: `turn-control:${turnId}` },
   });
 }
 
@@ -301,6 +301,6 @@ export async function steerTurn(
       delivery_id: deliveryId,
       message_ids: messageIds,
     }),
-    operation: { sessionId },
+    operation: { sessionId, group: `turn-control:${turnId}` },
   });
 }

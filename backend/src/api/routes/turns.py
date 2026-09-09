@@ -119,7 +119,7 @@ def stream_running_turn(
 
 
 @router.post("", status_code=202)
-async def create_turn(body: CreateTurnRequest, request: Request) -> dict[str, object]:
+def create_turn(body: CreateTurnRequest, request: Request) -> dict[str, object]:
     state: WebAppState = request.app.state.web
     store = session_store(state)
     require_active_session(store, body.session_id)
@@ -205,7 +205,7 @@ async def create_turn(body: CreateTurnRequest, request: Request) -> dict[str, ob
 
 
 @router.post("/{turn_id}/rewind", status_code=202)
-async def rewind_turn(turn_id: str, body: RewindTurnRequest, request: Request) -> dict[str, object]:
+def rewind_turn(turn_id: str, body: RewindTurnRequest, request: Request) -> dict[str, object]:
     state: WebAppState = request.app.state.web
     store = session_store(state)
     source = _turn(store, turn_id)
@@ -249,7 +249,7 @@ async def rewind_turn(turn_id: str, body: RewindTurnRequest, request: Request) -
 
 
 @router.post("/{turn_id}/resume", status_code=202)
-async def resume_turn(turn_id: str, body: TurnExecutionConfig, request: Request) -> dict[str, object]:
+def resume_turn(turn_id: str, body: TurnExecutionConfig, request: Request) -> dict[str, object]:
     state: WebAppState = request.app.state.web
     store = session_store(state)
     source = _turn(store, turn_id)
@@ -325,14 +325,24 @@ def steer_turn(
     active_stream = getattr(state, "active_turn_streams", {}).get(turn_id)
     if active_stream is None:
         raise HTTPException(status_code=409, detail="Turn 执行流已经封闭。")
-    try:
-        state.message_queue.dispatch(
+    controller = getattr(state, "active_turn_cancellations", {}).get(turn_id)
+
+    def dispatch():
+        return state.message_queue.dispatch(
             delivery_id=body.delivery_id,
             message_ids=body.message_ids,
             session_id=source.session_id,
             thread_id=source.thread_id,
             turn_id=source.id,
         )
+
+    try:
+        if controller is None:
+            dispatch()
+        else:
+            controller.dispatch_steering(dispatch)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Turn 正在暂停，消息保留在待发队列。") from exc
     except Exception as exc:
         raise _queue_http_error(exc) from exc
     return {"delivery_id": body.delivery_id, "status": "accepted"}

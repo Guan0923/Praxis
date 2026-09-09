@@ -125,9 +125,13 @@ class WindowOperationControl {
   ): Promise<Response> {
     await this.ensureConnected();
     if (target.sessionId) {
-      const ownership = await this.claimSession(target.sessionId);
+      const ownership = this.ownership.get(target.sessionId) === "writable"
+        ? "writable" : await this.claimSession(target.sessionId);
       if (ownership !== "writable") throw new Error("当前 session 正在另一个窗口对话。");
     }
+    const path = new URL(apiUrl(url), window.location.origin).pathname;
+    const retryable = target.group.startsWith("turn-control:") || path === "/api/turns" || path.includes("/queued-messages");
+    if (retryable && this.groups.get(target.group)?.uncertain) this.groups.delete(target.group);
     const state = await this.openGroup(target.group);
     if (state.uncertain) throw new Error("上一次操作结果不明确，请刷新页面核对后再继续。");
     const headers = new Headers(init.headers);
@@ -253,6 +257,7 @@ class WindowOperationControl {
       socket.onclose = () => {
         this.socket = null;
         this.connectPromise = null;
+        for (const sessionId of this.claimedSessions) this.setOwnership(sessionId, "unknown");
         const error = new Error("窗口连接已断开。");
         for (const pending of this.rpc.values()) pending.reject(error);
         this.rpc.clear();

@@ -59,8 +59,11 @@ export function useQueuedMessageFlow({
   onStop,
   onWarning,
 }: UseQueuedMessageFlowOptions) {
-  const queueFlushRef = useRef(false);
-  const queueAutoBlockedRef = useRef(false);
+  const flow = useRef({ conversationId: conversation?.id, flushing: false, steering: false, blocked: false });
+  if (flow.current.conversationId !== conversation?.id) {
+    flow.current = { conversationId: conversation?.id, flushing: false, steering: false, blocked: false };
+  }
+  const state = flow.current;
   const acknowledgedDeliveryIdsRef = useRef(new Set<string>());
   const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<string | null>(null);
 
@@ -71,26 +74,26 @@ export function useQueuedMessageFlow({
   useEffect(() => {
     const status = activeRuntimeNode?.status;
     if (status === "running") {
-      queueAutoBlockedRef.current = false;
+      state.blocked = false;
       return;
     }
     if (
       !sandboxBlocked
-      && !queueFlushRef.current
-      && !queueAutoBlockedRef.current
+      && !state.flushing
+      && !state.blocked
       && !isSubagent
-      && queuedMessages.length > 0
+      && queuedMessages.some((item) => item.state === "pending" && !item.saving && !item.error)
       && conversation?.id
       && (status === "success" || status === "failed")
     ) {
-      queueFlushRef.current = true;
+      state.flushing = true;
       setQueueSubmitting(true);
       void flushQueuedMessages();
     }
   // `queueSubmitting` deliberately retriggers the effect after a completed
   // flush so entries appended while that request was in flight start the next
   // FIFO pass.
-  }, [activeRuntimeNode?.id, activeRuntimeNode?.status, queueSubmitting, queuedMessages.length, conversation?.id, sandboxBlocked]);
+  }, [activeRuntimeNode?.id, activeRuntimeNode?.status, queueSubmitting, queuedMessages, conversation?.id, sandboxBlocked]);
 
   useEffect(() => {
     if (!conversation?.id || !activeRuntimeNode) return;
@@ -110,24 +113,46 @@ export function useQueuedMessageFlow({
   async function queueCurrentPrompt(prompt: string, itemReferences?: FileReference[]) {
     if (!prompt.trim() && (!itemReferences || itemReferences.length === 0)) return;
     if (!conversation?.id || !conversation.threadId) return;
-    try {
-      const stored = editingQueuedMessageId
-        ? await updateQueuedMessage(conversation.threadId, editingQueuedMessageId, prompt, itemReferences ?? [], conversation.sessionId)
-        : await createQueuedMessage(conversation.threadId, crypto.randomUUID(), prompt, itemReferences ?? [], conversation.sessionId);
-      updateQueue((items) => editingQueuedMessageId
-        ? items.map((item) => item.id === stored.id ? stored : item)
-        : [...items, stored]);
-      setEditingQueuedMessageId(null);
-    } catch (error) {
-      onSetLast({ error: String((error as Error).message ?? error) });
-      return;
-    }
+    const now = new Date().toISOString();
+    const previous = queuedMessages.find((item) => item.id === editingQueuedMessageId);
+    const item: QueuedMessage = {
+      id: editingQueuedMessageId ?? crypto.randomUUID(),
+      thread_id: conversation.threadId,
+      content: prompt,
+      references: itemReferences ?? [],
+      state: "pending",
+      created_at: now,
+      updated_at: now,
+      saving: true,
+      editing: Boolean(previous && (!previous.error || previous.editing)),
+    };
+    updateQueue((items) => editingQueuedMessageId
+      ? items.map((candidate) => candidate.id === item.id ? item : candidate)
+      : [...items, item]);
+    setEditingQueuedMessageId(null);
     clearComposer();
     setPendingUploads([]);
+    await saveQueuedMessage(item);
+  }
+
+  async function saveQueuedMessage(item: QueuedMessage): Promise<QueuedMessage | undefined> {
+    updateQueue((items) => items.map((candidate) => candidate.id === item.id ? { ...item, saving: true, error: undefined } : candidate));
+    try {
+      const stored = item.editing
+        ? await updateQueuedMessage(item.thread_id, item.id, item.content, item.references, conversation?.sessionId)
+        : await createQueuedMessage(item.thread_id, item.id, item.content, item.references, conversation?.sessionId);
+      updateQueue((items) => items.map((candidate) => candidate.id === item.id ? stored : candidate));
+      return stored;
+    } catch (error) {
+      updateQueue((items) => items.map((candidate) => candidate.id === item.id
+        ? { ...item, saving: false, error: String((error as Error).message ?? error) }
+        : candidate));
+      return undefined;
+    }
   }
 
   function editQueuedMessage(item: QueuedMessage) {
-    if (item.state !== "pending") return;
+    if (item.state !== "pending" || item.saving) return;
     const currentPrompt = input.trim();
     const currentReferences = collectedReferences();
     if (currentPrompt || currentReferences.length > 0) {
@@ -141,14 +166,16 @@ export function useQueuedMessageFlow({
     window.setTimeout(() => editorRef.current?.focus(), 0);
   }
 
-  function sendQueuedMessage(item: QueuedMessage) {
-    if (item.state === "pending") void submitSteering([item]);
+  async function sendQueuedMessage(item: QueuedMessage) {
+    if (item.state !== "pending" || item.saving) return;
+    const stored = item.error ? await saveQueuedMessage(item) : item;
+    if (stored) await submitSteering([stored]);
   }
 
   async function deleteMessage(item: QueuedMessage) {
-    if (isSubagent || item.state !== "pending" || !conversation?.threadId) return;
+    if (isSubagent || item.state !== "pending" || item.saving || !conversation?.threadId) return;
     try {
-      await deleteQueuedMessage(conversation.threadId, item.id, conversation.sessionId);
+      if (!item.error || item.editing) await deleteQueuedMessage(conversation.threadId, item.id, conversation.sessionId);
       updateQueue((items) => items.filter((candidate) => candidate.id !== item.id));
     } catch (error) {
       onSetLast({ error: String((error as Error).message ?? error) });
@@ -156,7 +183,10 @@ export function useQueuedMessageFlow({
   }
 
   async function submitSteering(items: QueuedMessage[]) {
-    if (sandboxBlocked || !conversation?.id || activeRuntimeNode?.status !== "running" || items.length === 0) return;
+    if (sandboxBlocked || state.steering || !conversation?.id || activeRuntimeNode?.status !== "running" || items.length === 0) return;
+    state.steering = true;
+    const ids = new Set(items.map((item) => item.id));
+    updateQueue((current) => current.map((item) => ids.has(item.id) ? { ...item, state: "dispatched" } : item));
     try {
       await steerTurn(
         activeRuntimeNode.id,
@@ -164,31 +194,34 @@ export function useQueuedMessageFlow({
         items.map((item) => item.id),
         conversation.sessionId,
       );
-      await onQueuedMessagesRefresh(conversation.id);
     } catch (error) {
-      onSetLast({ error: String((error as Error).message ?? error) });
+      updateQueue((current) => current.map((item) => ids.has(item.id) ? { ...item, state: "pending" } : item));
+      onWarning(String((error as Error).message ?? error));
+    } finally {
+      state.steering = false;
     }
+    await onQueuedMessagesRefresh(conversation.id).catch((error) => onWarning(String((error as Error).message ?? error)));
   }
 
   function pauseOrSteer() {
-    const pending = queuedMessages.filter((item) => item.state === "pending");
-    if (pending.length > 0) {
+    const pending = queuedMessages.filter((item) => item.state === "pending" && !item.saving && !item.error);
+    if (pending.length > 0 && !state.steering) {
       void submitSteering(pending);
       return;
     }
-    if (queuedMessages.length === 0) onStop();
+    onStop();
   }
 
   async function flushQueuedMessages() {
     const items = queuedMessages.slice();
     if (sandboxBlocked || !conversation?.sessionId || items.length === 0) {
-      queueFlushRef.current = false;
+      state.flushing = false;
       setQueueSubmitting(false);
       return;
     }
-    const pendingItems = items.filter((item) => item.state === "pending");
+    const pendingItems = items.filter((item) => item.state === "pending" && !item.saving && !item.error);
     if (pendingItems.length === 0) {
-      queueFlushRef.current = false;
+      state.flushing = false;
       setQueueSubmitting(false);
       return;
     }
@@ -207,13 +240,13 @@ export function useQueuedMessageFlow({
         },
       });
       await onQueuedMessagesRefresh(conversation.id);
-      if (!acknowledged) queueAutoBlockedRef.current = true;
+      if (!acknowledged) state.blocked = true;
     } catch (error) {
       onSetLast({ error: String((error as Error).message ?? error), running: false, decision: undefined });
-      queueAutoBlockedRef.current = true;
+      state.blocked = true;
     } finally {
-      queueFlushRef.current = false;
-      setQueueSubmitting(false);
+      state.flushing = false;
+      if (flow.current === state) setQueueSubmitting(false);
     }
   }
 

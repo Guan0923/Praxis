@@ -58,6 +58,7 @@ class ToolStepExecutor:
         execution_slot: Callable[[], AbstractContextManager[None]] | None = None,
         commit_lock: RLock | None = None,
         action_number: int | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> ToolStepResult:
         previous_mode = runtime.run.mode
         run = runtime.run
@@ -113,6 +114,17 @@ class ToolStepExecutor:
             publish=publish,
         )
         with approval_lock if requires_confirmation and approval_lock is not None else nullcontext():
+            if (cancel_requested or runtime.operation_interrupted)():
+                return self._failure(
+                    runtime,
+                    message,
+                    index,
+                    tool,
+                    "Tool was not started because this tool batch was interrupted.",
+                    retryable=False,
+                    failure_code="tool_batch_interrupted",
+                    commit_lock=lock,
+                )
             before = before_tool_hook_manager.execute(context, publish)
         if before.decision == "reject":
             interrupt = before.data.get("interrupt")
@@ -146,6 +158,7 @@ class ToolStepExecutor:
                     sandbox_decision=sandbox_decision,
                     commit_lock=lock,
                     action_number=action_number,
+                    cancel_requested=cancel_requested or runtime.operation_interrupted,
                 )
         except ToolError as exc:
             error = safe_error_message(exc)
@@ -173,6 +186,7 @@ class ToolStepExecutor:
         sandbox_decision: SandboxExecutionDecision | None,
         commit_lock: RLock,
         action_number: int | None,
+        cancel_requested: Callable[[], bool],
     ) -> ToolStepResult:
         run = runtime.run
         tool_message = message.tool_messages[index]
@@ -217,14 +231,15 @@ class ToolStepExecutor:
                             timezone=runtime.state.timezone,
                             clock=runtime.services.clock,
                             job_scope=runtime.services.job_scope,
-                            cancel_requested=runtime.stop_requested,
+                            cancel_requested=cancel_requested,
+                            register_abort=runtime.services.register_operation_abort,
                             sandbox_decision=sandbox_decision,
                         ),
                         confirmed=True,
                     )
                 else:
                     result = tools.invoke(tool, tool_message.arguments, confirmed=True)
-            if runtime.stop_requested():
+            if cancel_requested():
                 raise ToolError("Tool invocation cancelled.")
             duration_ms = round((perf_counter() - started_at) * 1000, 3)
             with commit_lock:
@@ -257,7 +272,7 @@ class ToolStepExecutor:
                 index,
                 tool,
                 safe_error_message(exc),
-                retryable=retryable,
+                retryable=False if cancel_requested() else retryable,
                 duration_ms=round((perf_counter() - started_at) * 1000, 3),
                 commit_lock=commit_lock,
             )

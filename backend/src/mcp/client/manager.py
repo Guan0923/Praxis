@@ -5,14 +5,16 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import Iterator, Sequence
+from concurrent.futures import CancelledError
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from time import monotonic
 from typing import Any, overload
 
 from mcp import Client, types
 
 from backend.domain import safe_error_message
 from backend.jobs import AdmissionPolicy, JobLane, JobRegistry, JobScope, JobScopeKind, ServiceJob
-from backend.tools import Tool, ToolError
+from backend.tools import Tool, ToolError, ToolInvocationContext
 
 from ..config import McpServerConfig, McpSettings
 from .adapters import _render_result, render_mcp_value
@@ -94,13 +96,33 @@ class ExternalMcpManager:
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
 
-    def _submit(self, coroutine, *, timeout: float | None = None):
+    def _submit(self, coroutine, *, timeout: float | None = None, context: ToolInvocationContext | None = None):
         future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+        unregister = context.register_abort(future.cancel) if context and context.register_abort else None
+        deadline = monotonic() + timeout if timeout is not None else None
         try:
-            return future.result(timeout=timeout)
+            if context is None:
+                return future.result(timeout=timeout)
+            while True:
+                if context.cancel_requested and context.cancel_requested():
+                    future.cancel()
+                    raise ToolError("MCP tool invocation cancelled.")
+                remaining = deadline - monotonic() if deadline is not None else None
+                if remaining is not None and remaining <= 0:
+                    raise FutureTimeoutError()
+                try:
+                    return future.result(timeout=min(0.05, remaining) if remaining is not None else 0.05)
+                except FutureTimeoutError:
+                    if future.done():
+                        raise
         except FutureTimeoutError:
             future.cancel()
             raise
+        except CancelledError:
+            raise ToolError("MCP tool invocation cancelled.") from None
+        finally:
+            if unregister is not None:
+                unregister()
 
     async def _start(self) -> dict[str, list[object]]:
         definitions: dict[str, list[object]] = {}
@@ -205,13 +227,21 @@ class ExternalMcpManager:
         except FutureTimeoutError as exc:
             raise ToolError(safe_error_message(exc)) from exc
 
-    def call(self, server_name: str, tool_name: str, arguments: dict[str, Any]) -> str:
+    def call(
+        self,
+        server_name: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        context: ToolInvocationContext | None = None,
+    ) -> str:
         if server_name not in self._sessions:
             raise ToolError(f"MCP server {server_name} is unavailable.")
         try:
             result = self._submit(
                 self._sessions[server_name].call_tool(tool_name, arguments),
                 timeout=self._settings.call_timeout_seconds,
+                context=context,
             )
         except FutureTimeoutError as exc:
             getattr(self, "server_health", {})[server_name] = "degraded"
@@ -220,6 +250,8 @@ class ExternalMcpManager:
                 job.report_failure()
             raise ToolError(safe_error_message(exc)) from exc
         except Exception as exc:
+            if context is not None and context.cancel_requested and context.cancel_requested():
+                raise ToolError("MCP tool invocation cancelled.") from None
             getattr(self, "server_health", {})[server_name] = "degraded"
             job = getattr(self, "service_jobs", {}).get(server_name)
             if job is not None:

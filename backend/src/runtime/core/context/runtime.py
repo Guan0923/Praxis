@@ -58,6 +58,7 @@ class RuntimeServices:
     suspend_requested: SuspensionHandler | None = None
     complete_requested: CancellationHandler | None = None
     register_operation_abort: Callable[[Callable[[], None]], Callable[[], None]] | None = None
+    operation_interrupted: CancellationHandler | None = None
     confirm: Confirm | None = None
     id_factory: Callable[[], str] = new_tool_call_id
     clock: Callable[[], str] = utc_now
@@ -120,6 +121,10 @@ class AgentRuntime:
             or (suspend is not None and suspend())
             or (complete is not None and complete())
         )
+
+    def operation_interrupted(self) -> bool:
+        interrupted = self.services.operation_interrupted
+        return self.stop_requested() or bool(interrupted is not None and interrupted())
 
     def model_nodes(self) -> list[RuntimeTreeNode]:
         """Return the canonical provider context when a message-tree bridge is active.

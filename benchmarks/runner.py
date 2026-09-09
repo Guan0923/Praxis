@@ -175,6 +175,7 @@ def run_one_task(
                 {
                     "tools_override": container.tools(),
                     "config_override": {
+                        "memory": {"enabled": False},
                         "skills": {"enabled": False},
                         "mcp": {"enabled": False},
                         "subagents": {"enabled": False},

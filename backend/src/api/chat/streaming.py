@@ -169,6 +169,10 @@ def _stream(
         thread_id,
         f"backend-{os.getpid()}-{threading.get_ident()}",
     )
+
+    def take_steering():
+        return pause_controller.take_steering(steering_inbox.take)
+
     job_registry = getattr(state, "job_registry", None)
     job_holder: dict[str, ThreadJob | None] = {"job": None}
     bridge_ref: dict[str, RuntimeEventNodeBridge | None] = {"bridge": None}
@@ -265,12 +269,18 @@ def _stream(
         ):
             record_sidebar_activity(current.thread_id)
         publish_runtime_frame(state, frame, current)
-        active_stream.publish_frame(frame, current)
+        if subscribe:
+            active_stream.publish_frame(frame, current)
 
     def enqueue_terminal(terminal_type: str, terminal_id: str, message: str = "") -> None:
-        active_stream.publish_terminal(terminal_type, terminal_id, message)
         bridge = bridge_ref["bridge"]
         current = bridge._current() if bridge is not None else None
+        if current is not None and current.status in {"success", "paused", "failed"}:
+            try:
+                state.message_queue.release_turn(current.id)
+            except MessageQueueUnavailable:
+                logger.warning("Could not release pending messages for finished Turn %s", current.id)
+        active_stream.publish_terminal(terminal_type, terminal_id, message)
         if current is not None:
             record_sidebar_activity(current.thread_id)
         publish_runtime_terminal(
@@ -285,7 +295,7 @@ def _stream(
     approval_store = ApprovalStore(_store(state))
     interrupt = make_interactive_interrupt(
         sink,
-        cancel_requested=cancellation_requested,
+        cancel_requested=lambda: cancellation_requested() or pause_controller.operation_interrupted(),
         approval_store=approval_store,
     )
 
@@ -392,8 +402,9 @@ def _stream(
                     runtime_for_bridge = getattr(conversation, "runtime", None)
                     if runtime_for_bridge is not None:
                         bridge_ref["bridge"].bind_runtime(runtime_for_bridge)
-                        runtime_for_bridge.services.steering = steering_inbox.take
+                        runtime_for_bridge.services.steering = take_steering
                         runtime_for_bridge.services.register_operation_abort = pause_controller.register_abort
+                        runtime_for_bridge.services.operation_interrupted = pause_controller.operation_interrupted
                     if operation is not None:
                         # Resume keeps the immediate bridge start: there is no
                         # new user text and the bridge must adopt the paused
@@ -418,7 +429,7 @@ def _stream(
                     suspend_requested=suspension_requested,
                     request_parameters=request_parameters,
                     references=references or [],
-                    steering=steering_inbox.take,
+                    steering=take_steering,
                     delivery_id=initial_delivery.envelope.delivery_id if initial_delivery is not None else None,
                     on_started=(
                         lambda: state.message_queue.ack(initial_delivery) if initial_delivery is not None else None
@@ -432,7 +443,7 @@ def _stream(
                     cancellation_requested,
                     suspension_requested,
                     _model_request_parameters(request_model, effective_reasoning),
-                    steering_inbox.take,
+                    take_steering,
                 )
             active_session = getattr(conversation, "active_session", None)
             bridge = bridge_ref["bridge"]
@@ -546,12 +557,6 @@ def _stream(
                 for alias in active_stream_aliases:
                     if active_turn_streams.get(alias) is active_stream:
                         active_turn_streams.pop(alias, None)
-            final = bridge._current() if bridge is not None else None
-            if final is not None and final.status in {"success", "failed"}:
-                try:
-                    state.message_queue.release_turn(final.id)
-                except MessageQueueUnavailable:
-                    pass
 
     if job_registry is not None:
         parent_scope = getattr(state, "system_job_scope", job_registry.root_scope())

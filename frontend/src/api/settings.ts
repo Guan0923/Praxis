@@ -1,7 +1,14 @@
 import type { LocalProfile } from "../types";
+import type { MemoryConfig } from "./memory";
 import { requestJson, requestOptionalJson, requestVoid } from "./transport/request";
 
 export type UserProfile = LocalProfile;
+
+export type AppearanceMode = "light" | "dark";
+
+export interface AppearanceConfig {
+  mode: AppearanceMode;
+}
 
 export interface AgentConfig {
   tone: string;
@@ -70,6 +77,7 @@ export interface TerminalOption {
 }
 
 export interface UserSettings {
+  appearance_config: AppearanceConfig;
   profile: UserProfile;
   agent_config: AgentConfig;
   provider_config: ProviderConfig;
@@ -80,6 +88,7 @@ export interface UserSettings {
   terminal_options: TerminalOption[];
   terminal_notice: string | null;
   timezone_options: TimezoneOption[];
+  memory_config: MemoryConfig;
 }
 
 export interface SkillSettingsItem {
@@ -138,6 +147,14 @@ export interface McpServerInput {
 
 export function getSettings(): Promise<UserSettings> {
   return requestJson<UserSettings>("/api/settings");
+}
+
+export function updateAppearanceConfig(mode: AppearanceMode): Promise<AppearanceConfig> {
+  return requestJson<AppearanceConfig>("/api/settings/appearance", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
 }
 
 export function getSkillSettings(): Promise<SkillSettingsResponse> {
@@ -245,6 +262,14 @@ export function updateAgentConfig(config: AgentConfig): Promise<AgentConfig> {
 
 export function updateRuntimeConfig(config: RuntimeConfig): Promise<RuntimeConfig> {
   return requestJson<RuntimeConfig>("/api/settings/runtime", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+}
+
+export function updateMemoryConfig(config: MemoryConfig): Promise<MemoryConfig> {
+  return requestJson<MemoryConfig>("/api/settings/memory", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),

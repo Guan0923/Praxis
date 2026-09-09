@@ -17,7 +17,7 @@
 }
 
 .markdown pre {
-  background: #f7f8fa;
+  background: var(--surface-subtle);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
@@ -29,7 +29,7 @@
 .markdown code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
-  background: #f2f3f5;
+  background: var(--surface-subtle);
   padding: 1px 5px;
   border-radius: 4px;
 }
@@ -156,7 +156,7 @@
 .message-actions button:hover:not(:disabled),
 .message-actions button:focus-visible {
   border-color: var(--border);
-  background: #f2f3f5;
+  background: var(--surface-subtle);
   color: var(--text);
   outline: none;
 }
@@ -184,7 +184,7 @@
 }
 
 .error-text {
-  color: #dc2626;
+  color: var(--error);
   font-size: 13px;
 }
 

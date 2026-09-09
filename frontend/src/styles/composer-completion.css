@@ -4,10 +4,10 @@
   left: 20px;
   right: 20px;
   margin-bottom: 8px;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 8px 24px var(--shadow);
   overflow: hidden;
   z-index: 20;
 }
@@ -26,11 +26,11 @@
 }
 
 .command-item:hover {
-  background: #f2f3f5;
+  background: var(--surface-subtle);
 }
 
 .command-item.selected {
-  background: #e8ecff;
+  background: var(--selected);
 }
 
 .command-name {
@@ -68,11 +68,11 @@
 }
 
 .file-item:hover {
-  background: #f2f3f5;
+  background: var(--surface-subtle);
 }
 
 .file-item.selected {
-  background: #e8ecff;
+  background: var(--selected);
 }
 
 .file-item-name {
@@ -103,13 +103,13 @@
 }
 
 .file-source-badge.upload {
-  background: #e0f2fe;
-  color: #0369a1;
+  background: var(--info-bg);
+  color: var(--info);
 }
 
 .file-source-badge.project {
-  background: #ecfdf5;
-  color: #047857;
+  background: var(--success-bg);
+  color: var(--success);
 }
 
 /* ---------- Pending references and upload strip ---------- */

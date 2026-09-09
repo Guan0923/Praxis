@@ -5,6 +5,7 @@
 .composer-settings-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px !important;
   /* Keep upload and runtime controls in the same toolbar row. */
   flex: 1 1 auto;
@@ -19,7 +20,7 @@
 }
 
 .composer-toolbar {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 
 .composer-settings-controls .mode-picker {
@@ -72,12 +73,12 @@
   min-height: 36px;
   padding: 0;
   aspect-ratio: 1;
-  border-radius: 50%;
+  border-radius: 8px;
 }
 
 .chat-page--compact .composer {
-  padding-inline: 12px;
-  padding-bottom: 14px;
+  padding-inline: var(--chat-gutter);
+  padding-bottom: 16px;
 }
 
 .chat-page--compact .composer-toolbar {
@@ -88,7 +89,8 @@
 
 .composer-compact-settings {
   display: flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   align-items: center;
   min-width: 0;
 }
@@ -146,8 +148,8 @@
   margin: 12px 0;
   padding: 0;
   overflow: hidden;
-  border-color: rgba(8, 127, 141, 0.24);
-  background: rgba(246, 253, 252, 0.96);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
 }
 
 .decision-card .decision-actions {

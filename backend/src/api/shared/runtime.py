@@ -66,6 +66,7 @@ def build_local_application(
         "config_override": {
             **runtime_config,
             "sandbox_config": state.settings.sandbox_config(),
+            "memory": state.settings.memory_config(),
         },
         "default_timezone": str(state.agent_config().get("timezone", DEFAULT_TIME_ZONE)),
         "session_provisioner": session_provisioner,
@@ -79,6 +80,7 @@ def build_local_application(
         "subagent_coordinator": getattr(state, "subagent_coordinator", None),
         "sandbox_maintenance_gate": getattr(state, "sandbox_maintenance", None),
         "todo_store": getattr(state, "todo_store", None),
+        "memory_diagnostics": getattr(state, "memory_diagnostics", None),
     }
     # Preserve compatibility with embedders/tests that accept only a subset
     # of the canonical application builder options.

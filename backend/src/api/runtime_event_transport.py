@@ -25,15 +25,20 @@ def publish_outbox_event(state, event: dict[str, object], *, recover_terminal: b
     thread_id = str(event.get("thread_id") or "")
     turn_id = str(event.get("turn_id") or "")
     frame_payload = event.get("frame")
-    current_payload = event.get("current")
     if not event_id or not all((session_id, thread_id, turn_id)):
         raise ValueError("Runtime outbox event identifiers are required.")
-    if not isinstance(frame_payload, dict) or not isinstance(current_payload, dict):
-        raise ValueError("Runtime outbox event requires frame and current payloads.")
-    frame = NodeFrame.from_dict(frame_payload, event_id=event_id)
-    current = RuntimeState.from_dict(current_payload)
+    if not isinstance(frame_payload, dict):
+        raise ValueError("Runtime outbox event requires a frame payload.")
     store = _store(state)
-    payload = project_frame(store, frame, current)
+    payload = dict(frame_payload)
+    delivery_ids = event.get("report_delivery_ids")
+    if delivery_ids:
+        statuses = store.agent_report_statuses(session_id, set(delivery_ids))
+        if statuses:
+            if payload.get("type") == "turn.snapshot":
+                payload["turn"] = {**payload["turn"], "agent_report_statuses": statuses}
+            else:
+                payload["agent_report_statuses"] = statuses
     state.runtime_event_stream.publish(
         event_id=event_id,
         turn_id=turn_id,
@@ -44,7 +49,8 @@ def publish_outbox_event(state, event: dict[str, object], *, recover_terminal: b
     store.ack_runtime_event(session_id, event_id)
     active_streams = getattr(state, "active_turn_streams", {})
     execution_active = isinstance(active_streams, dict) and turn_id in active_streams
-    if recover_terminal and not execution_active and current.status in {"success", "paused", "failed"}:
+    status = event.get("status")
+    if recover_terminal and not execution_active and status in {"success", "paused", "failed"}:
         # A live execution still has synchronous post-finalization work (for
         # example the first-Turn title) before it publishes the terminal.  The
         # relay owns terminal recovery only after no execution is active.
@@ -53,7 +59,7 @@ def publish_outbox_event(state, event: dict[str, object], *, recover_terminal: b
             session_id=session_id,
             thread_id=thread_id,
             turn_id=turn_id,
-            terminal_type="success" if current.status in {"success", "paused"} else "failed",
+            terminal_type="success" if status in {"success", "paused"} else "failed",
         )
 
 
@@ -215,7 +221,7 @@ async def turn_sse(
     heartbeat_at = monotonic() + 15.0
     while True:
         store = _store(state)
-        node, _baseline_sequence = store.runtime_stream_snapshot(session_id, turn_id)
+        node, _baseline_sequence = await asyncio.to_thread(store.runtime_stream_snapshot, session_id, turn_id)
         # Existing Turns are reused by rewind. Do not mistake the old sealed
         # version for the newly accepted delivery while the Redis worker is
         # still between claim and SQLite admission.
@@ -252,12 +258,11 @@ async def turn_sse(
         if monotonic() >= heartbeat_at:
             heartbeat_at = monotonic() + 15.0
             yield ": heartbeat\n\n"
-        await asyncio.sleep(0.05)
-    canonical_candidates = _turn_continuation(store, session_id, thread_id, turn_id) or [node]
+    canonical_candidates = await asyncio.to_thread(_turn_continuation, store, session_id, thread_id, turn_id) or [node]
     canonical_turns: list[RuntimeState] = []
     baseline_sequences: dict[str, int] = {}
     for candidate in canonical_candidates:
-        current, baseline_sequence = store.runtime_stream_snapshot(session_id, candidate.id)
+        current, baseline_sequence = await asyncio.to_thread(store.runtime_stream_snapshot, session_id, candidate.id)
         canonical_turns.append(current or candidate)
         baseline_sequences[candidate.id] = baseline_sequence
     active_streams = getattr(state, "active_turn_streams", {})
@@ -271,7 +276,7 @@ async def turn_sse(
     local_revisions: dict[str, int] = {}
     for canonical in canonical_turns:
         local_revisions[canonical.id] = 0
-        snapshot = project_frame(store, NodeFrame.snapshot(canonical), canonical)
+        snapshot = await asyncio.to_thread(project_frame, store, NodeFrame.snapshot(canonical), canonical)
         snapshot["revision"] = 0
         yield f"id: {cursor}\ndata: {json.dumps(snapshot, ensure_ascii=False, separators=(',', ':'))}\n\n"
     if terminal is not None and not execution_active:
@@ -310,12 +315,14 @@ async def turn_sse(
                 payload["revision"] = 0
             elif payload.get("type") == "turn.delta":
                 if payload_turn_id not in local_revisions:
-                    current, current_sequence = _store(state).runtime_stream_snapshot(session_id, payload_turn_id)
+                    current, current_sequence = await asyncio.to_thread(
+                        store.runtime_stream_snapshot, session_id, payload_turn_id
+                    )
                     if current is None:
                         continue
                     baseline_sequences[payload_turn_id] = current_sequence
                     local_revisions[payload_turn_id] = 0
-                    snapshot = project_frame(_store(state), NodeFrame.snapshot(current), current)
+                    snapshot = await asyncio.to_thread(project_frame, store, NodeFrame.snapshot(current), current)
                     snapshot["revision"] = 0
                     yield f"id: {cursor}\ndata: {json.dumps(snapshot, ensure_ascii=False, separators=(',', ':'))}\n\n"
                     continue
@@ -332,16 +339,18 @@ async def thread_sse(state, session_id: str, thread_id: str, last_event_id: str 
     yield f"id: {cursor}\ndata: {json.dumps({'type': 'thread.ready', 'session_id': session_id, 'thread_id': thread_id}, separators=(',', ':'))}\n\n"
     store = _store(state)
     canonical_turns = [
-        node for node in store.load_nodes(session_id) if isinstance(node, RuntimeState) and node.thread_id == thread_id
+        node
+        for node in await asyncio.to_thread(store.load_nodes, session_id)
+        if isinstance(node, RuntimeState) and node.thread_id == thread_id
     ]
     baseline_sequences: dict[str, int] = {}
     refreshed_turns: list[RuntimeState] = []
     for candidate in canonical_turns:
-        current, baseline_sequence = store.runtime_stream_snapshot(session_id, candidate.id)
+        current, baseline_sequence = await asyncio.to_thread(store.runtime_stream_snapshot, session_id, candidate.id)
         node = current or candidate
         refreshed_turns.append(node)
         baseline_sequences[node.id] = baseline_sequence
-        snapshot = project_frame(store, NodeFrame.snapshot(node), node)
+        snapshot = await asyncio.to_thread(project_frame, store, NodeFrame.snapshot(node), node)
         snapshot["revision"] = 0
         yield f"id: {cursor}\ndata: {json.dumps(snapshot, ensure_ascii=False, separators=(',', ':'))}\n\n"
     heartbeat_at = monotonic() + 15.0

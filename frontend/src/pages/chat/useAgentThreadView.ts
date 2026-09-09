@@ -171,28 +171,40 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
     permissionMode: PermissionMode;
     providerName?: string;
     model?: RuntimeConfigModel;
-  }) {
+  }, retry?: ChatMessage) {
     if (!sessionId || !selectedThreadId || !isSubagent) throw new Error("当前没有选中的 Subagent Thread。");
-    const response = await sendAgentThreadMessage(selectedThreadId, {
-      sessionId,
-      ...values,
-      fullAccessAcknowledged: values.permissionMode === "full_access",
-    });
     const message: ChatMessage = {
-      id: `pending:${response.delivery_id}`,
+      id: retry?.id ?? `pending:${crypto.randomUUID()}`,
       role: "user",
       content: values.content,
       events: [],
       references: values.references,
-      deliveryId: response.delivery_id,
       pending: true,
       timelineSource: "steering",
     };
     setPendingByThread((current) => ({
       ...current,
-      [pendingKey]: [...(current[pendingKey] ?? []), message],
+      [pendingKey]: [...(current[pendingKey] ?? []).filter((item) => item.id !== message.id), message],
     }));
-    return response;
+    try {
+      const response = await sendAgentThreadMessage(selectedThreadId, {
+        sessionId,
+        ...values,
+        fullAccessAcknowledged: values.permissionMode === "full_access",
+      });
+      setPendingByThread((current) => ({
+        ...current,
+        [pendingKey]: (current[pendingKey] ?? []).map((item) => item.id === message.id ? { ...item, deliveryId: response.delivery_id } : item),
+      }));
+      return response;
+    } catch (error) {
+      setPendingByThread((current) => ({
+        ...current,
+        [pendingKey]: (current[pendingKey] ?? []).map((item) => item.id === message.id
+          ? { ...item, pending: false, error: String((error as Error).message ?? error) } : item),
+      }));
+      throw error;
+    }
   }
 
   return {

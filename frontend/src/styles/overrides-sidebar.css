@@ -17,8 +17,8 @@
 
 .mobile-sidebar-bar {
   padding: 8px 12px;
-  background: #fff;
-  border-bottom: 1px solid #e5e7eb;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
 }
 
 .app-sidebar {
@@ -29,11 +29,27 @@
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  color: #000000 !important;
-  background: #ffffff !important;
-  border-color: #000000 !important;
+  color: var(--text) !important;
+  background: var(--surface) !important;
+  border-color: var(--border) !important;
+  min-height: 40px;
+  border-radius: 8px;
   box-shadow: none !important;
   transition: color 350ms ease, border-color 350ms ease;
+}
+
+.sidebar-create-button.ant-btn-text {
+  justify-content: flex-start;
+  background: transparent !important;
+  border-color: transparent !important;
+}
+
+.sidebar-utility-links > .ant-btn {
+  grid-row: 1;
+}
+
+.sidebar-utility-links .sidebar-create-button {
+  justify-content: flex-start;
 }
 
 .sidebar-create-button.ant-btn::before {
@@ -41,7 +57,7 @@
   inset: 0;
   z-index: 0;
   display: block;
-  background: #efefef;
+  background: var(--hover);
   content: "";
   pointer-events: none;
   transform: scaleX(0);
@@ -72,7 +88,7 @@
 
 .history-list-item.is-dragging {
   opacity: 0.72;
-  filter: drop-shadow(0 5px 8px rgba(0, 0, 0, 0.16));
+  filter: drop-shadow(0 5px 8px var(--shadow-strong));
 }
 
 .history-item {
@@ -119,7 +135,7 @@
 }
 
 .history-entry-button.selected {
-  background: rgba(8, 127, 141, 0.1);
+  background: var(--accent-soft);
 }
 
 .history-entry-icon {
@@ -203,6 +219,6 @@
 .message-actions .icon-action:hover,
 .message-actions .icon-action:focus-visible {
   border: 0;
-  background: rgba(8, 127, 141, 0.1);
+  background: var(--accent-soft);
   color: var(--accent-dark);
 }

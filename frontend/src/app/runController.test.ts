@@ -66,6 +66,35 @@ afterEach(() => {
 });
 
 describe("run controller incremental batching", () => {
+  it("defers an early pause until the Turn exists and allows retry after a failed pause", async () => {
+    let finish!: () => void;
+    let snapshot!: () => void;
+    vi.mocked(streamChat).mockImplementation(async (_prompt, onMessage) => {
+      snapshot = () => onMessage({ type: "turn.snapshot", revision: 0, turn: turn() });
+      await new Promise<void>((resolve) => { finish = resolve; });
+      return "completed";
+    });
+    vi.mocked(pauseTurn).mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined);
+    const updateLastMessage = vi.fn();
+    const controller = createRunController({
+      activeRuns: new Map(), updateLastMessage,
+      rebindRunSession: vi.fn().mockResolvedValue(undefined),
+      refreshSessions: vi.fn().mockResolvedValue(undefined),
+      updateConversation: vi.fn(), recoverConversation: vi.fn().mockResolvedValue(undefined),
+    });
+    const running = controller.runConversation(request());
+    controller.stopConversation("conversation_1");
+    expect(pauseTurn).not.toHaveBeenCalled();
+    snapshot();
+    await vi.waitFor(() => expect(pauseTurn).toHaveBeenCalledTimes(1));
+    const errorUpdate = updateLastMessage.mock.calls.find((call) => call[1]({}).error?.includes("offline"));
+    expect(errorUpdate).toBeDefined();
+    controller.stopConversation("conversation_1");
+    await vi.waitFor(() => expect(pauseTurn).toHaveBeenCalledTimes(2));
+    finish();
+    await running;
+  });
+
   it("silently settles an empty pre-baseline failure and reloads the conversation", async () => {
     vi.mocked(streamChat).mockResolvedValue("silent_failed");
     const recoverConversation = vi.fn().mockResolvedValue(undefined);

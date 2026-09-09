@@ -8,6 +8,7 @@ import { TURN_PROTOCOL_VERSION } from "../../app/runtime/runtimeNodeNormalizatio
 import type { QueuedMessage } from "../../app/types";
 import {
   compactTurn,
+  createQueuedMessage,
   getSessionNodes,
   listAgentThreadChildren,
   patchRuntimeConfig,
@@ -32,6 +33,7 @@ import ChatPage, { CHAT_COMPACT_WIDTH, composerAction } from "./ChatPage";
 vi.mock("../../api", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../api")>(),
   compactTurn: vi.fn(),
+  createQueuedMessage: vi.fn(),
   getSessionNodes: vi.fn(),
   listAgentThreadChildren: vi.fn(),
   patchRuntimeConfig: vi.fn(),
@@ -175,10 +177,12 @@ function QueueHarness({
   onRun,
   runGate,
   sandboxHealth,
+  onStopRun,
 }: {
   terminalStatus: RuntimeStateNode["status"];
   onRun: ReturnType<typeof vi.fn>;
   runGate?: Promise<void>;
+  onStopRun?: ReturnType<typeof vi.fn>;
   sandboxHealth?: { phase: "checking" | "healthy" | "unhealthy"; detail: string | null };
 }) {
   const [node, setNode] = useState(() => {
@@ -226,6 +230,7 @@ function QueueHarness({
         conversation={conversation}
         running={node.status === "running"}
         queuedMessages={queued}
+        onStopRun={onStopRun}
         onQueuedMessagesChange={(_conversationId, updater) => setQueued((current) => updater(current))}
         onQueuedMessagesRefresh={async () => {
           const hasAcknowledgedDelivery = node.data[node.current_data_idx]
@@ -689,7 +694,7 @@ describe("ChatPage rewind projection", () => {
     }
   });
 
-  it("keeps the composer draft when Redis rejects admission", async () => {
+  it("keeps a failed message for retry without restoring the old draft", async () => {
     const onRun = vi.fn((request: { onAdmissionRejected?: () => void }) => {
       request.onAdmissionRejected?.();
     });
@@ -700,12 +705,57 @@ describe("ChatPage rewind projection", () => {
     await userEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
-    expect(composer).toHaveTextContent("redis unavailable draft");
+    expect(composer.textContent).toBe("");
+    expect(screen.getByText("redis unavailable draft")).toBeVisible();
+    expect(screen.getByRole("button", { name: "重试发送" })).toBeVisible();
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({
       deliveryId: expect.any(String),
       onAccepted: expect.any(Function),
       onAdmissionRejected: expect.any(Function),
     }));
+  });
+
+  it("clears immediately and never erases text entered before a delayed receipt", async () => {
+    let resolve!: () => void;
+    const gate = new Promise<void>((done) => { resolve = done; });
+    const onRun = vi.fn().mockReturnValue(gate);
+    render(<Harness onRun={onRun} onRewind={vi.fn()} />);
+    const editor = screen.getByLabelText("聊天输入");
+    try {
+      await userEvent.type(editor, "first prompt");
+      await userEvent.click(screen.getByRole("button", { name: "发送" }));
+      expect(editor.textContent).toBe("");
+      expect(screen.getByText("first prompt")).toBeVisible();
+      await userEvent.type(editor, "next draft");
+      await act(async () => onRun.mock.calls[0][0].onAccepted());
+      expect(editor).toHaveTextContent("next draft");
+    } finally {
+      await act(async () => resolve());
+    }
+  });
+
+  it("retains the submitted message when creating its session fails", async () => {
+    render(<AntApp><ChatPage conversation={null} onUpdate={vi.fn()} onNew={vi.fn().mockRejectedValue(new Error("session unavailable"))} onNavigate={vi.fn()} onRun={vi.fn()} /></AntApp>);
+    const editor = screen.getByLabelText("聊天输入");
+    await userEvent.type(editor, "unsaved first message");
+    await userEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByRole("button", { name: "重试发送" });
+    expect(editor.textContent).toBe("");
+    expect(screen.getByText("unsaved first message")).toBeVisible();
+    await userEvent.type(editor, "later draft");
+    expect(editor).toHaveTextContent("later draft");
+  });
+
+  it("reuses the original delivery and Turn identifiers on retry", async () => {
+    const onRun = vi.fn((request) => { request.onAdmissionRejected?.(); });
+    render(<Harness onRun={onRun} onRewind={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText("聊天输入"), "retry me");
+    await userEvent.click(screen.getByRole("button", { name: "发送" }));
+    const original = onRun.mock.calls[0][0];
+    await userEvent.click(screen.getByRole("button", { name: "重试发送" }));
+    expect(onRun).toHaveBeenCalledTimes(2);
+    expect(onRun.mock.calls[1][0]).toMatchObject({ deliveryId: original.deliveryId, turnId: original.turnId });
+    expect(screen.getAllByText("retry me")).toHaveLength(1);
   });
 
   it("prunes descendants only when the edited message is submitted for rewind", async () => {
@@ -1055,7 +1105,7 @@ describe("ChatPage queued message flushing", () => {
     expect(screen.getByLabelText("聊天输入")).toHaveAttribute("contenteditable", "false");
     expect(screen.getByRole("combobox", { name: "运行模式" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "发送第 1 条待发送消息" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "暂停" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "追加指令" })).toBeDisabled();
     expect(screen.queryByText("沙箱 Broker 不可用：Broker service stopped", { selector: ".message.user *" })).toBeNull();
     expect(onRun).not.toHaveBeenCalled();
   });
@@ -1110,10 +1160,11 @@ describe("ChatPage queued message flushing", () => {
     await waitFor(() => expect(screen.getByTestId("queued-count")).toHaveTextContent("1"));
   });
 
-  it("uses Pause to merge all unsent entries into one steering input", async () => {
-    render(<QueueHarness terminalStatus="success" onRun={vi.fn()} />);
+  it("labels the queue action as steering and allows pause while delivery is pending", async () => {
+    const onStopRun = vi.fn();
+    render(<QueueHarness terminalStatus="success" onRun={vi.fn()} onStopRun={onStopRun} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "暂停" }));
+    fireEvent.click(screen.getByRole("button", { name: "追加指令" }));
     await waitFor(() => expect(vi.mocked(steerTurn)).toHaveBeenCalledWith(
       "turn-running",
       expect.any(String),
@@ -1121,6 +1172,25 @@ describe("ChatPage queued message flushing", () => {
       "session-rewind",
     ));
     expect(screen.getAllByText(/发送中/)).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "暂停" }));
+    expect(onStopRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the queue draft before Redis replies and preserves the next draft", async () => {
+    let resolve!: (value: QueuedMessage) => void;
+    const gate = new Promise<QueuedMessage>((done) => { resolve = done; });
+    vi.mocked(createQueuedMessage).mockReturnValueOnce(gate);
+    render(<QueueHarness terminalStatus="success" onRun={vi.fn()} />);
+    const editor = screen.getByLabelText("聊天输入");
+    await userEvent.type(editor, "new queued prompt");
+    await userEvent.click(screen.getByRole("button", { name: "发送" }));
+    expect(editor.textContent).toBe("");
+    expect(screen.getByText("new queued prompt")).toBeVisible();
+    await userEvent.type(editor, "later draft");
+    const calls = vi.mocked(createQueuedMessage).mock.calls;
+    const args = calls[calls.length - 1];
+    await act(async () => resolve({ id: args[1], thread_id: args[0], content: args[2], references: [], state: "pending", created_at: "now", updated_at: "now" }));
+    expect(editor).toHaveTextContent("later draft");
   });
 
   it("keeps both draft and queue entry when edit is blocked", async () => {
@@ -1241,7 +1311,8 @@ describe("ChatPage Trace navigation", () => {
     rerender(renderConversation(populated));
 
     expect(screen.getByRole("navigation", { name: "主内容视图" })).toBeInTheDocument();
-    expect(screen.getByTitle(node.thread_id)).toHaveClass("trace-toolbar-thread-id");
+    expect(screen.getByTitle(populated.title)).toHaveClass("chat-toolbar-title");
+    expect(screen.getByLabelText(node.thread_id)).toHaveClass("trace-toolbar-thread-id");
   });
 
   it("returns to Chat when switching from Trace to an empty conversation", async () => {
@@ -1368,7 +1439,7 @@ describe("ChatPage Trace navigation", () => {
       expect(screen.getByRole("button", { name: "思考等级：中" })).toBeInTheDocument();
 
       for (const [name, tooltip] of [
-        ["Thread", "Thread：session-rewind"],
+        ["Thread", "Thread"],
         ["Chat", "Chat"],
         ["Trace", "Trace"],
         ["运行模式：Agent", "运行模式：Agent"],
@@ -1466,7 +1537,7 @@ describe("ChatPage Agent Thread navigation", () => {
     expect(screen.getByRole("button", { name: "暂停" })).toBeInTheDocument();
 
     await selectChild(user);
-    expect(screen.getByTitle("thread-child-agent")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Thread" })).toHaveAttribute("aria-description", "thread-child-agent");
     expect(screen.getByText("child task", { selector: "p" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "暂停" })).not.toBeInTheDocument();
@@ -1475,7 +1546,7 @@ describe("ChatPage Agent Thread navigation", () => {
     expect(screen.getByTestId("subagent-canonical-active")).toHaveTextContent("turn-root-agent");
 
     await user.click(screen.getByRole("button", { name: "Trace" }));
-    expect(screen.getByTitle("thread-child-agent")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Thread" })).toHaveAttribute("aria-description", "thread-child-agent");
     expect(screen.queryByLabelText("聊天输入")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Chat" }));
 
@@ -1502,11 +1573,11 @@ describe("ChatPage Agent Thread navigation", () => {
     await selectChild(user);
 
     expect(screen.getByRole("navigation", { name: "主内容视图" })).toBeInTheDocument();
-    expect(screen.getByTitle("thread-child-agent")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Thread" })).toHaveAttribute("aria-description", "thread-child-agent");
     expect(screen.getByLabelText("聊天输入")).toBeInTheDocument();
   });
 
-  it("restores the Subagent draft and displays the API failure", async () => {
+  it("keeps the failed Subagent message outside the cleared composer", async () => {
     vi.mocked(sendAgentThreadMessage).mockRejectedValueOnce(new Error("redis offline"));
     const user = userEvent.setup();
     render(<SubagentHarness />);
@@ -1516,8 +1587,10 @@ describe("ChatPage Agent Thread navigation", () => {
     await user.type(composer, "keep this draft");
     await user.click(screen.getByRole("button", { name: "发送" }));
 
-    expect(await screen.findByText("redis offline")).toBeInTheDocument();
-    expect(composer).toHaveTextContent("keep this draft");
+    expect((await screen.findAllByText("redis offline")).length).toBeGreaterThan(0);
+    expect(composer.textContent).toBe("");
+    expect(screen.getByText("keep this draft")).toBeVisible();
+    expect(screen.getByRole("button", { name: "重试发送" })).toBeVisible();
   });
 
   it("keeps the non-navigation Thread control from loading the Agent tree", async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listQueuedMessages } from "../api";
 import type { Conversation } from "../types";
 import type { QueuedMessage } from "./types";
@@ -17,16 +17,19 @@ export function useQueuedMessages({
   onError,
 }: UseQueuedMessagesOptions) {
   const [queuedMessages, setQueuedMessages] = useState<Map<string, QueuedMessage[]>>(() => new Map());
+  const revisions = useRef(new Map<string, number>());
 
   useEffect(() => {
     if (!current?.id || !current.threadId) return;
     let active = true;
+    const revision = (revisions.current.get(current.id) ?? 0) + 1;
+    revisions.current.set(current.id, revision);
     void listQueuedMessages(current.threadId)
       .then((items) => {
-        if (!active) return;
+        if (!active || revision !== (revisions.current.get(current.id) ?? 0)) return;
         setQueuedMessages((previous) => {
           const next = new Map(previous);
-          next.set(current.id, items);
+          next.set(current.id, mergeLocalMessages(previous.get(current.id) ?? [], items));
           return next;
         });
       })
@@ -37,6 +40,7 @@ export function useQueuedMessages({
   }, [current?.id, current?.threadId]);
 
   function updateQueuedMessages(conversationId: string, updater: (items: QueuedMessage[]) => QueuedMessage[]) {
+    revisions.current.set(conversationId, (revisions.current.get(conversationId) ?? 0) + 1);
     setQueuedMessages((previous) => {
       const queues = new Map(previous);
       const next = updater(previous.get(conversationId) ?? []);
@@ -49,13 +53,22 @@ export function useQueuedMessages({
   async function refreshQueuedMessages(conversationId: string): Promise<void> {
     const target = conversations.find((item) => item.id === conversationId) ?? panelConversations[conversationId];
     if (!target?.threadId) return;
+    const revision = (revisions.current.get(conversationId) ?? 0) + 1;
+    revisions.current.set(conversationId, revision);
     const items = await listQueuedMessages(target.threadId);
+    if (revision !== (revisions.current.get(conversationId) ?? 0)) return;
     setQueuedMessages((previous) => {
       const next = new Map(previous);
-      next.set(conversationId, items);
+      next.set(conversationId, mergeLocalMessages(previous.get(conversationId) ?? [], items));
       return next;
     });
   }
 
   return { queuedMessages, setQueuedMessages, updateQueuedMessages, refreshQueuedMessages };
+}
+
+function mergeLocalMessages(local: QueuedMessage[], stored: QueuedMessage[]): QueuedMessage[] {
+  const unsaved = local.filter((item) => item.saving || item.error);
+  const ids = new Set(unsaved.map((item) => item.id));
+  return [...stored.filter((item) => !ids.has(item.id)), ...unsaved];
 }

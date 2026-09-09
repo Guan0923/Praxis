@@ -15,6 +15,7 @@ from backend.configuration import LocalConfigStore
 from .contract import (
     DEFAULT_AGENT_CONFIG,
     DEFAULT_CAPABILITY_CONFIG,
+    DEFAULT_MEMORY_CONFIG,
     DEFAULT_PROFILE,
     DEFAULT_PROVIDER_CONFIG,
     DEFAULT_RUNTIME_CONFIG,
@@ -53,11 +54,13 @@ class LocalSettingsStore:
         self.config_store.ensure_defaults(
             {
                 "profile": {"display_name": "本地用户", "agent_preferences": ""},
+                "appearance": {"mode": "light"},
                 "agent": dict(DEFAULT_AGENT_CONFIG),
                 "runtime": {"log_full_messages": True, **DEFAULT_RUNTIME_CONFIG},
                 "sandbox": dict(DEFAULT_SANDBOX_CONFIG),
                 "capabilities": dict(DEFAULT_CAPABILITY_CONFIG),
                 "skills": dict(DEFAULT_SKILL_CONFIG),
+                "memory": dict(DEFAULT_MEMORY_CONFIG),
             }
         )
         with self._connection() as connection:
@@ -104,6 +107,20 @@ class LocalSettingsStore:
             raise ValueError("profile is too long")
         result = {"display_name": name, "agent_preferences": preferences}
         self.config_store.update({"profile": result})
+        return result
+
+    def appearance_config(self) -> dict[str, str]:
+        raw = self.config_store.read().get("appearance", {})
+        mode = raw.get("mode", "light") if isinstance(raw, Mapping) else "light"
+        if mode not in ("light", "dark"):
+            raise ValueError("appearance mode must be light or dark")
+        return {"mode": str(mode)}
+
+    def update_appearance_config(self, mode: str) -> dict[str, str]:
+        if mode not in ("light", "dark"):
+            raise ValueError("appearance mode must be light or dark")
+        result = {"mode": mode}
+        self.config_store.update({"appearance": result})
         return result
 
     def agent_config(self) -> dict[str, object]:
@@ -182,6 +199,20 @@ class LocalSettingsStore:
             profile["agent_preferences"],
         ]
         return "\n".join(item for item in parts if item).strip()
+
+    def memory_config(self) -> dict[str, object]:
+        from backend.domain.memory import MemorySettings
+
+        raw = self.config_store.read().get("memory")
+        return MemorySettings.from_mapping(raw if isinstance(raw, Mapping) else None).to_dict()
+
+    def update_memory_config(self, values: Mapping[str, object]) -> dict[str, object]:
+        from backend.domain.memory import MemorySettings
+
+        current = self.memory_config()
+        result = MemorySettings.from_mapping({**current, **dict(values)}).to_dict()
+        self.config_store.replace_section("memory", result)
+        return result
 
     @staticmethod
     def _public_provider(record: Mapping[str, object]) -> dict[str, object]:
@@ -358,12 +389,14 @@ class LocalSettingsStore:
     def settings(self) -> dict[str, object]:
         return {
             "profile": self.profile(),
+            "appearance_config": self.appearance_config(),
             "agent_config": self.agent_config(),
             "provider_config": self.provider_config(),
             "provider_configs": self.provider_configs(),
             "capability_config": self.capability_config(),
             "runtime_config": normalize_runtime_config(DEFAULT_RUNTIME_CONFIG, self.runtime_config()),
             "sandbox_config": self.sandbox_config(),
+            "memory_config": self.memory_config(),
             "timezone_options": timezone_options(),
         }
 

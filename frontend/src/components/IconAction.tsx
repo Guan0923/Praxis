@@ -1,5 +1,6 @@
 import { Button, Tooltip, type ButtonProps } from "antd";
 import type { ReactNode } from "react";
+import { useButtonTooltips } from "./ButtonTooltipContext";
 
 type IconActionProps = Omit<ButtonProps, "aria-label" | "children" | "icon"> & {
   label: string;
@@ -7,8 +8,8 @@ type IconActionProps = Omit<ButtonProps, "aria-label" | "children" | "icon"> & {
 };
 
 export default function IconAction({ label, icon, size = "small", ...props }: IconActionProps) {
-  return (
-    <Tooltip title={label} placement="top">
+  const showTooltips = useButtonTooltips();
+  const button = (
       <Button
         {...props}
         className={["icon-action", props.className].filter(Boolean).join(" ")}
@@ -17,8 +18,8 @@ export default function IconAction({ label, icon, size = "small", ...props }: Ic
         icon={icon}
         aria-label={label}
       />
-    </Tooltip>
   );
+  return showTooltips ? <Tooltip title={label} placement="top">{button}</Tooltip> : button;
 }
 
 export type { IconActionProps };

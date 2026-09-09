@@ -100,6 +100,7 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
     )
 
     from .chat.decisions import router as decisions_router
+    from .memory_routes import router as memory_router
     from .routes.agent_threads import router as agent_threads_router
     from .routes.jobs import router as jobs_router
     from .routes.mcp_settings import router as mcp_settings_router
@@ -118,6 +119,7 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
     app.include_router(settings_router)
     app.include_router(skill_settings_router)
     app.include_router(mcp_settings_router)
+    app.include_router(memory_router)
     app.include_router(agent_threads_router)
     app.include_router(decisions_router)
     app.include_router(jobs_router)

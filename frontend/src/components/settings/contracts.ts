@@ -4,11 +4,13 @@ import type { LocalProfile } from "../../types";
 
 export type SettingsSection =
   | "profile"
+  | "appearance"
   | "agent"
   | "runtime"
   | "sandbox"
   | "skills"
   | "mcp"
+  | "memory"
   | "provider_add"
   | "provider_manage";
 
@@ -133,11 +135,22 @@ export function normalizeSettings(next: UserSettings): UserSettings {
     },
     terminal_options: next.terminal_options ?? [],
     terminal_notice: next.terminal_notice ?? null,
+    memory_config: next.memory_config ?? {
+      enabled: false,
+      disable_on_external_context: true,
+      extraction_model: "",
+      consolidation_model: "",
+      retrieval_limit: 40,
+      injection_max_items: 8,
+      injection_max_tokens: 1200,
+      injection_max_bytes: 8192,
+    },
   };
 }
 
 export function fallbackSettings(profile: LocalProfile): UserSettings {
   return {
+    appearance_config: { mode: "light" },
     profile: { display_name: profile.display_name, agent_preferences: profile.agent_preferences },
     agent_config: defaultAgent,
     provider_config: defaultProvider,
@@ -148,5 +161,15 @@ export function fallbackSettings(profile: LocalProfile): UserSettings {
     terminal_options: [],
     terminal_notice: null,
     timezone_options: [],
+    memory_config: {
+      enabled: false,
+      disable_on_external_context: true,
+      extraction_model: "",
+      consolidation_model: "",
+      retrieval_limit: 40,
+      injection_max_items: 8,
+      injection_max_tokens: 1200,
+      injection_max_bytes: 8192,
+    },
   };
 }

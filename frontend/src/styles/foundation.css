@@ -1,20 +1,28 @@
 :root {
-  --accent: #087f8d;
-  --accent-dark: #066874;
-  --bg: #f4f7f8;
-  --sidebar-bg: #ffffff;
-  --border: #e5e7eb;
-  --text: #1f2329;
-  --muted: #8a919f;
-  --user-bubble: #e6f7f5;
   --radius: 12px;
+}
+
+.appearance-loading {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: #202122;
+}
+
+.appearance-load-error {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100% - 24px));
+  z-index: 2000;
 }
 * {
   box-sizing: border-box;
 }
 
 :focus-visible {
-  outline: 2px solid #8af3ed;
+  outline: 2px solid var(--focus);
   outline-offset: 3px;
 }
 

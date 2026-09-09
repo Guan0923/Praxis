@@ -20,6 +20,12 @@ class ProfilePayload(BaseModel):
     agent_preferences: str = Field(default="", max_length=4000)
 
 
+class AppearanceConfigPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["light", "dark"]
+
+
 class AgentConfigPayload(BaseModel):
     tone: str = Field(default="balanced", max_length=40)
     verbosity: str = Field(default="balanced", max_length=40)
@@ -39,6 +45,19 @@ class RuntimeConfigPayload(BaseModel):
     max_tool_calls: StrictInt = Field(default=512, ge=1, le=1000)
     max_tool_parellel: StrictInt = Field(default=16, ge=1)
     terminal_type: Literal["cmd", "git_bash", "powershell", "pwsh", "wsl"] = "cmd"
+
+
+class MemoryConfigPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool = False
+    disable_on_external_context: StrictBool = True
+    extraction_model: str = Field(default="", max_length=300)
+    consolidation_model: str = Field(default="", max_length=300)
+    retrieval_limit: StrictInt = Field(default=40, ge=1, le=200)
+    injection_max_items: StrictInt = Field(default=8, ge=1, le=50)
+    injection_max_tokens: StrictInt = Field(default=1200, ge=128, le=16000)
+    injection_max_bytes: StrictInt = Field(default=8192, ge=512, le=65536)
 
 
 class SandboxLimitsPayload(BaseModel):
@@ -141,10 +160,30 @@ def update_agent(body: AgentConfigPayload, request: Request) -> dict[str, object
         raise _value_error(exc) from exc
 
 
+@router.put("/appearance")
+def update_appearance(body: AppearanceConfigPayload, request: Request) -> dict[str, str]:
+    return _settings(request).update_appearance_config(body.mode)
+
+
 @router.put("/runtime")
 def update_runtime(body: RuntimeConfigPayload, request: Request) -> dict[str, object]:
     try:
         return _settings(request).update_runtime_config(body.model_dump())
+    except ValueError as exc:
+        raise _value_error(exc) from exc
+
+
+@router.put("/memory")
+def update_memory(body: MemoryConfigPayload, request: Request) -> dict[str, object]:
+    try:
+        previous = bool(_settings(request).memory_config().get("enabled"))
+        result = _settings(request).update_memory_config(body.model_dump())
+        enabled = bool(result.get("enabled"))
+        if previous and not enabled:
+            request.app.state.web.memory_automation.stop()
+        if enabled:
+            request.app.state.web.memory_automation.wake()
+        return result
     except ValueError as exc:
         raise _value_error(exc) from exc
 

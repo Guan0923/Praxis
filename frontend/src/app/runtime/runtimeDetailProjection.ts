@@ -1,5 +1,5 @@
 import type { ChatMessage, Conversation, DecisionRequest, FileReference, RuntimeStateNode, RuntimeTreeNode, ToolEvent, TurnItem } from "../../types";
-import { isRuntimeTurnNode, normalizeRuntimeNode } from "./runtimeNodeNormalization";
+import { isRuntimeTurnNode } from "./runtimeNodeNormalization";
 
 const keyOf = (turn: RuntimeTreeNode) => `${turn.session_id}:${turn.id}`;
 const LEGACY_UNKNOWN_ERROR = "An unknown error caused the system to encounter an exception.";
@@ -322,10 +322,7 @@ export function integrateRuntimeNodeUpdates(
   activeTurnId: string,
   forcePathProjection: boolean,
 ): Conversation {
-  const current = new Map((conversation.runtimeNodes ?? []).map((node) => {
-    const normalized = normalizeRuntimeNode(node);
-    return [keyOf(normalized), normalized] as const;
-  }));
+  const current = new Map((conversation.runtimeNodes ?? []).map((node) => [keyOf(node), node] as const));
   for (const turn of turns) {
     const hasSessionTurn = [...current.values()].some((node) =>
       isRuntimeTurnNode(node) && node.session_id === turn.session_id
@@ -359,6 +356,12 @@ export function integrateRuntimeNodeUpdates(
   const latestRunEndsTurn = latestRun?.end === activeTurn.data[activeTurn.current_data_idx].length - 1;
   if (forcePathProjection || !latestRun || assistantIndex < 0 || !latestRunEndsTurn) {
     messages = projectTurnPath(current, activeTurnId);
+    const delivered = new Set(messages.map((item) => item.deliveryId).filter(Boolean));
+    const retained = conversation.messages.filter((item) =>
+      item.role === "user" && (item.pending || item.error)
+      && item.deliveryId && !delivered.has(item.deliveryId)
+    );
+    messages.push(...retained);
     if (conversation.hiddenBeforeTurnId) {
       const prefix = `${conversation.hiddenBeforeTurnId}:message:`;
       let hiddenIndex = -1;

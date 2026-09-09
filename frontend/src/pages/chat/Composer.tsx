@@ -7,10 +7,12 @@ import {
   PlayCircleTwoTone,
   RobotOutlined,
   SafetyOutlined,
+  SendOutlined,
 } from "@ant-design/icons";
 import { useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { ChatMode, PermissionMode, ReasoningEffort, TodoItem } from "../../types";
 import IconAction from "../../components/IconAction";
+import { useButtonTooltips } from "../../components/ButtonTooltipContext";
 import type { FileCandidate } from "../../commands/fileCompletion";
 import { sessionFileContentUrl } from "../../api/projects/files";
 import { SessionTodoPanel } from "./todoPanel";
@@ -96,9 +98,11 @@ export interface ComposerProps {
 }
 
 export default function Composer(props: ComposerProps) {
+  const showButtonTooltips = useButtonTooltips();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const actionMode = props.actionMode ?? (props.busy ? "pause" : "send");
+  const steeringAvailable = props.queuedMessages?.some((item) => item.state === "pending" && !item.saving && !item.error);
 
   function openFilePicker() {
     if (props.disabled || props.uploadsDisabled) return;
@@ -151,7 +155,7 @@ export default function Composer(props: ComposerProps) {
   );
   const compactSettingsControls = (
     <Space className="composer-compact-settings" size={2}>
-      <Tooltip title={`运行模式：${MODE_LABELS[props.mode]}`}>
+      <Tooltip title={showButtonTooltips ? `运行模式：${MODE_LABELS[props.mode]}` : undefined}>
         <Dropdown
           trigger={["click"]}
           placement="topLeft"
@@ -170,7 +174,7 @@ export default function Composer(props: ComposerProps) {
           <Button type="text" size="small" className="composer-compact-setting" icon={<RobotOutlined />} aria-label={`运行模式：${MODE_LABELS[props.mode]}`} loading={props.modePending} disabled={props.disabled || props.modePending} />
         </Dropdown>
       </Tooltip>
-      <Tooltip title={`权限模式：${PERMISSION_LABELS[props.permissionMode]}`}>
+      <Tooltip title={showButtonTooltips ? `权限模式：${PERMISSION_LABELS[props.permissionMode]}` : undefined}>
         <Dropdown
           trigger={["click"]}
           placement="topLeft"
@@ -190,7 +194,7 @@ export default function Composer(props: ComposerProps) {
         </Dropdown>
       </Tooltip>
       {usageIndicator}
-      <Tooltip title={`思考等级：${REASONING_LABELS[props.reasoningEffort]}`}>
+      <Tooltip title={showButtonTooltips ? `思考等级：${REASONING_LABELS[props.reasoningEffort]}` : undefined}>
         <Dropdown
           trigger={["click"]}
           placement="topLeft"
@@ -291,11 +295,12 @@ export default function Composer(props: ComposerProps) {
               className="send-btn stop composer-reveal-item"
               data-reveal-index="5"
               type="button"
-              aria-label="暂停"
+              aria-label={steeringAvailable ? "追加指令" : "暂停"}
+              title={steeringAvailable ? "追加指令" : "暂停"}
               onClick={props.onStop}
               disabled={props.submitDisabled}
             >
-              <PauseCircleTwoTone aria-hidden="true" />
+              {steeringAvailable ? <SendOutlined aria-hidden="true" /> : <PauseCircleTwoTone aria-hidden="true" />}
             </button>
           ) : actionMode === "resume" ? (
             <button

@@ -94,6 +94,8 @@ def collect_steering(runtime: AgentRuntime) -> SteeringUpdate | None:
 def apply_steering(runtime: AgentRuntime, update: SteeringUpdate, *, phase: str) -> None:
     """Append one merged user message and persist it before execution continues."""
 
+    if runtime.stop_requested():
+        return
     publish = runtime.services.publish or (lambda _event: None)
     data = {
         "message_count": update.message_count,

@@ -29,7 +29,7 @@ class FakeStreamResponse:
     def raise_for_status(self) -> None:
         return None
 
-    def iter_lines(self, decode_unicode: bool = False) -> list[str | bytes]:
+    def iter_lines(self, chunk_size: int = 512, decode_unicode: bool = False) -> list[str | bytes]:
         assert decode_unicode is False
         return self.lines
 
@@ -48,13 +48,13 @@ class FakeStreamSession:
 
 
 class BrokenChunkedResponse(FakeStreamResponse):
-    def iter_lines(self, decode_unicode: bool = False):
+    def iter_lines(self, chunk_size: int = 512, decode_unicode: bool = False):
         assert decode_unicode is False
         raise requests.exceptions.ChunkedEncodingError("Response ended prematurely")
 
 
 class BrokenChunkedAfterEventResponse(FakeStreamResponse):
-    def iter_lines(self, decode_unicode: bool = False):
+    def iter_lines(self, chunk_size: int = 512, decode_unicode: bool = False):
         assert decode_unicode is False
         yield 'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}'
         raise requests.exceptions.ChunkedEncodingError("Response ended prematurely")
@@ -686,7 +686,7 @@ def test_pause_wins_over_chunked_failure_without_publishing_model_error(monkeypa
     pause_requested = threading.Event()
 
     class PausedChunkedResponse(BrokenChunkedAfterEventResponse):
-        def iter_lines(self, decode_unicode: bool = False):
+        def iter_lines(self, chunk_size: int = 512, decode_unicode: bool = False):
             assert decode_unicode is False
             yield 'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}'
             pause_requested.set()

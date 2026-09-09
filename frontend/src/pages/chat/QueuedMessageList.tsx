@@ -21,15 +21,17 @@ export default function QueuedMessageList({ items, onSend, onEdit, onDelete, dis
             <span className="queued-message-content">
               {item.content || "（仅文件）"}
               {item.state === "dispatched" ? <span className="queued-message-sending"> · 发送中</span> : null}
+              {item.saving ? <span className="queued-message-sending"> · 保存中</span> : null}
+              {item.error ? <span role="alert"> · {item.error}</span> : null}
             </span>
             <span className="queued-message-actions">
-              <button type="button" className="queued-message-button" aria-label={`发送第 ${index + 1} 条待发送消息`} disabled={disabled || item.state === "dispatched"} onClick={() => onSend(item)}>
+              <button type="button" className="queued-message-button" title={item.error ? "重试" : "追加指令"} aria-label={`${item.error ? "重试" : "发送"}第 ${index + 1} 条待发送消息`} disabled={disabled || item.saving || item.state === "dispatched"} onClick={() => onSend(item)}>
                 <SendOutlined aria-hidden="true" />
               </button>
-              <button type="button" className="queued-message-button" aria-label={`编辑第 ${index + 1} 条待发送消息`} disabled={disabled || item.state === "dispatched"} onClick={() => onEdit(item)}>
+              <button type="button" className="queued-message-button" aria-label={`编辑第 ${index + 1} 条待发送消息`} disabled={disabled || item.saving || item.state === "dispatched"} onClick={() => onEdit(item)}>
                 <EditOutlined aria-hidden="true" />
               </button>
-              <button type="button" className="queued-message-button danger" aria-label={`删除第 ${index + 1} 条待发送消息`} disabled={disabled || item.state === "dispatched"} onClick={() => onDelete(item)}>
+              <button type="button" className="queued-message-button danger" aria-label={`删除第 ${index + 1} 条待发送消息`} disabled={disabled || item.saving || item.state === "dispatched"} onClick={() => onDelete(item)}>
                 <DeleteOutlined aria-hidden="true" />
               </button>
             </span>
