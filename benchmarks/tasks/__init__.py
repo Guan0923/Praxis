@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..model import BenchmarkTask
-from .open_source import TASKS as _OPEN_SOURCE_TASKS
+from .public import TASKS as _OPEN_SOURCE_TASKS
 
 ALL_TASKS: tuple[BenchmarkTask, ...] = _OPEN_SOURCE_TASKS
 

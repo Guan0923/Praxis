@@ -11,14 +11,14 @@ from pathlib import Path
 @dataclass(frozen=True, init=False)
 class RunnerSettings:
     max_transport_retries: int = 5
-    max_tool_calls: int = 512
+    max_tool_calls: int | None = 512
     max_tool_parellel: int = 16
     log_full_messages: bool = True
 
     def __init__(
         self,
         max_transport_retries: int = 5,
-        max_tool_calls: int = 512,
+        max_tool_calls: int | None = 512,
         max_tool_parellel: int = 16,
         log_full_messages: bool = True,
     ) -> None:
@@ -35,9 +35,11 @@ class RunnerSettings:
     def __post_init__(self) -> None:
         if self.max_transport_retries < 0:
             raise ValueError("max_transport_retries must be zero or greater.")
-        if not isinstance(self.max_tool_calls, int) or isinstance(self.max_tool_calls, bool):
+        if self.max_tool_calls is not None and (
+            not isinstance(self.max_tool_calls, int) or isinstance(self.max_tool_calls, bool)
+        ):
             raise ValueError("max_tool_calls must be an integer.")
-        if not 1 <= self.max_tool_calls <= 1000:
+        if self.max_tool_calls is not None and not 1 <= self.max_tool_calls <= 1000:
             raise ValueError("max_tool_calls must be between 1 and 1000.")
         if not isinstance(self.max_tool_parellel, int) or isinstance(self.max_tool_parellel, bool):
             raise ValueError("max_tool_parellel must be an integer.")

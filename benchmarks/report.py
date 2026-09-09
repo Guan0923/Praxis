@@ -20,8 +20,11 @@ def build_report(results: list[TaskResult], *, meta: dict[str, Any] | None = Non
     except ImportError:
         TASKS_BY_NAME = {}
     tasks: list[dict[str, Any]] = []
+    source_results: dict[str, list[TaskResult]] = defaultdict(list)
     for name, attempts in groups.items():
         definition = TASKS_BY_NAME.get(name)
+        if definition is not None:
+            source_results[definition.source.benchmark].extend(attempts)
         task = {
             "task_name": name,
             "capability": attempts[0].capability,
@@ -30,11 +33,13 @@ def build_report(results: list[TaskResult], *, meta: dict[str, Any] | None = Non
             "pass_rate": round(sum(1 for attempt in attempts if attempt.passed) / len(attempts), 4),
             "source": definition.source.__dict__ if definition is not None else None,
             "difficulty": definition.difficulty if definition is not None else None,
+            "suite_version": definition.suite_version if definition is not None else None,
         }
         tasks.append(task)
     return {
         "meta": meta or {},
         "summary": summarize(results),
+        "by_source": {source: summarize(attempts) for source, attempts in source_results.items()},
         "tasks": tasks,
         "runs": [result.to_dict() for result in results],
     }

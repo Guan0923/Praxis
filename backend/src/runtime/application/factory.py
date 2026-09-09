@@ -65,6 +65,7 @@ def build_application(
     subagent_coordinator: SubagentCoordinator | None = None,
     sandbox_maintenance_gate: SandboxMaintenanceGate | None = None,
     todo_store: TodoListStore | None = None,
+    tools_override: ToolExecutor | None = None,
 ) -> AgentApplication:
     resolved_paths = paths or client_paths()
     base_config = initialize_config(resolved_paths, workspace)
@@ -93,6 +94,7 @@ def build_application(
     if model_config is None:
         runner = _build_subagent_runner(
             *runner_args,
+            **({"tools_override": tools_override} if tools_override is not None else {}),
             **({"project_id": project_id} if project_id else {}),
             **({"project_cwd": project_cwd} if project_cwd is not None else {}),
             **({"job_registry": job_registry} if job_registry is not None else {}),
@@ -105,6 +107,7 @@ def build_application(
     else:
         runner = _build_subagent_runner(
             *runner_args,
+            **({"tools_override": tools_override} if tools_override is not None else {}),
             model_config=model_config,
             **({"project_id": project_id} if project_id else {}),
             **({"project_cwd": project_cwd} if project_cwd is not None else {}),
@@ -165,11 +168,29 @@ def _build_subagent_runner(
     subagent_coordinator: SubagentCoordinator | None = None,
     sandbox_maintenance_gate: SandboxMaintenanceGate | None = None,
     todo_store: TodoListStore | None = None,
+    tools_override: ToolExecutor | None = None,
 ) -> AgentRunner:
     terminal_type = terminal_type or _terminal_type_for_config(config)
     resolved_paths = paths or client_paths()
     skill_settings = SkillSettings.from_config(config)
     subagent_settings = SubagentSettings.from_config(config)
+    if tools_override is not None:
+        # An explicitly supplied executor owns its execution boundary. Do not
+        # attach host tools, external MCP or host-backed child runners to it.
+        return _build_runner(
+            workspace,
+            planner_name,
+            settings,
+            tools_override,
+            checkpoints,
+            resolved_paths,
+            skill_settings,
+            user_preferences=user_preferences,
+            model_config=model_config,
+            job_registry=job_registry,
+            job_parent_id=job_parent_id,
+            todo_store=todo_store,
+        )
     sandbox_launcher, sandbox_config = _sandbox_runtime(
         config,
         paths=resolved_paths,

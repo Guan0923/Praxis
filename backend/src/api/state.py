@@ -57,6 +57,8 @@ class WebAppState:
         self.projects = ProjectStore(self.paths.projects_db)
         self.chat_workspace = self.paths.runtime_dir
         self.benchmark_root = self.data_root.parent / ".mini_agent-cache" / "benchmark"
+        self.benchmark_service = None
+        self.benchmark_lock = RLock()
         self.project_picker = project_picker
         self.job_registry = job_registry or JobRegistry()
         sandbox_config = self.settings.sandbox_config()
@@ -342,6 +344,8 @@ class WebAppState:
         return {"runtime": self.settings.runtime_config()}
 
     def close(self) -> None:
+        if self.benchmark_service is not None:
+            self.benchmark_service.close()
         self.turn_message_worker.close()
         self.runtime_event_relay.close()
         self.subagent_coordinator.close()

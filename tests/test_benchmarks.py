@@ -32,7 +32,8 @@ from benchmarks.model import (
 from benchmarks.report import build_report
 from benchmarks.runner import build_metrics, run_one_task
 from benchmarks.sandbox import Sandbox
-from benchmarks.tasks import ALL_TASKS
+from benchmarks.tasks import ALL_TASKS as PUBLIC_TASKS
+from benchmarks.tasks.open_source import TASKS as ALL_TASKS
 from benchmarks.verifiers.verify import VERIFIERS
 
 FIXTURES = Path(__file__).parents[1] / "benchmarks" / "fixtures"
@@ -185,13 +186,14 @@ def test_rule_planner_smoke_uses_a_temporary_unregistered_task(
     assert result.score == 1.0
 
 
-def test_registry_is_nine_source_backed_tasks() -> None:
-    assert len(ALL_TASKS) == 9
-    assert len({task.name for task in ALL_TASKS}) == 9
-    assert {task.capability for task in ALL_TASKS} == {"terminal", "software_engineering", "tool_workflow"}
-    assert all(sum(task.capability == capability for task in ALL_TASKS) == 3 for capability in _capabilities())
-    assert all(task.planner_modes == frozenset({"llm"}) for task in ALL_TASKS)
-    for task in ALL_TASKS:
+def test_registry_is_thirty_source_backed_tasks() -> None:
+    assert len(PUBLIC_TASKS) == 30
+    assert len({task.name for task in PUBLIC_TASKS}) == 30
+    assert {task.capability for task in PUBLIC_TASKS} == {"terminal", "software_engineering", "data_processing"}
+    assert all(sum(task.capability == capability for task in PUBLIC_TASKS) == 10 for capability in _capabilities())
+    assert all(task.planner_modes == frozenset({"llm"}) for task in PUBLIC_TASKS)
+    assert all(task.budgets.max_tool_calls is None and task.container for task in PUBLIC_TASKS)
+    for task in PUBLIC_TASKS:
         source = task.source
         assert all(
             isinstance(value, str) and value.strip()
@@ -207,7 +209,7 @@ def test_registry_is_nine_source_backed_tasks() -> None:
 
 
 def _capabilities() -> tuple[str, ...]:
-    return ("terminal", "software_engineering", "tool_workflow")
+    return ("terminal", "software_engineering", "data_processing")
 
 
 @pytest.mark.parametrize("task", ALL_TASKS, ids=lambda task: task.name)

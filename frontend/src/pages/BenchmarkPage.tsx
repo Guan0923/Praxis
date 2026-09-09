@@ -1,26 +1,35 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Card, Col, Collapse, Row, Spin, Statistic, Tag, Typography } from "antd";
+import { Alert, Button, Card, Col, Collapse, Row, Select, Spin, Statistic, Tag, Typography } from "antd";
 import {
   ApiOutlined,
   BarChartOutlined,
   ClockCircleOutlined,
   PlayCircleOutlined,
+  StopOutlined,
   TeamOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
-import { listTasks, runAllBenchmark, runBenchmark } from "../api";
-import type { BenchmarkResult, BenchmarkTraceEvent, TaskInfo } from "../types";
+import { getBenchmarkTrace, listTasks } from "../api";
+import type { BenchmarkResult, BenchmarkTaskRun, BenchmarkTraceEvent, TaskInfo } from "../types";
+import { isActive, useBenchmarkRuns } from "./benchmark/useBenchmarkRuns";
 
-interface RunState {
-  busy: boolean;
-  result: BenchmarkResult | null;
-  error: string | null;
-}
+const STATUS_LABEL: Record<string, string> = {
+  queued: "排队中", running: "运行中", stopping: "正在停止", completed: "已完成", failed: "执行失败", cancelled: "已停止",
+};
+const PHASE_LABEL: Record<string, string> = {
+  environment: "准备容器", timeout: "执行超时",
+  queued: "等待执行", workspace: "准备目录", application: "初始化", agent: "执行任务", grading: "评分", cleanup: "收尾",
+};
+const ACTIVITY_LABEL: Record<string, string> = {
+  model_request: "请求模型", model_response: "模型已响应", model_retry: "模型请求重试",
+  model_delta: "接收模型输出", tool_call: "调用工具", tool_result: "工具已返回", run_finished: "执行结束",
+};
 
 const CAPABILITY_LABEL: Record<string, string> = {
   terminal: "终端任务",
   software_engineering: "软件修复",
   tool_workflow: "工具工作流",
+  data_processing: "数据处理",
 };
 
 function scoreColor(score: number | null | undefined): string {
@@ -30,14 +39,25 @@ function scoreColor(score: number | null | undefined): string {
   return "#dc2626";
 }
 
-function ResultCard({ result }: { result: BenchmarkResult }) {
+function ResultCard({ result, runId, taskRun }: { result: BenchmarkResult; runId: string; taskRun: BenchmarkTaskRun }) {
   const metrics = (result.metrics ?? {}) as Record<string, unknown>;
   const score = (result.score as number | null | undefined) ?? null;
   const verdicts = (result.verdicts ?? []) as Array<Record<string, unknown>>;
   const passed = result.passed;
-  const statusLabel = passed === true ? "通过" : passed === false ? "未通过" : String(result.status ?? "?");
-  const statusColor = passed === true ? "success" : passed === false ? "error" : "processing";
-  const trace = Array.isArray(result.trace) ? result.trace as BenchmarkTraceEvent[] : [];
+  const statusLabel = score == null ? "未评分" : passed === true ? "通过" : "未通过";
+  const statusColor = score == null ? "default" : passed === true ? "success" : "error";
+  const [trace, setTrace] = useState<BenchmarkTraceEvent[] | null>(null);
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [traceError, setTraceError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!traceOpen || trace !== null) return;
+    const controller = new AbortController();
+    setTraceError(null);
+    getBenchmarkTrace(runId, taskRun.id, controller.signal)
+      .then((value) => { if (!controller.signal.aborted) setTrace(value); })
+      .catch((error) => { if (!controller.signal.aborted) setTraceError(String(error.message ?? error)); });
+    return () => controller.abort();
+  }, [traceOpen, trace, runId, taskRun.id]);
   const failurePhase = typeof result.failure_phase === "string" ? result.failure_phase : "";
 
   function jsonText(value: unknown): string {
@@ -49,7 +69,7 @@ function ResultCard({ result }: { result: BenchmarkResult }) {
   }
 
   return (
-    <Card className="result-card" size="small">
+    <section className="result-card">
       <div className="result-top">
         <Statistic
           className="score"
@@ -59,9 +79,9 @@ function ResultCard({ result }: { result: BenchmarkResult }) {
           suffix={score != null ? "分" : undefined}
           styles={{ content: { color: scoreColor(score) } }}
         />
-        <Tag color={statusColor}>状态：{statusLabel}</Tag>
-        {result.error ? <Alert className="error-text" title={String(result.error)} type="error" showIcon /> : null}
-        {failurePhase ? <Typography.Text type="secondary">失败阶段：{failurePhase}</Typography.Text> : null}
+        <Tag color={statusColor}>评分：{statusLabel}</Tag>
+        {result.error && taskRun.status !== "cancelled" ? <Alert className="error-text" title={String(result.error)} type="error" showIcon /> : null}
+        {failurePhase && taskRun.status !== "cancelled" ? <Typography.Text type="secondary">失败阶段：{PHASE_LABEL[failurePhase] ?? failurePhase}</Typography.Text> : null}
       </div>
       <Row className="result-metrics" gutter={[12, 12]}>
         <Col xs={12} sm={8}><Statistic prefix={<ClockCircleOutlined />} title="耗时" value={Number(metrics.duration_ms ?? 0) / 1000} precision={1} suffix="s" /></Col>
@@ -92,10 +112,11 @@ function ResultCard({ result }: { result: BenchmarkResult }) {
       <Collapse
         className="benchmark-trace"
         size="small"
+        onChange={(keys) => setTraceOpen(keys.includes("trace"))}
         items={[{
           key: "trace",
-          label: `完整 Trace（${trace.length} 条事件）`,
-          children: trace.length === 0 ? <Typography.Text type="secondary">没有可显示的运行事件。</Typography.Text> : (
+          label: `完整 Trace（${taskRun.trace_count} 条事件）`,
+          children: traceError ? <Alert type="error" title={traceError} /> : trace === null ? <Spin /> : trace.length === 0 ? <Typography.Text type="secondary">没有可显示的运行事件。</Typography.Text> : (
             <div className="benchmark-trace-list">
               {trace.map((event, index) => (
                 <div className="benchmark-trace-event" key={`${event.timestamp}-${event.kind}-${index}`}>
@@ -111,16 +132,17 @@ function ResultCard({ result }: { result: BenchmarkResult }) {
           ),
         }]}
       />
-    </Card>
+    </section>
   );
 }
 
 export default function BenchmarkPage() {
   const [tasks, setTasks] = useState<TaskInfo[]>([]);
   const [tasksLoading, setTasksLoading] = useState(true);
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [capabilityFilter, setCapabilityFilter] = useState("all");
   const planner = "llm" as const;
-  const [runs, setRuns] = useState<Record<string, RunState>>({});
-  const [allBusy, setAllBusy] = useState(false);
+  const benchmark = useBenchmarkRuns();
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -131,47 +153,58 @@ export default function BenchmarkPage() {
       .finally(() => setTasksLoading(false));
   }, []);
 
-  function runTask(name: string, p: string) {
-    setLoadError(null);
-    setRuns((prev) => ({ ...prev, [name]: { busy: true, result: null, error: null } }));
-    runBenchmark(name, p)
-      .then((result) => setRuns((prev) => ({ ...prev, [name]: { busy: false, result, error: null } })))
-      .catch((e) =>
-        setRuns((prev) => ({ ...prev, [name]: { busy: false, result: null, error: String(e?.message ?? e) } })),
-      );
+  const latest = new Map<string, { runId: string; task: BenchmarkTaskRun }>();
+  for (const batch of [...benchmark.runs].sort((a, b) => a.created_at.localeCompare(b.created_at))) {
+    for (const item of batch.tasks) latest.set(item.task_name, { runId: batch.id, task: item });
   }
-
-  function runAll() {
-    if (allBusy) return;
-    setLoadError(null);
-    setAllBusy(true);
-    runAllBenchmark(planner)
-      .then((results) => {
-        const map: Record<string, RunState> = {};
-        for (const result of results) {
-          map[String(result.task_name)] = { busy: false, result, error: null };
-        }
-        setRuns((prev) => ({ ...prev, ...map }));
-      })
-      .catch((e) => setLoadError(String(e?.message ?? e)))
-      .finally(() => setAllBusy(false));
-  }
+  const anyActive = benchmark.runs.some((batch) => isActive(batch.status));
+  const batch = [...benchmark.runs].reverse().find((item) => item.total > 1);
+  const unavailable = !benchmark.ready || Boolean(benchmark.connectionError);
+  const sources = [...new Set(tasks.map((task) => task.source.benchmark))];
+  const visibleTasks = tasks.filter((task) =>
+    (sourceFilter === "all" || task.source.benchmark === sourceFilter) &&
+    (capabilityFilter === "all" || task.capability === capabilityFilter));
 
   return (
     <div className="benchmark-page">
-      <Card className="page-header" variant="borderless">
+      <header className="page-header">
         <h1>Benchmark 成绩单</h1>
-        <p>让 agent 完成一批开源来源适配任务并自动判卷；成绩只代表 Mini-Agent adapted suite</p>
         <div className="bench-toolbar">
           <div className="planner-select">
             <label>运行方式</label>
-            <span className="muted">真实模型（llm）；无 rule 冒烟题</span>
+            <span className="muted">真实模型 · 并发上限 3</span>
           </div>
-          <Button className="run-all" type="primary" icon={<PlayCircleOutlined />} onClick={runAll} loading={allBusy}>
+          <Button className="run-all" type="primary" icon={<PlayCircleOutlined />} onClick={() => void benchmark.start()} loading={benchmark.pending.has("all")} disabled={unavailable || anyActive || benchmark.pending.size > 0}>
             全部运行
           </Button>
         </div>
-      </Card>
+      </header>
+
+      <div className="benchmark-filters">
+        <Select aria-label="题库来源" value={sourceFilter} onChange={setSourceFilter}
+          options={[{ value: "all", label: "全部来源" }, ...sources.map((value) => ({ value, label: value }))]} />
+        <Select aria-label="任务类别" value={capabilityFilter} onChange={setCapabilityFilter}
+          options={[{ value: "all", label: "全部类别" }, ...Object.entries(CAPABILITY_LABEL).filter(([value]) => tasks.some((task) => task.capability === value)).map(([value, label]) => ({ value, label }))]} />
+        <Typography.Text type="secondary">{visibleTasks.length} / {tasks.length} 题 · {tasks[0]?.suite_version}</Typography.Text>
+      </div>
+      <div className="benchmark-source-scores" aria-live="polite">
+        {sources.map((source) => {
+          const sourceTasks = tasks.filter((task) => task.source.benchmark === source);
+          const results = sourceTasks.map((task) => latest.get(task.name)?.task.result);
+          const graded = results.filter((result) => result?.score != null);
+          const passed = graded.filter((result) => result?.passed).length;
+          return <span key={source}>{source}：{passed} / {sourceTasks.length} 通过 · {graded.length} 已评分</span>;
+        })}
+      </div>
+
+      {batch ? <div className="benchmark-batch" aria-live="polite">
+        <strong>全部运行：{batch.finished} / {batch.total} 项已结束</strong>
+        <Tag>{STATUS_LABEL[batch.status]}</Tag>
+        {isActive(batch.status) ? <Button icon={<StopOutlined />} danger disabled={batch.status === "stopping" || unavailable} loading={benchmark.pending.has(`stop:${batch.id}`)} onClick={() => void benchmark.stop(batch.id)}>停止整批</Button> : null}
+      </div> : null}
+      {benchmark.expired ? <Alert type="warning" showIcon title="后端已重启，上次运行记录已失效。" /> : null}
+      {benchmark.connectionError ? <Alert type="error" showIcon title={`连接异常：${benchmark.connectionError}`} /> : null}
+      {benchmark.actionError ? <Alert type="error" showIcon title={benchmark.actionError} /> : null}
 
       {loadError ? <Alert className="error-text" title={loadError} type="error" showIcon /> : null}
 
@@ -181,8 +214,10 @@ export default function BenchmarkPage() {
         <Alert type="info" showIcon title="暂无可运行的基准任务。" />
       ) : (
         <Row className="task-grid" gutter={[16, 16]}>
-          {tasks.map((task) => {
-            const run = runs[task.name];
+          {visibleTasks.map((task) => {
+            const entry = latest.get(task.name);
+            const run = entry?.task;
+            const active = run ? isActive(run.status) : false;
             return (
               <Col xs={24} lg={12} key={task.name}>
                 <Card className="task-card">
@@ -199,6 +234,9 @@ export default function BenchmarkPage() {
                       {task.source.benchmark} / {task.source.task_id}
                     </a>
                   </p>
+                  <Typography.Paragraph type="secondary">
+                    {task.environment.kind === "docker" ? "Docker" : "本地"} · 环境：{({ verified: "已验收", downloaded: "已下载，待验收", not_prepared: "待准备", local: "本地测试" } as Record<string, string>)[task.environment.status] ?? task.environment.status}
+                  </Typography.Paragraph>
                   <Collapse
                     className="task-source"
                     size="small"
@@ -222,7 +260,7 @@ export default function BenchmarkPage() {
                           <Typography.Text strong>测试 Prompt</Typography.Text>
                           <pre className="benchmark-task-prompt">{task.prompt}</pre>
                           <Typography.Text type="secondary">
-                            预算：工具调用 {task.budgets.max_tool_calls}
+                            时限：{task.budgets.timeout_seconds / 60} 分钟 · 工具调用：{task.budgets.max_tool_calls ?? "不限次数"}
                           </Typography.Text>
                           {task.tags.length > 0 ? <div className="benchmark-task-tags">{task.tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}</div> : null}
                         </>
@@ -231,15 +269,21 @@ export default function BenchmarkPage() {
                   />
                   <div className="task-actions">
                     {task.planner_modes.includes(planner) ? (
-                      <Button className="send-btn" type="primary" icon={<PlayCircleOutlined />} onClick={() => runTask(task.name, planner)} loading={run?.busy}>
+                      <Button className="send-btn" type="primary" icon={<PlayCircleOutlined />} onClick={() => void benchmark.start(task.name)} loading={benchmark.pending.has(task.name)} disabled={unavailable || active || benchmark.pending.has("all")}>
                         运行
                       </Button>
                     ) : (
                       <span className="muted">该任务不支持 {planner} 模式</span>
                     )}
                   </div>
-                  {run?.error ? <Alert className="error-text" title={run.error} type="error" showIcon /> : null}
-                  {run?.result ? <ResultCard result={run.result} /> : null}
+                  {run && entry ? <div className="benchmark-run-status" aria-live="polite">
+                    <Tag color={run.status === "failed" ? "error" : run.status === "completed" ? "success" : "default"}>状态：{STATUS_LABEL[run.status]}</Tag>
+                    {active ? <span>{PHASE_LABEL[run.phase] ?? run.phase}</span> : null}
+                    <span>{(run.duration_ms / 1000).toFixed(1)} s</span>
+                    {active ? <span className="benchmark-activity">最近活动：{ACTIVITY_LABEL[run.activity] ?? PHASE_LABEL[run.activity] ?? "处理运行事件"} · {new Date(run.updated_at).toLocaleTimeString()}</span> : null}
+                    {active ? <Button icon={<StopOutlined />} danger disabled={run.status === "stopping" || unavailable} loading={benchmark.pending.has(`stop:${run.id}`)} onClick={() => void benchmark.stop(entry.runId, run.id)}>停止</Button> : null}
+                  </div> : null}
+                  {run?.result && entry ? <ResultCard key={run.id} result={run.result} runId={entry.runId} taskRun={run} /> : null}
                 </Card>
               </Col>
             );

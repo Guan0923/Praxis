@@ -13,6 +13,7 @@ import sys
 import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -35,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--all", action="store_true", help="Run every task (default when no --task is given).")
     parser.add_argument(
         "--capability",
-        choices=("terminal", "software_engineering", "tool_workflow"),
+        choices=("terminal", "software_engineering", "tool_workflow", "data_processing"),
         help="Filter tasks by capability.",
     )
     parser.add_argument(
@@ -123,21 +124,23 @@ def main(argv: list[str] | None = None) -> int:
         output_path = base / "report.json"
         sandbox_root = args.sandbox or base / "sandbox"
 
-    source_config = args.config or (Path.home() / "mini_agent" / "config.toml")
+    source_config = args.config or (Path.home() / ".mini_agent" / "config.toml")
+    model_config = None
     if args.planner == "llm":
         _preflight_model_config(source_config, parser)
+        from backend.providers import ModelConfig
+
+        model_config = ModelConfig.from_toml(source_config)
 
     from .report import build_report, print_summary, write_report
     from .runner import run_one_task
-    from .sandbox import Sandbox, activate_client_paths
-
-    sandbox = Sandbox(sandbox_root, source_config)
-    sandbox.prepare()
-    activate_client_paths(sandbox.paths)
+    from .sandbox import Sandbox
 
     results = []
     for attempt in range(1, args.repeat + 1):
         for task in selected:
+            sandbox = Sandbox(sandbox_root / uuid4().hex, source_config, model_config=model_config)
+            sandbox.prepare()
             print(
                 f"[bench] attempt={attempt}/{args.repeat} running {task.name} "
                 f"({task.capability}, planner={args.planner}) ...",
@@ -159,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
 
     meta = {
         "planner": args.planner,
-        "suite": "mini-agent-adapted-open-source-v1",
+        "suite": selected[0].suite_version,
         "repeat": args.repeat,
         "timestamp": datetime.now(UTC).isoformat(),
         "config_source": str(source_config),

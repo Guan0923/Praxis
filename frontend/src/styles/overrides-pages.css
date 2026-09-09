@@ -21,8 +21,7 @@
   background: rgba(255, 255, 255, 0.82);
 }
 
-.benchmark-page .task-card,
-.benchmark-page .result-card {
+.benchmark-page .task-card {
   height: 100%;
 }
 
@@ -131,10 +130,53 @@
 
 .benchmark-page .result-card {
   margin-top: 16px;
+  height: auto;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  padding: 16px 0 0;
+  background: transparent;
+}
+
+.benchmark-batch,
+.benchmark-run-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.benchmark-activity {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.benchmark-page .bench-toolbar {
+  flex-wrap: wrap;
+  margin-top: 16px;
 }
 
 .benchmark-page .result-metrics {
   color: var(--text);
+  gap: 0;
+}
+
+.benchmark-page .result-top {
+  flex-wrap: wrap;
+}
+
+.benchmark-page .result-top .score {
+  flex: 0 0 auto;
+  min-width: 86px;
+}
+
+.benchmark-page .result-top .error-text {
+  flex-basis: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .auth-card {
@@ -187,4 +229,20 @@
 
 .device-actions .primary-cta {
   min-height: 40px;
+}
+.benchmark-filters, .benchmark-source-scores {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-block: 16px;
+}
+.benchmark-filters .ant-select { width: 220px; max-width: 100%; }
+.benchmark-page .task-name { overflow-wrap: anywhere; }
+.benchmark-page .task-desc { overflow-wrap: anywhere; }
+
+@media (max-width: 600px) {
+  .benchmark-page .task-head { flex-direction: column; align-items: flex-start; }
+  .benchmark-page .task-name { width: 100%; }
+  .benchmark-page .task-badges { flex-wrap: wrap; }
 }

@@ -9,7 +9,7 @@ from typing import Literal
 
 from .metrics import RunMetrics
 
-Capability = Literal["terminal", "software_engineering", "tool_workflow"]
+Capability = Literal["terminal", "software_engineering", "tool_workflow", "data_processing"]
 Difficulty = Literal["easy", "medium", "hard"]
 
 
@@ -17,7 +17,8 @@ Difficulty = Literal["easy", "medium", "hard"]
 class Budgets:
     """Per-task execution limits passed through to the runtime."""
 
-    max_tool_calls: int = 32
+    max_tool_calls: int | None = 32
+    timeout_seconds: float = 3600
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,8 @@ class BenchmarkTask:
     budgets: Budgets = Budgets()
     tags: tuple[str, ...] = ()
     planner_modes: frozenset[str] = frozenset({"llm"})
+    container: dict | None = None
+    suite_version: str = "local"
 
 
 @dataclass

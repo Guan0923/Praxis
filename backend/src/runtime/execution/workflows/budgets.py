@@ -68,12 +68,13 @@ def _claim_model_turn(runtime: AgentRuntime, operation: str) -> bool:
 
 
 def _tool_batch_fits(runtime: AgentRuntime, response: AssistantMessage) -> bool:
-    return len(runtime.run.actions) + len(response.tool_messages) <= runtime.state.runner_settings.max_tool_calls
+    limit = runtime.state.runner_settings.max_tool_calls
+    return limit is None or len(runtime.run.actions) + len(response.tool_messages) <= limit
 
 
 def _reject_over_budget_tools(runtime: AgentRuntime, response: AssistantMessage) -> None:
     limit = runtime.state.runner_settings.max_tool_calls
-    remaining = max(0, limit - len(runtime.run.actions))
+    remaining = max(0, (limit or 0) - len(runtime.run.actions))
     reason = (
         f"the model requested {len(response.tool_messages)} tool calls, but only "
         f"{remaining} of {limit} tool calls remained."
@@ -86,7 +87,7 @@ def _reject_over_budget_tools(runtime: AgentRuntime, response: AssistantMessage)
 
 def _ensure_tool_budget(runtime: AgentRuntime) -> bool:
     limit = runtime.state.runner_settings.max_tool_calls
-    if len(runtime.run.actions) < limit:
+    if limit is None or len(runtime.run.actions) < limit:
         return True
     _fail_for_budget(
         runtime,

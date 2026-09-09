@@ -79,14 +79,17 @@ class Sandbox:
         allowed = {"model", "runtime", "mcp", "skills", "subagents"}
         normalized = {
             name: {
-                key: item for key, item in value.items() if isinstance(key, str) and isinstance(item, (str, int, bool))
+                key: item
+                for key, item in value.items()
+                if isinstance(key, str)
+                and isinstance(item, (str, int, bool))
+                and not any(
+                    part in key.lower() for part in ("key", "token", "password", "secret", "authorization", "cookie")
+                )
             }
             for name, value in values.items()
             if name in allowed and isinstance(value, dict)
         }
-        # Pre-write an independent device id so initialize_config does no
-        # mid-run writes and no sync coordinator can start in the sandbox.
-        normalized["sync"] = {"device_id": f"bench_{int(time.time())}_{id(self)}"}
         runtime = dict(normalized.get("runtime", {}))
         runtime["log_full_messages"] = True
         normalized["runtime"] = runtime
@@ -94,7 +97,7 @@ class Sandbox:
 
     def materialize_workspace(self, task: BenchmarkTask) -> Path:
         """Copy a validated fixture and seed task-owned client files into a fresh directory."""
-        workspace = self.workspaces_dir / f"{task.name}-{time.time_ns()}"
+        workspace = self.workspaces_dir / f"task-{time.time_ns()}"
         workspace.mkdir(parents=True, exist_ok=False)
         if task.seed.fixture is not None:
             fixture = self._fixture_path(task.seed.fixture)

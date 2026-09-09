@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from time import perf_counter
+from time import monotonic, perf_counter
 
 from backend.providers import ModelConfigurationError
 from backend.runtime import RunnerSettings, build_application
@@ -13,12 +14,14 @@ from backend.runtime.core.contracts import InterruptDecision, InterruptRequest
 from backend.runtime.core.events import RuntimeEvent
 from backend.runtime.persistence.recording import persistent_event
 
+from .containers import ContainerCancelled, ContainerTimeout, TaskContainer
 from .event_collector import EventCollector
 from .grading.programmatic import run_checkers
 from .grading.scoring import aggregate_score
 from .metrics import RunMetrics
-from .model import BenchmarkTask, Budgets, CheckContext, CheckerVerdict, TaskResult
+from .model import BenchmarkTask, CheckContext, CheckerVerdict, TaskResult
 from .sandbox import Sandbox
+from .upstream import grade, prepare_environment
 
 
 def auto_approve(request: InterruptRequest) -> InterruptDecision:
@@ -55,9 +58,7 @@ def apply_budget_overrides(task: BenchmarkTask, *, max_tool_calls: int | None) -
     budgets = task.budgets
     return replace(
         task,
-        budgets=Budgets(
-            max_tool_calls=max_tool_calls or budgets.max_tool_calls,
-        ),
+        budgets=replace(budgets, max_tool_calls=max_tool_calls or budgets.max_tool_calls),
     )
 
 
@@ -83,7 +84,7 @@ def _error_result(
         status="error",
         score=None,
         final_answer="",
-        metrics=RunMetrics(0.0, 0, 0, 0, 0, 0, 0, 0, []),
+        metrics=RunMetrics(0.0, 0, 0, 0, 0, 0, 0, []),
         verdicts=[],
         error=safe_message,
         passed=False,
@@ -110,6 +111,9 @@ def run_one_task(
     keep_workspaces: bool = False,
     max_tool_calls: int | None = None,
     attempt: int = 1,
+    cancel_requested: Callable[[], bool] | None = None,
+    on_phase: Callable[[str], None] | None = None,
+    on_event: Callable[[RuntimeEvent], None] | None = None,
 ) -> TaskResult:
     """Run one task end to end and return its graded result."""
     if planner not in task.planner_modes:
@@ -125,33 +129,82 @@ def run_one_task(
     app = None
     collector = EventCollector()
     phase = "workspace"
+    container = None
+    deadline: float | None = None
+    timed_out = False
+
+    def progress(value: str) -> None:
+        nonlocal phase
+        phase = value
+        if on_phase is not None:
+            on_phase(value)
+
+    def collect(event: RuntimeEvent) -> None:
+        collector(event)
+        if on_event is not None:
+            on_event(event)
+
+    def cancelled() -> bool:
+        nonlocal timed_out
+        if deadline is not None and monotonic() >= deadline:
+            timed_out = True
+        return timed_out or (cancel_requested is not None and cancel_requested())
+
     try:
+        progress("workspace")
+        if cancelled():
+            return replace(_error_result(task, "Run cancelled."), status="cancelled")
         workspace = sandbox.materialize_workspace(task)
+        if task.container is not None:
+            progress("environment")
+            container = TaskContainer(task, cancelled)
+            prepare_environment(container)
 
         settings = RunnerSettings(
             max_tool_calls=task.budgets.max_tool_calls,
             log_full_messages=True,
         )
-        phase = "application"
+        progress("application")
         app = build_application(
             workspace,
             planner_name=planner,
             settings=settings,
             paths=sandbox.paths,
             model_config=sandbox.model_config,
+            **(
+                {
+                    "tools_override": container.tools(),
+                    "config_override": {
+                        "skills": {"enabled": False},
+                        "mcp": {"enabled": False},
+                        "subagents": {"enabled": False},
+                    },
+                }
+                if container is not None
+                else {}
+            ),
         )
         conversation = app.open_conversation()
         started = perf_counter()
-        phase = "agent"
+        progress("agent")
+        deadline = monotonic() + task.budgets.timeout_seconds
         state = conversation.run_task(
             task.prompt,
             mode="agent",
-            on_event=collector,
+            on_event=collect,
             interrupt=auto_approve,
+            cancel_requested=cancelled,
         )
         duration_ms = (perf_counter() - started) * 1000.0
 
         metrics = build_metrics(collector, state, duration_ms)
+        cancelled()
+        deadline = None
+        if timed_out:
+            return replace(
+                _error_result(task, "Task execution timed out.", collector=collector, failure_phase="timeout"),
+                metrics=metrics,
+            )
         context = CheckContext(
             task_name=task.name,
             workspace=workspace,
@@ -160,8 +213,14 @@ def run_one_task(
             metrics=metrics,
             tool_calls_by_name=dict(collector.tool_calls_by_name),
         )
-        phase = "grading"
-        verdicts = run_checkers(task, context)
+        if cancelled():
+            return replace(
+                _error_result(task, "Run cancelled.", collector=collector, failure_phase="agent"),
+                status="cancelled",
+                metrics=metrics,
+            )
+        progress("grading")
+        verdicts = grade(container) if container is not None else run_checkers(task, context)
         if state.status != "completed":
             verdicts = [CheckerVerdict(0.0, detail=f"agent run status: {state.status}")]
         score = aggregate_score(verdicts)
@@ -179,6 +238,14 @@ def run_one_task(
             trace=collector.trace(),
             failure_phase="agent" if state.status != "completed" else None,
         )
+    except ContainerCancelled:
+        if timed_out:
+            return _error_result(task, "Task execution timed out.", collector=collector, failure_phase="timeout")
+        return replace(
+            _error_result(task, "Run cancelled.", collector=collector, failure_phase=phase), status="cancelled"
+        )
+    except ContainerTimeout:
+        return _error_result(task, "Benchmark operation timed out.", collector=collector, failure_phase="timeout")
     except ModelConfigurationError as exc:
         return _error_result(
             task,
@@ -196,10 +263,29 @@ def run_one_task(
             failure_phase=phase,
         )
     finally:
+        progress("cleanup")
+        cleanup_errors: list[str] = []
+        if container is not None:
+            try:
+                container.close()
+            except Exception as exc:
+                cleanup_errors.append(f"{type(exc).__name__}: {exc}")
         if app is not None:
             try:
                 app.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                cleanup_errors.append(f"{type(exc).__name__}: {exc}")
         if workspace is not None and not keep_workspaces:
-            shutil.rmtree(workspace, ignore_errors=True)
+            try:
+                target = workspace.resolve()
+                root = sandbox.workspaces_dir.resolve()
+                if target == root or root not in target.parents:
+                    raise ValueError("Benchmark cleanup path escapes its workspace root.")
+                if target.exists():
+                    shutil.rmtree(target)
+            except Exception as exc:
+                cleanup_errors.append(f"{type(exc).__name__}: {exc}")
+        if cleanup_errors:
+            return _error_result(
+                task, "; ".join(cleanup_errors), attempt=attempt, collector=collector, failure_phase="cleanup"
+            )
