@@ -29,12 +29,14 @@ class LLMPlanner(DecisionMixin, SelectionMixin, RepairMixin, RequestMixin, Forma
         read_only_tool_specs: list[ToolSpec] | list[str],
         *,
         user_preferences: str = "",
+        memory_prompt_injector: object | None = None,
     ) -> None:
         self.client = client
         self._model_requests = ModelRequestExecutor(client)
         self.tool_specs = self._coerce_specs(tool_specs)
         self.read_only_tool_specs = self._coerce_specs(read_only_tool_specs)
         self.user_preferences = user_preferences.strip()
+        self.memory_prompt_injector = memory_prompt_injector
         self._output_repairs: list[dict[str, str | int]] = []
         context_size = getattr(client, "context_size", None)
         estimate_tokens = getattr(client, "estimate_tokens", None)

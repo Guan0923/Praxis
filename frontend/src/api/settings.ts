@@ -1,4 +1,5 @@
 import type { LocalProfile } from "../types";
+import type { MemoryConfig } from "./memory";
 import { requestJson, requestOptionalJson, requestVoid } from "./transport/request";
 
 export type UserProfile = LocalProfile;
@@ -80,6 +81,7 @@ export interface UserSettings {
   terminal_options: TerminalOption[];
   terminal_notice: string | null;
   timezone_options: TimezoneOption[];
+  memory_config: MemoryConfig;
 }
 
 export interface SkillSettingsItem {
@@ -245,6 +247,14 @@ export function updateAgentConfig(config: AgentConfig): Promise<AgentConfig> {
 
 export function updateRuntimeConfig(config: RuntimeConfig): Promise<RuntimeConfig> {
   return requestJson<RuntimeConfig>("/api/settings/runtime", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+}
+
+export function updateMemoryConfig(config: MemoryConfig): Promise<MemoryConfig> {
+  return requestJson<MemoryConfig>("/api/settings/memory", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
