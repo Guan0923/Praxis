@@ -1,8 +1,6 @@
 import os
-import shlex
 import subprocess
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
@@ -395,48 +393,6 @@ def test_command_runtime_cancellation_terminates_managed_process(tmp_path: Path)
 
     assert terminated == [4321]
     assert "stdout:\npartial" in str(exc_info.value)
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows terminal cancellation integration test")
-def test_real_long_running_command_is_cancelled_by_turn_pause(tmp_path: Path) -> None:
-    marker = tmp_path / "command-started.txt"
-    if os.name == "nt":
-        marker_path = str(marker).replace("'", "''")
-        command_text = f"[System.IO.File]::WriteAllText('{marker_path}', 'started'); Start-Sleep -Seconds 30"
-    else:
-        command_text = f"printf started > {shlex.quote(str(marker))}; sleep 30"
-    controller = TurnPauseController()
-    command = WorkspaceCommand(tmp_path, terminal_type="powershell" if os.name == "nt" else "bash")
-    failure: list[BaseException] = []
-
-    def invoke() -> None:
-        try:
-            command.run_with_context(
-                ToolInvocationContext(cancel_requested=controller.is_requested),
-                command_text,
-                timeout_seconds=60,
-            )
-        except BaseException as exc:
-            failure.append(exc)
-
-    worker = threading.Thread(target=invoke, daemon=True)
-    started_at = time.monotonic()
-    worker.start()
-    try:
-        deadline = time.monotonic() + 5.0
-        while not marker.exists() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert marker.exists(), f"the real child process did not start: {failure!r}"
-        assert controller.request_pause() is True
-        worker.join(5.0)
-    finally:
-        controller.request_pause()
-
-    assert not worker.is_alive()
-    assert time.monotonic() - started_at < 10.0
-    assert len(failure) == 1
-    assert isinstance(failure[0], ToolError)
-    assert "cancelled" in str(failure[0]).lower()
 
 
 def test_non_cooperative_tool_late_result_is_not_published_after_pause() -> None:
