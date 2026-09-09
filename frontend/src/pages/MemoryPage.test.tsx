@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   clearMemories: vi.fn(),
   consolidateMemory: vi.fn(),
   deleteMemory: vi.fn(),
+  discoverProviderModels: vi.fn(),
   dryRunMemory: vi.fn(),
   extractMemory: vi.fn(),
   getSettings: vi.fn(),
@@ -34,6 +35,14 @@ const config = {
   injection_max_bytes: 8192,
 };
 
+const provider = {
+  id: "provider_current",
+  provider_name: "Local provider",
+  protocol: "chat_completions",
+  base_url: "http://127.0.0.1:9000/v1",
+  model: "current-model",
+};
+
 const item = {
   memory_id: "memory_a",
   kind: "semantic",
@@ -52,7 +61,8 @@ const item = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.getSettings.mockResolvedValue({ memory_config: config });
+  mocks.getSettings.mockResolvedValue({ memory_config: config, provider_config: provider });
+  mocks.discoverProviderModels.mockResolvedValue({ models: ["extract-model", "organize-model"] });
   mocks.listMemoryItems.mockResolvedValue([item]);
   mocks.listMemoryJobs.mockResolvedValue([]);
   mocks.listSidebarThreads.mockResolvedValue([]);
@@ -88,6 +98,60 @@ describe("Memory settings management", () => {
     expect(confirm).toBeEnabled();
     await user.click(confirm);
     await waitFor(() => expect(mocks.clearMemories).toHaveBeenCalledWith("CLEAR ALL MEMORIES"));
+  });
+
+  it("automatically discovers models and saves both dropdown selections", async () => {
+    const user = userEvent.setup();
+    render(<MemorySettingsSection />);
+    await screen.findByText("Concise reports");
+    await waitFor(() => expect(mocks.discoverProviderModels).toHaveBeenCalledWith({
+      config_id: provider.id,
+      provider_name: provider.provider_name,
+      protocol: provider.protocol,
+      base_url: provider.base_url,
+    }));
+    expect(mocks.discoverProviderModels).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("combobox", { name: "提取模型" }));
+    await user.click(document.querySelector('.ant-select-dropdown:not(.ant-select-dropdown-hidden) [title="extract-model"]')!);
+    await waitFor(() => expect(mocks.updateMemoryConfig).toHaveBeenLastCalledWith({ ...config, extraction_model: "extract-model" }));
+
+    await user.click(screen.getByRole("combobox", { name: "整理模型" }));
+    await user.type(screen.getByRole("combobox", { name: "整理模型" }), "organize");
+    await user.click(document.querySelector('.ant-select-dropdown:not(.ant-select-dropdown-hidden) [title="organize-model"]')!);
+    await waitFor(() => expect(mocks.updateMemoryConfig).toHaveBeenLastCalledWith({
+      ...config, extraction_model: "extract-model", consolidation_model: "organize-model",
+    }));
+  });
+
+  it("can return an override to the current model", async () => {
+    mocks.getSettings.mockResolvedValue({
+      memory_config: { ...config, extraction_model: "extract-model" }, provider_config: provider,
+    });
+    const user = userEvent.setup();
+    render(<MemorySettingsSection />);
+    await screen.findByText("Concise reports");
+    await user.click(screen.getByRole("combobox", { name: "提取模型" }));
+    await user.click(document.querySelector('.ant-select-dropdown [title="使用当前模型（current-model）"]')!);
+    await waitFor(() => expect(mocks.updateMemoryConfig).toHaveBeenLastCalledWith(config));
+  });
+
+  it("keeps saved models on discovery failure and retries on refresh", async () => {
+    mocks.getSettings.mockResolvedValue({
+      memory_config: { ...config, extraction_model: "saved-model" }, provider_config: provider,
+    });
+    mocks.discoverProviderModels.mockRejectedValueOnce(new Error("Service unavailable"));
+    const user = userEvent.setup();
+    render(<MemorySettingsSection />);
+    expect(await screen.findByText("获取模型列表失败：Service unavailable")).toBeInTheDocument();
+    expect(screen.getByText("saved-model")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "启用记忆" })).toBeEnabled();
+    expect(mocks.updateMemoryConfig).not.toHaveBeenCalled();
+
+    mocks.getSettings.mockResolvedValue({ memory_config: config, provider_config: { ...provider } });
+    await user.click(screen.getByRole("button", { name: /刷新/ }));
+    await waitFor(() => expect(mocks.discoverProviderModels).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText("获取模型列表失败：Service unavailable")).not.toBeInTheDocument());
   });
 
   it("renders project-scoped memory returned by the management API", async () => {
