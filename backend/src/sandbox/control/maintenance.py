@@ -1,4 +1,4 @@
-"""Process-wide admission gate for destructive Sandbox maintenance."""
+"""Process-wide admission gate for Sandbox maintenance."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ class SandboxMaintenanceLease:
 
 
 class SandboxMaintenanceGate:
-    """Non-blocking shared/exclusive gate for commands and reinstall."""
+    """Non-blocking shared/exclusive gate for commands and installation/repair."""
 
     def __init__(self) -> None:
         self._lock = RLock()

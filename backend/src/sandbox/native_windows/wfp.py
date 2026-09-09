@@ -392,39 +392,6 @@ def configure_static_wfp(offline_sid: str, online_sid: str, proxy_port: int) -> 
         api.library.FwpmEngineClose0(handle)
 
 
-def remove_static_wfp() -> None:
-    """Atomically remove only Praxis's persistent WFP objects."""
-
-    api = _WfpApi()
-    handle = wintypes.HANDLE()
-    api.check(api.library.FwpmEngineOpen0(None, _RPC_C_AUTHN_WINNT, None, None, ctypes.byref(handle)), "open")
-    transaction_started = False
-    try:
-        api.check(api.library.FwpmTransactionBegin0(handle, 0), "transaction begin")
-        transaction_started = True
-        _delete_owned_filters(api, handle)
-        sublayer_key = _Guid.from_uuid(_SUBLAYER_UUID)
-        api.check(
-            api.library.FwpmSubLayerDeleteByKey0(handle, ctypes.byref(sublayer_key)),
-            "sublayer delete",
-            allowed=frozenset({_FWP_E_SUBLAYER_NOT_FOUND}),
-        )
-        provider_key = _Guid.from_uuid(_PROVIDER_UUID)
-        api.check(
-            api.library.FwpmProviderDeleteByKey0(handle, ctypes.byref(provider_key)),
-            "provider delete",
-            allowed=frozenset({_FWP_E_PROVIDER_NOT_FOUND}),
-        )
-        api.check(api.library.FwpmTransactionCommit0(handle), "transaction commit")
-        transaction_started = False
-    except Exception:
-        if transaction_started:
-            api.library.FwpmTransactionAbort0(handle)
-        raise
-    finally:
-        api.library.FwpmEngineClose0(handle)
-
-
 def _delete_owned_filters(api: _WfpApi, engine: wintypes.HANDLE) -> None:
     """Delete every filter in Praxis's sublayer, independent of old names."""
 
@@ -533,4 +500,4 @@ def _add_filter(
     _ = (sd_buffer, sd_blob, condition_array)
 
 
-__all__ = ["StaticFilterSpec", "build_static_filter_specs", "configure_static_wfp", "remove_static_wfp"]
+__all__ = ["StaticFilterSpec", "build_static_filter_specs", "configure_static_wfp"]

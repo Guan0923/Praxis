@@ -20,8 +20,8 @@ vi.mock("../api/settings", async (importOriginal) => ({
 const profile = { display_name: "本地用户", agent_preferences: "" };
 const sandboxHealth = {
   phase: "healthy" as const, installed: true, code: null, detail: null, checking: false,
-  autoRecoveryPhase: "idle" as const, nextRetryAt: null, reinstalling: false,
-  check: vi.fn(), notifyUserBackendRequest: vi.fn(), reinstall: vi.fn(),
+  autoRecoveryPhase: "idle" as const, nextRetryAt: null, manualRepairing: false,
+  check: vi.fn(), notifyUserBackendRequest: vi.fn(), repairManually: vi.fn(),
 };
 
 describe("appearance", () => {

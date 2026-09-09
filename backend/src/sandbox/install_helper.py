@@ -10,7 +10,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,27 +22,22 @@ from .installation.access_policy import (
     _apply_source_acl_grant,
     _directory_contains,
     _icacls_sid,
-    _iter_acl_tree,
     _managed_file_acl_commands,
     _program_data_acl_commands,
     _runtime_acl_grants,
     _secure_source_code,
     _sensitive_file_acl_commands,
     _service_class_command,
-    _service_sid,
     _sid_acl_command,
-    _source_acl_grants,
 )
 from .installation.accounts import (
     provision_fixed_accounts as _provision_fixed_accounts_impl,
-)
-from .installation.accounts import (
-    remove_owned_accounts as _remove_owned_accounts,
 )
 from .installation.contracts import (
     EXIT_ACCOUNT_FAILED,
     EXIT_ACL_FAILED,
     EXIT_CREDENTIAL_FAILED,
+    EXIT_DEPENDENCY_FAILED,
     EXIT_FILESYSTEM_FAILED,
     EXIT_INVALID,
     EXIT_NETWORK_FAILED,
@@ -59,6 +53,7 @@ from .installation.contracts import (
 from .installation.contracts import (
     validate_payload as _validate_payload,
 )
+from .installation.lock import installation_lock
 
 _SERVICE_STOPPED = 1
 _SERVICE_STOP_TIMEOUT_SECONDS = 5.0
@@ -160,29 +155,11 @@ def _service_exists(service_name: str) -> bool:
         result = subprocess.run(["sc.exe", "query", service_name], check=False, capture_output=True)
     except OSError as exc:
         raise OSError("Broker service state is unavailable") from exc
-    return int(result.returncode) == 0
-
-
-def _wait_for_service_deleted(
-    service_name: str,
-    *,
-    exists: Callable[[str], bool] | None = None,
-    clock: Callable[[], float] = time.monotonic,
-    sleeper: Callable[[float], Any] = time.sleep,
-) -> bool:
-    checker = exists or _service_exists
-    deadline = clock() + _SERVICE_STOP_TIMEOUT_SECONDS
-    while True:
-        try:
-            present = bool(checker(service_name))
-        except Exception:
-            return False
-        if not present:
-            return True
-        remaining = deadline - clock()
-        if remaining <= 0:
-            return False
-        sleeper(min(_SERVICE_STOP_POLL_SECONDS, remaining))
+    if int(result.returncode) == 1060:
+        return False
+    if int(result.returncode) != 0:
+        raise _TransactionFailure(EXIT_SERVICE_FAILED, "Broker service state is unavailable")
+    return True
 
 
 def _persist_sid(path: Path | None, value: str | None) -> None:
@@ -248,121 +225,10 @@ def _provision_fixed_accounts(data_path: Path, service_name: str, proxy_port: in
     )
 
 
-def _remove_service_rights(service_name: str) -> None:
-    try:
-        import win32security  # type: ignore[import-not-found]
-
-        policy_handle = win32security.LsaOpenPolicy(None, win32security.POLICY_ALL_ACCESS)
-        service_sid = win32security.ConvertStringSidToSid(_service_sid(service_name))
-        win32security.LsaRemoveAccountRights(policy_handle, service_sid, True, ())
-    except Exception as exc:
-        winerror = getattr(exc, "winerror", None)
-        if winerror not in {2, 1332}:
-            raise _TransactionFailure(EXIT_RIGHTS_FAILED, "Broker service rights could not be removed") from exc
-
-
-def _remove_static_network() -> None:
-    try:
-        from .native_windows.wfp import remove_static_wfp
-
-        remove_static_wfp()
-    except Exception as exc:
-        raise _TransactionFailure(EXIT_NETWORK_FAILED, "Broker network policy could not be removed") from exc
-
-
-def secrets_token() -> str:
-    import secrets
-
-    return secrets.token_urlsafe(32)
-
-
 def _configure_static_network(offline_sid: str, online_sid: str, proxy_port: int) -> None:
     from .native_windows.wfp import configure_static_wfp
 
     configure_static_wfp(offline_sid, online_sid, proxy_port)
-    # Remove pre-v3 Defender Firewall rules only after the atomic WFP policy is
-    # active.  This avoids both an enforcement gap and stale proxy-port rules.
-    script = """
-$ErrorActionPreference='Stop'
-Get-NetFirewallRule -Name 'PraxisSandbox-*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-"""
-    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-    _run(
-        ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
-        failure_code=EXIT_NETWORK_FAILED,
-    )
-
-
-def _remove_source_acl_grant(path: Path, sid_text: str) -> None:
-    if not path.exists():
-        return
-    try:
-        import win32security  # type: ignore[import-not-found]
-
-        sid = win32security.ConvertStringSidToSid(sid_text)
-        descriptor = win32security.GetNamedSecurityInfo(
-            str(path),
-            win32security.SE_FILE_OBJECT,
-            win32security.DACL_SECURITY_INFORMATION,
-        )
-        dacl = descriptor.GetSecurityDescriptorDacl()
-        if dacl is None:
-            return
-        matching = [index for index in range(dacl.GetAceCount()) if dacl.GetAce(index)[2] == sid]
-        for index in reversed(matching):
-            dacl.DeleteAce(index)
-        if matching:
-            win32security.SetNamedSecurityInfo(
-                str(path),
-                win32security.SE_FILE_OBJECT,
-                win32security.DACL_SECURITY_INFORMATION,
-                None,
-                None,
-                dacl,
-                None,
-            )
-    except Exception as exc:
-        raise _TransactionFailure(EXIT_ACL_FAILED, "Broker source ACL could not be removed") from exc
-
-
-def _remove_service_acls(
-    code_path: Path | None,
-    code_boundary_path: Path | None,
-    runtime_paths: Sequence[Path],
-    service_executable: Path,
-    service_name: str,
-) -> None:
-    service_sid = _service_sid(service_name)
-    grants = []
-    if code_path is not None and code_boundary_path is not None:
-        grants.extend(_source_acl_grants(code_path, code_boundary_path, service_name))
-    grants.extend(_runtime_acl_grants(runtime_paths, service_executable, service_name))
-
-    targets: set[Path] = set()
-    for grant in grants:
-        grant_targets = (
-            (path for path, _is_directory in _iter_acl_tree(grant.path)) if grant.existing_children else (grant.path,)
-        )
-        targets.update(grant_targets)
-
-    for path in sorted(targets, key=lambda item: (len(item.parts), os.path.normcase(str(item))), reverse=True):
-        _remove_source_acl_grant(path, service_sid)
-
-
-def _remove_program_data(path: Path) -> None:
-    resolved = path.resolve(strict=False)
-    if (
-        resolved.name.casefold() != "sandboxbroker"
-        or resolved.parent.name.casefold() != "praxis"
-        or len(resolved.parts) < 3
-    ):
-        raise ValueError("Broker ProgramData path is outside the managed directory")
-    try:
-        shutil.rmtree(resolved)
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        raise OSError("Broker ProgramData could not be removed") from exc
 
 
 def _initialize_installation_key(data_path: Path) -> None:
@@ -374,38 +240,29 @@ def _initialize_installation_key(data_path: Path) -> None:
         raise _TransactionFailure(EXIT_CREDENTIAL_FAILED, "Broker installation key could not be created") from exc
 
 
-def _uninstall_for_reinstall(
-    service_name: str,
-    service_command: Sequence[str],
-    data_path: Path | None,
-    code_path: Path | None,
-    code_boundary_path: Path | None,
-    runtime_paths: Sequence[Path],
-) -> None:
-    installed = _service_exists(service_name)
-    if installed:
-        _stop_service_for_repair(service_name)
-    _remove_static_network()
-    _remove_service_acls(
-        code_path,
-        code_boundary_path,
-        runtime_paths,
-        Path(service_command[0]),
-        service_name,
-    )
-    _remove_service_rights(service_name)
-    if data_path is not None:
-        _remove_owned_accounts(data_path)
-    if installed:
-        _run(["sc.exe", "delete", service_name], failure_code=EXIT_SERVICE_FAILED)
-        if not _wait_for_service_deleted(service_name):
-            raise _TransactionFailure(EXIT_SERVICE_FAILED, "Broker service was not deleted")
-    if data_path is not None:
-        _remove_program_data(data_path)
-
-
 def run_transaction(payload: Mapping[str, Any]) -> int:
-    """Run one fully elevated Broker installation transaction."""
+    """Serialize all privileged writes, including service-host preparation."""
+
+    _validate_payload(payload)
+    with installation_lock(str(payload["service_name"])):
+        return _run_transaction(payload)
+
+
+def _prepare_service_host(service_command: tuple[str, ...], service_class: str | None) -> tuple[str, ...]:
+    if service_class is None:
+        return service_command
+    from .broker_service.installer import WindowsServiceInstaller
+    from .errors import BrokerInstallationError
+
+    installer = WindowsServiceInstaller(service_command, service_class=service_class)
+    try:
+        installer._prepare_service_host()
+    except BrokerInstallationError as exc:
+        raise _TransactionFailure(EXIT_DEPENDENCY_FAILED, "Broker service host could not be prepared") from exc
+    return installer.service_command
+
+
+def _run_transaction(payload: Mapping[str, Any]) -> int:
 
     (
         operation,
@@ -421,20 +278,10 @@ def run_transaction(payload: Mapping[str, Any]) -> int:
         proxy_port,
     ) = _validate_payload(payload)
     ready_path = data_path / "ready.json" if data_path is not None else None
-    if ready_path is not None:
-        try:
-            ready_path.unlink()
-        except FileNotFoundError:
-            pass
-    if operation == "reinstall":
-        _uninstall_for_reinstall(
-            service_name,
-            service_command,
-            data_path,
-            code_path,
-            code_boundary_path,
-            runtime_paths,
-        )
+    installed = _service_exists(service_name)
+    if installed:
+        _stop_service_for_repair(service_name)
+    service_command = _prepare_service_host(service_command, service_class)
     _persist_sid(sid_path, backend_sid)
     if data_path is not None:
         _initialize_installation_key(data_path)
@@ -443,7 +290,7 @@ def run_transaction(payload: Mapping[str, Any]) -> int:
         # added after the service exists and its virtual account is resolvable.
         _run(_sid_acl_command(sid_path, backend_sid, None), failure_code=EXIT_ACL_FAILED)
     command = subprocess.list2cmdline(list(service_command))
-    if operation in {"install", "reinstall"}:
+    if not installed:
         _run(
             [
                 "sc.exe",
@@ -463,7 +310,6 @@ def run_transaction(payload: Mapping[str, Any]) -> int:
             _run(_service_class_command(service_name, service_class))
         _run(["sc.exe", "sidtype", service_name, "unrestricted"])
     else:
-        _stop_service_for_repair(service_name)
         _run(
             [
                 "sc.exe",
@@ -500,19 +346,11 @@ def run_transaction(payload: Mapping[str, Any]) -> int:
             raise _TransactionFailure(EXIT_ACL_FAILED, "Broker backend SID is unavailable")
         for command in _managed_file_acl_commands(ready_path, backend_sid, service_name):
             _run(command, failure_code=EXIT_ACL_FAILED)
-    try:
-        _run(
-            ["sc.exe", "start", service_name],
-            failure_code=EXIT_SERVICE_START_FAILED,
-            accepted_returncodes=frozenset({0, 1056}),
-        )
-    except Exception:
-        if ready_path is not None:
-            try:
-                ready_path.unlink()
-            except FileNotFoundError:
-                pass
-        raise
+    _run(
+        ["sc.exe", "start", service_name],
+        failure_code=EXIT_SERVICE_START_FAILED,
+        accepted_returncodes=frozenset({0, 1056}),
+    )
     return EXIT_OK
 
 

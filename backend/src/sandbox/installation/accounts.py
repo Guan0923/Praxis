@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import secrets
 import uuid
 from collections.abc import Callable, Mapping
@@ -191,90 +190,6 @@ def credential_works(name: str, password: str, security: Any, win32con: Any) -> 
         return True
     except Exception:
         return False
-
-
-def remove_owned_accounts(data_path: Path) -> None:
-    """Delete only accounts proven to belong to this Praxis install."""
-
-    try:
-        import win32net  # type: ignore[import-not-found]
-        import win32security  # type: ignore[import-not-found]
-
-        from ..broker_service.credentials import DpapiCredentialStore
-    except ImportError as exc:
-        raise OSError("Broker account dependencies are unavailable") from exc
-    try:
-        package = DpapiCredentialStore(data_path / "accounts.dpapi").load()
-    except Exception:
-        if managed_identity_exists(win32net):
-            raise TransactionFailure(EXIT_ACCOUNT_FAILED, "Broker sandbox account ownership is unverified")
-        return
-    expected = {
-        OFFLINE_ACCOUNT: package.offline_sid if package.offline_name == OFFLINE_ACCOUNT else None,
-        ONLINE_ACCOUNT: package.online_sid if package.online_name == ONLINE_ACCOUNT else None,
-    }
-    if any(value is None for value in expected.values()):
-        if managed_identity_exists(win32net):
-            raise TransactionFailure(EXIT_ACCOUNT_FAILED, "Broker sandbox account ownership is unverified")
-        return
-    try:
-        group_info = win32net.NetLocalGroupGetInfo(None, ACCOUNT_GROUP, 1)
-        raw_members = win32net.NetLocalGroupGetMembers(None, ACCOUNT_GROUP, 3)[0]
-        members = {
-            str(value.get("domainandname") or "").casefold() for value in raw_members if isinstance(value, Mapping)
-        }
-    except Exception as exc:
-        if getattr(exc, "winerror", None) in {1376, 2220}:
-            if managed_identity_exists(win32net):
-                raise TransactionFailure(EXIT_ACCOUNT_FAILED, "Broker sandbox account ownership is unverified")
-            return
-        raise TransactionFailure(EXIT_ACCOUNT_FAILED, "Broker sandbox group could not be verified") from exc
-    if str(group_info.get("comment") or "") != GROUP_COMMENT:
-        raise TransactionFailure(EXIT_ACCOUNT_FAILED, "Conflicting sandbox group ownership")
-    expected_members = {f"{os.environ.get('COMPUTERNAME', '.')}\\{name}".casefold() for name in expected}
-    if members != expected_members and {member.rsplit("\\", 1)[-1] for member in members} != {
-        name.casefold() for name in expected
-    }:
-        raise TransactionFailure(EXIT_ACCOUNT_FAILED, "Conflicting sandbox group membership")
-    try:
-        policy_handle = win32security.LsaOpenPolicy(None, win32security.POLICY_ALL_ACCESS)
-        group_sid, _, _ = win32security.LookupAccountName(None, ACCOUNT_GROUP)
-        try:
-            win32security.LsaRemoveAccountRights(policy_handle, group_sid, True, ())
-        except Exception as exc:
-            if getattr(exc, "winerror", None) not in {2, 1332}:
-                raise
-        for name, expected_sid in expected.items():
-            info = win32net.NetUserGetInfo(None, name, 4)
-            validate_existing_sandbox_user(name, info, win32net)
-            sid, _, _ = win32security.LookupAccountName(None, name)
-            sid_text = str(win32security.ConvertSidToStringSid(sid))
-            if str(info.get("comment") or "") != ACCOUNT_COMMENT or sid_text != expected_sid:
-                raise TransactionFailure(EXIT_ACCOUNT_FAILED, "Conflicting sandbox account ownership")
-        for name in expected:
-            win32net.NetUserDel(None, name)
-        win32net.NetLocalGroupDel(None, ACCOUNT_GROUP)
-    except TransactionFailure:
-        raise
-    except Exception as exc:
-        raise TransactionFailure(EXIT_ACCOUNT_FAILED, "Broker sandbox accounts could not be removed") from exc
-
-
-def managed_identity_exists(win32net: Any) -> bool:
-    for name in (OFFLINE_ACCOUNT, ONLINE_ACCOUNT):
-        try:
-            win32net.NetUserGetInfo(None, name, 0)
-            return True
-        except Exception as exc:
-            if getattr(exc, "winerror", None) != 2221:
-                raise TransactionFailure(EXIT_ACCOUNT_FAILED, "Broker sandbox account could not be verified") from exc
-    try:
-        win32net.NetLocalGroupGetInfo(None, ACCOUNT_GROUP, 0)
-        return True
-    except Exception as exc:
-        if getattr(exc, "winerror", None) != 2220:
-            raise TransactionFailure(EXIT_ACCOUNT_FAILED, "Broker sandbox group could not be verified") from exc
-    return False
 
 
 def secrets_token() -> str:

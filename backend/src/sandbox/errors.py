@@ -30,6 +30,7 @@ class SandboxPathFailure(StrEnum):
 class BrokerInstallFailureCode(StrEnum):
     """Stable, user-safe failure categories for Broker control-plane actions."""
 
+    BUSY = "broker_maintenance_busy"
     UAC_CANCELLED = "broker_uac_cancelled"
     ADMIN_REQUIRED = "broker_admin_required"
     DEPENDENCY_MISSING = "broker_dependency_missing"

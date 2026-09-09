@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import filecmp
 import json
 import logging
 import ntpath
@@ -202,12 +203,6 @@ class WindowsServiceInstaller:
 
         self._run_transaction("repair")
 
-    def reinstall(self) -> None:
-        """Always replace the installed service and its managed identities."""
-
-        self._require_windows()
-        self._run_transaction("reinstall")
-
     def configuration_healthy(self) -> bool:
         """Verify the unprivileged, non-secret SCM configuration summary."""
 
@@ -382,7 +377,6 @@ class WindowsServiceInstaller:
         if self._runner_injected:
             self._run_local_transaction(operation, backend_sid)
             return
-        self._prepare_service_host()
         self._run_elevated_transaction(operation, backend_sid)
 
     def _prepare_service_host(self) -> None:
@@ -410,10 +404,9 @@ class WindowsServiceInstaller:
             )
             for source in runtime_binaries:
                 target = executable_path.parent / source.name
-                if not target.exists() or target.stat().st_size != source.stat().st_size:
+                if not target.exists() or not filecmp.cmp(source, target, shallow=False):
                     shutil.copy2(source, target)
             _write_python_service_path(executable_path, base_prefix, environment_prefix)
-            executable_path.with_suffix("._pth").unlink(missing_ok=True)
             executable = _absolute_windows_path(executable_path)
         except Exception as exc:  # pragma: no cover - Windows install path
             raise BrokerInstallationError(
@@ -436,7 +429,7 @@ class WindowsServiceInstaller:
                     BrokerInstallFailureCode.ACL_FAILED,
                     "Broker 文件权限配置失败，请以管理员权限重试。",
                 ) from exc
-        from ..install_helper import (
+        from ..installation.access_policy import (
             _managed_file_acl_commands,
             _program_data_acl_commands,
             _runtime_acl_grants,
@@ -450,14 +443,7 @@ class WindowsServiceInstaller:
         commands: list[list[str]] = []
         if self.backend_sid_path is not None and sid is not None:
             commands.append(_sid_acl_command(self.backend_sid_path, sid, None))
-        if operation in {"install", "reinstall"}:
-            if operation == "reinstall":
-                commands.extend(
-                    [
-                        ["sc.exe", "stop", self.service_name],
-                        ["sc.exe", "delete", self.service_name],
-                    ]
-                )
+        if operation == "install":
             commands.extend(
                 [
                     [
@@ -660,10 +646,12 @@ class WindowsServiceInstaller:
                     pass
         if code == 0:
             return
-        from ..install_helper import (
+        from ..installation.contracts import (
             EXIT_ACCOUNT_FAILED,
             EXIT_ACL_FAILED,
+            EXIT_BUSY,
             EXIT_CREDENTIAL_FAILED,
+            EXIT_DEPENDENCY_FAILED,
             EXIT_FILESYSTEM_FAILED,
             EXIT_INVALID,
             EXIT_NETWORK_FAILED,
@@ -672,6 +660,16 @@ class WindowsServiceInstaller:
             EXIT_SERVICE_STOP_FAILED,
         )
 
+        if code == EXIT_BUSY:
+            raise BrokerInstallationError(
+                BrokerInstallFailureCode.BUSY,
+                "Broker maintenance is already in progress.",
+            )
+        if code == EXIT_DEPENDENCY_FAILED:
+            raise BrokerInstallationError(
+                BrokerInstallFailureCode.DEPENDENCY_MISSING,
+                "Broker service host could not be prepared.",
+            )
         if code == EXIT_FILESYSTEM_FAILED:
             raise BrokerInstallationError(
                 BrokerInstallFailureCode.ACL_FAILED,

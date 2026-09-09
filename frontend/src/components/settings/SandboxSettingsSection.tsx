@@ -37,6 +37,7 @@ const brokerErrorTitles: Record<string, string> = {
   broker_not_ready: "Broker 修复后未就绪",
   broker_install_failed: "Broker 修复失败",
   broker_jobs_active: "仍有沙箱命令运行",
+  broker_maintenance_busy: "Broker 正在修复",
 };
 
 export function brokerErrorTitle(code: string | null, installed: boolean): string {
@@ -99,7 +100,7 @@ export function SandboxSettingsSection({ state }: SectionProps) {
       <Space align="center" style={{ marginBottom: 16 }} wrap>
         <Button
           loading={state.sandboxHealth.checking}
-          disabled={state.sandboxHealth.autoRecoveryPhase === "repairing" || state.sandboxHealth.reinstalling}
+          disabled={state.sandboxHealth.autoRecoveryPhase === "repairing" || state.sandboxHealth.manualRepairing}
           onClick={() => {
             state.sandboxHealth.notifyUserBackendRequest();
             void state.sandboxHealth.check();
@@ -110,20 +111,18 @@ export function SandboxSettingsSection({ state }: SectionProps) {
         {state.sandboxHealth.phase === "healthy" ? <Tag color="success">沙箱已就绪</Tag> : null}
         <AutoRecoveryStatus health={state.sandboxHealth} />
         <Popconfirm
-          title="卸载并重装 Sandbox Broker？"
-          description="需要 UAC 管理员授权；将删除 Praxis 沙箱安装数据。仅在没有运行或等待启动的沙箱命令时执行。"
-          okText="卸载并重装"
+          title="覆盖修复 Sandbox Broker？"
+          description="需要 UAC 管理员授权；将更新 Praxis 沙箱配置并保留已有安装数据。仅在没有运行或等待启动的沙箱命令时执行。"
+          okText="覆盖修复"
           cancelText="取消"
-          okType="danger"
-          disabled={state.sandboxHealth.checking || state.sandboxHealth.autoRecoveryPhase === "repairing" || state.sandboxHealth.reinstalling}
-          onConfirm={() => state.sandboxHealth.reinstall()}
+          disabled={state.sandboxHealth.checking || state.sandboxHealth.autoRecoveryPhase === "repairing" || state.sandboxHealth.manualRepairing}
+          onConfirm={() => state.sandboxHealth.repairManually()}
         >
           <Button
-            danger
-            loading={state.sandboxHealth.reinstalling}
+            loading={state.sandboxHealth.manualRepairing}
             disabled={state.sandboxHealth.checking || state.sandboxHealth.autoRecoveryPhase === "repairing"}
           >
-            卸载并重装
+            覆盖修复
           </Button>
         </Popconfirm>
       </Space>

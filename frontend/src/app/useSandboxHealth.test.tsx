@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   getSandboxStatus,
-  reinstallSandboxBroker,
   repairSandboxBroker,
   type SandboxBrokerStatus,
 } from "../api";
@@ -13,7 +12,6 @@ vi.mock("../api", async (importOriginal) => ({
   ...await importOriginal<typeof import("../api")>(),
   getSandboxStatus: vi.fn(),
   repairSandboxBroker: vi.fn(),
-  reinstallSandboxBroker: vi.fn(),
 }));
 
 let current: SandboxHealthState;
@@ -37,9 +35,7 @@ describe("useSandboxHealth", () => {
     vi.setSystemTime(new Date("2026-09-04T00:00:00Z"));
     vi.mocked(getSandboxStatus).mockReset();
     vi.mocked(repairSandboxBroker).mockReset();
-    vi.mocked(reinstallSandboxBroker).mockReset();
     vi.mocked(repairSandboxBroker).mockResolvedValue({ installed: true, healthy: true });
-    vi.mocked(reinstallSandboxBroker).mockResolvedValue({ installed: true, healthy: true });
   });
 
   afterEach(() => {
@@ -213,17 +209,70 @@ describe("useSandboxHealth", () => {
     expect(repairSandboxBroker).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps confirmed reinstall available and immediately rechecks", async () => {
+  it("deduplicates manual repair and suppresses polling while it runs", async () => {
+    vi.mocked(getSandboxStatus).mockResolvedValue({ installed: true, healthy: true });
+    let resolveRepair!: (value: SandboxBrokerStatus) => void;
+    vi.mocked(repairSandboxBroker).mockReturnValueOnce(new Promise((resolve) => { resolveRepair = resolve; }));
+    render(<Harness />);
+    await settle();
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = current.repairManually();
+      second = current.repairManually();
+    });
+    expect(first).toBe(second);
+    expect(current.manualRepairing).toBe(true);
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(repairSandboxBroker).toHaveBeenCalledTimes(1);
+    expect(getSandboxStatus).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveRepair({ installed: true, healthy: true });
+      await first;
+    });
+    expect(current.manualRepairing).toBe(false);
+    expect(current.phase).toBe("healthy");
+  });
+
+  it("keeps the existing retry schedule when another repair is busy", async () => {
+    vi.mocked(getSandboxStatus)
+      .mockResolvedValueOnce({ installed: true, healthy: false })
+      .mockResolvedValue({ installed: true, healthy: true });
+    vi.mocked(repairSandboxBroker).mockRejectedValueOnce(
+      new ApiError(409, "repair in progress", "broker_maintenance_busy"),
+    );
+    render(<Harness />);
+    await settle();
+    expect(current.autoRecoveryPhase).toBe("waiting");
+    expect(current.code).toBe("broker_maintenance_busy");
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+    expect(repairSandboxBroker).toHaveBeenCalledTimes(2);
+    expect(current.phase).toBe("healthy");
+  });
+
+  it("pauses automatic recovery when manual repair authorization is cancelled", async () => {
+    vi.mocked(getSandboxStatus).mockResolvedValue({ installed: true, healthy: true });
+    vi.mocked(repairSandboxBroker).mockRejectedValueOnce(new ApiError(503, "cancelled", "broker_uac_cancelled"));
+    render(<Harness />);
+    await settle();
+    await act(async () => current.repairManually());
+    expect(current.manualRepairing).toBe(false);
+    expect(current.autoRecoveryPhase).toBe("paused");
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+    expect(repairSandboxBroker).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps confirmed overwrite repair available and immediately rechecks", async () => {
     vi.mocked(getSandboxStatus).mockResolvedValue({ installed: true, healthy: true });
     render(<Harness />);
     await settle();
 
-    await act(async () => current.reinstall());
+    await act(async () => current.repairManually());
 
-    expect(reinstallSandboxBroker).toHaveBeenCalledTimes(1);
+    expect(repairSandboxBroker).toHaveBeenCalledTimes(1);
     expect(getSandboxStatus).toHaveBeenCalledTimes(2);
     expect(current.phase).toBe("healthy");
-    expect(current.reinstalling).toBe(false);
+    expect(current.manualRepairing).toBe(false);
 
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
     expect(getSandboxStatus).toHaveBeenCalledTimes(3);

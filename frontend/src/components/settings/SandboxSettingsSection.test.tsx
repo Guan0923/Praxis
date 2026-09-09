@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SandboxAutoRecoveryPhase } from "../../app/useSandboxHealth";
 import type { UserSettingsState } from "./useUserSettingsState";
@@ -34,10 +34,10 @@ function makeState(
       checking: false,
       autoRecoveryPhase,
       nextRetryAt,
-      reinstalling: false,
+      manualRepairing: false,
       check: vi.fn().mockResolvedValue({ installed: true, healthy: phase === "healthy" }),
       notifyUserBackendRequest: vi.fn(),
-      reinstall: vi.fn().mockResolvedValue(undefined),
+      repairManually: vi.fn().mockResolvedValue(undefined),
     },
     updateSettings: vi.fn(),
   } as unknown as UserSettingsState;
@@ -85,16 +85,16 @@ describe("brokerErrorTitle", () => {
     expect(state.sandboxHealth.check).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["healthy", "unhealthy"] as const)("always exposes confirmed reinstall while %s", async (phase) => {
+  it.each(["healthy", "unhealthy"] as const)("always exposes confirmed overwrite repair while %s", async (phase) => {
     const state = makeState(phase);
     render(<SandboxSettingsSection state={state} />);
-    fireEvent.click(screen.getByRole("button", { name: "卸载并重装" }));
-    expect(await screen.findByText("卸载并重装 Sandbox Broker？")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "覆盖修复" }));
+    expect(await screen.findByText("覆盖修复 Sandbox Broker？")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /取\s*消/ }));
-    expect(state.sandboxHealth.reinstall).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "卸载并重装" }));
-    const buttons = screen.getAllByRole("button", { name: "卸载并重装" });
-    fireEvent.click(buttons[buttons.length - 1]);
-    expect(state.sandboxHealth.reinstall).toHaveBeenCalledTimes(1);
+    expect(state.sandboxHealth.repairManually).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "覆盖修复" }));
+    const buttons = screen.getAllByRole("button", { name: "覆盖修复" });
+    await act(async () => { fireEvent.click(buttons[buttons.length - 1]); });
+    expect(state.sandboxHealth.repairManually).toHaveBeenCalledTimes(1);
   });
 });

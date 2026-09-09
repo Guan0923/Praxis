@@ -236,7 +236,7 @@ def _apply_acl_target(path: Path, sid_text: str, rights: str, *, inherit: bool) 
             if rights == "RX"
             else ntsecuritycon.FILE_TRAVERSE
         )
-        inherited_ace = int(getattr(win32security, "INHERITED_ACE", 0x10))
+        inherit_only_ace = int(getattr(win32security, "INHERIT_ONLY_ACE", 0x08))
         for index in range(dacl.GetAceCount()):
             ace = dacl.GetAce(index)
             if (
@@ -244,19 +244,15 @@ def _apply_acl_target(path: Path, sid_text: str, rights: str, *, inherit: bool) 
                 and ace[2] == sid
                 and ace[1] & access == access
                 and ace[0][1] & inheritance == inheritance
-                and not ace[0][1] & inherited_ace
+                and not ace[0][1] & inherit_only_ace
             ):
                 return
         dacl.AddAccessAllowedAceEx(win32security.ACL_REVISION_DS, inheritance, access, sid)
-        win32security.SetNamedSecurityInfo(
-            str(path),
-            win32security.SE_FILE_OBJECT,
-            win32security.DACL_SECURITY_INFORMATION,
-            None,
-            None,
-            dacl,
-            None,
-        )
+        from ..native_windows.security import _set_directory_dacl_direct
+
+        # Tree traversal is explicit above; never let Windows propagate a
+        # directory update into unrelated or linked descendants.
+        _set_directory_dacl_direct(path, dacl)
     except Exception as exc:
         raise OSError("Broker source ACL could not be configured") from exc
 

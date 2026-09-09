@@ -18,6 +18,8 @@ EXIT_ACCOUNT_FAILED = 8
 EXIT_CREDENTIAL_FAILED = 9
 EXIT_RIGHTS_FAILED = 10
 EXIT_NETWORK_FAILED = 11
+EXIT_BUSY = 12
+EXIT_DEPENDENCY_FAILED = 13
 
 BROKER_SERVICE_CLASS = "sandbox_service_bootstrap.PraxisSandboxBrokerService"
 
@@ -58,7 +60,7 @@ def validate_payload(
     service_code_boundary_path = payload.get("service_code_boundary_path")
     service_runtime_paths = payload.get("service_runtime_paths", [])
     proxy_port = payload.get("proxy_port", 17831)
-    if operation not in {"install", "repair", "reinstall"} or not isinstance(service_name, str) or not service_name:
+    if operation not in {"install", "repair"} or not isinstance(service_name, str) or not service_name:
         raise ValueError("invalid Broker installation operation")
     if (
         not isinstance(service_command, list)

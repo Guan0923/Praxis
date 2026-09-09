@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
   getSandboxStatus,
-  reinstallSandboxBroker,
   repairSandboxBroker,
   type SandboxBrokerStatus,
 } from "../api";
@@ -18,10 +17,10 @@ export interface SandboxHealthState {
   checking: boolean;
   autoRecoveryPhase: SandboxAutoRecoveryPhase;
   nextRetryAt: number | null;
-  reinstalling: boolean;
+  manualRepairing: boolean;
   check: () => Promise<SandboxBrokerStatus>;
   notifyUserBackendRequest: () => void;
-  reinstall: () => Promise<void>;
+  repairManually: () => Promise<void>;
 }
 
 const POLL_DELAY_MS = 30_000;
@@ -50,16 +49,16 @@ export function useSandboxHealth(): SandboxHealthState {
   const [checking, setChecking] = useState(true);
   const [autoRecoveryPhase, setAutoRecoveryPhase] = useState<SandboxAutoRecoveryPhase>("idle");
   const [nextRetryAt, setNextRetryAt] = useState<number | null>(null);
-  const [reinstalling, setReinstalling] = useState(false);
+  const [manualRepairing, setManualRepairing] = useState(false);
   const mountedRef = useRef(false);
   const phaseRef = useRef<SandboxHealthPhase>("checking");
   const autoRecoveryPhaseRef = useRef<SandboxAutoRecoveryPhase>("idle");
   const retryAttemptRef = useRef(0);
-  const reinstallingRef = useRef(false);
+  const manualRepairingRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const checkInFlightRef = useRef<Promise<SandboxBrokerStatus> | null>(null);
   const repairInFlightRef = useRef<Promise<void> | null>(null);
-  const reinstallInFlightRef = useRef<Promise<void> | null>(null);
+  const manualRepairInFlightRef = useRef<Promise<void> | null>(null);
   const checkRef = useRef<() => Promise<SandboxBrokerStatus>>(() => Promise.resolve(failedStatus(null)));
   const repairRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
@@ -110,7 +109,7 @@ export function useSandboxHealth(): SandboxHealthState {
   }, []);
 
   const schedulePoll = useCallback(() => {
-    if (!mountedRef.current || autoRecoveryPhaseRef.current === "waiting" || reinstallingRef.current) return;
+    if (!mountedRef.current || autoRecoveryPhaseRef.current === "waiting" || manualRepairingRef.current) return;
     clearScheduled();
     timerRef.current = globalThis.setTimeout(() => {
       timerRef.current = null;
@@ -119,7 +118,7 @@ export function useSandboxHealth(): SandboxHealthState {
   }, [clearScheduled]);
 
   const scheduleRetry = useCallback(() => {
-    if (!mountedRef.current || reinstallingRef.current) return;
+    if (!mountedRef.current || manualRepairingRef.current) return;
     clearScheduled();
     const delay = Math.min(
       MAX_RETRY_DELAY_MS,
@@ -157,7 +156,7 @@ export function useSandboxHealth(): SandboxHealthState {
         setChecking(false);
         if (healthy || autoRecoveryPhaseRef.current === "paused") {
           schedulePoll();
-        } else if (autoRecoveryPhaseRef.current !== "repairing" && !reinstallingRef.current) {
+        } else if (autoRecoveryPhaseRef.current !== "repairing" && !manualRepairingRef.current) {
           void repairRef.current();
         }
       });
@@ -170,7 +169,7 @@ export function useSandboxHealth(): SandboxHealthState {
     if (repairInFlightRef.current) return repairInFlightRef.current;
     if (
       !mountedRef.current
-      || reinstallingRef.current
+      || manualRepairingRef.current
       || phaseRef.current === "healthy"
       || autoRecoveryPhaseRef.current === "paused"
     ) {
@@ -180,7 +179,7 @@ export function useSandboxHealth(): SandboxHealthState {
       if (checkInFlightRef.current) await checkInFlightRef.current;
       if (
         !mountedRef.current
-        || reinstallingRef.current
+        || manualRepairingRef.current
         || phaseRef.current === "healthy"
         || autoRecoveryPhaseRef.current === "paused"
       ) return;
@@ -213,7 +212,7 @@ export function useSandboxHealth(): SandboxHealthState {
   repairRef.current = repair;
 
   const notifyUserBackendRequest = useCallback(() => {
-    if (!mountedRef.current || reinstallingRef.current) return;
+    if (!mountedRef.current || manualRepairingRef.current) return;
     if (phaseRef.current !== "unhealthy" && autoRecoveryPhaseRef.current === "idle") return;
     retryAttemptRef.current = 0;
     clearScheduled();
@@ -221,20 +220,20 @@ export function useSandboxHealth(): SandboxHealthState {
     void repairRef.current();
   }, [clearScheduled, updateAutoRecoveryPhase]);
 
-  const reinstall = useCallback((): Promise<void> => {
-    if (reinstallInFlightRef.current) return reinstallInFlightRef.current;
-    reinstallingRef.current = true;
+  const repairManually = useCallback((): Promise<void> => {
+    if (manualRepairInFlightRef.current) return manualRepairInFlightRef.current;
+    manualRepairingRef.current = true;
     retryAttemptRef.current = 0;
     clearScheduled();
     updateAutoRecoveryPhase("idle");
-    if (mountedRef.current) setReinstalling(true);
+    if (mountedRef.current) setManualRepairing(true);
     const request = (async () => {
       if (repairInFlightRef.current) await repairInFlightRef.current;
       if (checkInFlightRef.current) await checkInFlightRef.current;
       if (!mountedRef.current) return;
       let shouldResumeAutoRecovery = false;
       try {
-        await reinstallSandboxBroker();
+        await repairSandboxBroker();
         if (!mountedRef.current) return;
         if (checkInFlightRef.current) await checkInFlightRef.current;
         if (!mountedRef.current) return;
@@ -249,16 +248,16 @@ export function useSandboxHealth(): SandboxHealthState {
           shouldResumeAutoRecovery = true;
         }
       } finally {
-        reinstallingRef.current = false;
-        if (mountedRef.current) setReinstalling(false);
+        manualRepairingRef.current = false;
+        if (mountedRef.current) setManualRepairing(false);
       }
       if (autoRecoveryPhaseRef.current === "paused") schedulePoll();
       else if (shouldResumeAutoRecovery) void repairRef.current();
       else schedulePoll();
     })().finally(() => {
-      reinstallInFlightRef.current = null;
+      manualRepairInFlightRef.current = null;
     });
-    reinstallInFlightRef.current = request;
+    manualRepairInFlightRef.current = request;
     return request;
   }, [applyRepairFailure, check, clearScheduled, schedulePoll, updateAutoRecoveryPhase]);
 
@@ -282,9 +281,9 @@ export function useSandboxHealth(): SandboxHealthState {
     checking,
     autoRecoveryPhase,
     nextRetryAt,
-    reinstalling,
+    manualRepairing,
     check,
     notifyUserBackendRequest,
-    reinstall,
+    repairManually,
   };
 }

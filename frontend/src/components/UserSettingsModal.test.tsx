@@ -95,10 +95,10 @@ const sandboxHealth = {
   checking: false,
   autoRecoveryPhase: "idle" as const,
   nextRetryAt: null,
-  reinstalling: false,
+  manualRepairing: false,
   check: vi.fn().mockResolvedValue({ installed: true, healthy: true }),
   notifyUserBackendRequest: vi.fn(),
-  reinstall: vi.fn().mockResolvedValue(undefined),
+  repairManually: vi.fn().mockResolvedValue(undefined),
 };
 
 function modalElement(
