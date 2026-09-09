@@ -1,8 +1,8 @@
-# Mini-Agent 仓库协作规范
+# Praxis 仓库协作规范
 
 ## 项目定位
 
-Mini-Agent 是纯本地单用户 Agent 应用：浏览器前端通过 loopback HTTP/SSE 访问本机 backend；backend 承载 Runtime、模型调用、工具、会话、项目和本地设置。仓库不包含账户、登录、设备授权、云同步、Cloud 或 PostgreSQL 子系统。
+Praxis 是纯本地单用户 Agent 应用：浏览器前端通过 loopback HTTP/SSE 访问本机 backend；backend 承载 Runtime、模型调用、工具、会话、项目和本地设置。仓库不包含账户、登录、设备授权、云同步、Cloud 或 PostgreSQL 子系统。
 
 以当前源码、测试、`pyproject.toml` 和 `frontend/package.json` 为准；文档与源码冲突时先核对实现。
 
@@ -21,7 +21,7 @@ Mini-Agent 是纯本地单用户 Agent 应用：浏览器前端通过 loopback H
 frontend/ ── HTTP/SSE ──> backend (127.0.0.1:8000)
                               ├─ runtime / planning / providers / tools
                               ├─ local TOML / SQLite / MCP / Sandbox
-                              └─ ~/.mini_agent
+                              └─ ~/.praxis
 ```
 
 - `backend/src/domain/`：无外层依赖的消息、计划、会话、Skill 和运行状态。
@@ -38,7 +38,7 @@ frontend/ ── HTTP/SSE ──> backend (127.0.0.1:8000)
 ## 本地数据契约
 
 ```text
-~/.mini_agent/
+~/.praxis/
 ├─ mcp/
 ├─ plugins/
 ├─ runtime/

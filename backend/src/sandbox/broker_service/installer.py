@@ -153,7 +153,7 @@ class WindowsServiceInstaller:
         self,
         service_command: tuple[str, ...],
         *,
-        service_name: str = "MiniAgentSandboxBroker",
+        service_name: str = "PraxisSandboxBroker",
         service_class: str | None = None,
         runner: Callable[..., Any] | None = None,
         is_windows: bool | None = None,

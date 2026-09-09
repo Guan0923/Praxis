@@ -29,6 +29,6 @@ def _install_backend_package() -> None:
 
 _install_backend_package()
 
-from backend.sandbox.service_main import MiniAgentSandboxBrokerService  # noqa: E402
+from backend.sandbox.service_main import PraxisSandboxBrokerService  # noqa: E402
 
-__all__ = ["MiniAgentSandboxBrokerService"]
+__all__ = ["PraxisSandboxBrokerService"]

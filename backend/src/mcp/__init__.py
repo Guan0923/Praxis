@@ -1,4 +1,4 @@
-"""Approved external MCP clients for Mini-Agent."""
+"""Approved external MCP clients for Praxis."""
 
 from .config import McpConfigPlan, McpSettings, prepare_mcp_plan
 

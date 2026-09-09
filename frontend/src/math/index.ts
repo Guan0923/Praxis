@@ -1,6 +1,6 @@
 import type { MathJaxBrowserConfig, MathJaxBrowserInstance } from "./mathjax.d";
 
-const MATHJAX_SCRIPT_ATTRIBUTE = "data-mini-agent-mathjax";
+const MATHJAX_SCRIPT_ATTRIBUTE = "data-praxis-mathjax";
 const MATHJAX_SOURCE = "/mathjax/tex-svg.js";
 export const MATHML_NAMESPACE = "http://www.w3.org/1998/Math/MathML";
 

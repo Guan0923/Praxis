@@ -561,7 +561,7 @@ export function AssistantMessage({
     <div className="message assistant">
       <AssistantIcon className="assistant-icon" />
       <div className="bubble">
-        <div className="assistant-name">Mini-Agent</div>
+        <div className="assistant-name">Praxis</div>
         {msg.running ? <BorderBeam>{frame}</BorderBeam> : frame}
       </div>
     </div>

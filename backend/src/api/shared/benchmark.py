@@ -149,7 +149,7 @@ def _cancel(request: Request, run_id: str, task_id: str | None = None) -> dict:
 
 
 def create_benchmark_app(web_state: WebAppState) -> FastAPI:
-    app = FastAPI(title="Mini-Agent Benchmark", version="0.0.1")
+    app = FastAPI(title="Praxis Benchmark", version="0.0.1")
     install_error_handlers(app)
     app.state.web = web_state
     app.include_router(router)

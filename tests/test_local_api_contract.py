@@ -29,17 +29,17 @@ def test_backend_repo_root_targets_the_current_checkout() -> None:
 def test_production_frontend_does_not_capture_unknown_api_routes(tmp_path: Path, monkeypatch) -> None:
     frontend_dist = tmp_path / "dist"
     frontend_dist.mkdir()
-    (frontend_dist / "index.html").write_text("<!doctype html><title>Mini-Agent</title>", encoding="utf-8")
-    monkeypatch.setenv("MINI_AGENT_FRONTEND_DIST", str(frontend_dist))
+    (frontend_dist / "index.html").write_text("<!doctype html><title>Praxis</title>", encoding="utf-8")
+    monkeypatch.setenv("PRAXIS_FRONTEND_DIST", str(frontend_dist))
 
-    state = WebAppState(tmp_path / ".mini_agent")
+    state = WebAppState(tmp_path / ".praxis")
     with TestClient(create_app(state)) as client:
         assert client.get("/").status_code == 200
         assert client.post("/api/auth/guest").status_code == 404
 
 
 def test_local_apis_need_no_session_credentials_and_removed_routes_are_absent(tmp_path: Path) -> None:
-    state = WebAppState(tmp_path / ".mini_agent")
+    state = WebAppState(tmp_path / ".praxis")
     with TestClient(create_app(state)) as client:
         headers = {"Cookie": "session=obsolete", "Authorization": "Bearer obsolete"}
         assert client.get("/api/settings", headers=headers).status_code == 200
@@ -56,7 +56,7 @@ def test_local_apis_need_no_session_credentials_and_removed_routes_are_absent(tm
 
 
 def test_health_stays_live_while_ready_and_queue_mutations_fail_when_redis_is_unavailable(tmp_path: Path) -> None:
-    state = WebAppState(tmp_path / ".mini_agent", message_queue=UnavailableMessageQueue())
+    state = WebAppState(tmp_path / ".praxis", message_queue=UnavailableMessageQueue())
     with TestClient(create_app(state)) as client:
         assert client.get("/api/health").status_code == 200
         assert client.get("/api/ready").status_code == 503
@@ -79,7 +79,7 @@ def test_health_stays_live_while_ready_and_queue_mutations_fail_when_redis_is_un
 
 
 def test_browser_writes_require_an_allowed_loopback_origin_but_cli_writes_do_not(tmp_path: Path) -> None:
-    state = WebAppState(tmp_path / ".mini_agent")
+    state = WebAppState(tmp_path / ".praxis")
     with TestClient(create_app(state)) as client:
         assert (
             client.post(
@@ -99,11 +99,11 @@ def test_browser_writes_require_an_allowed_loopback_origin_but_cli_writes_do_not
             opened = websocket.receive_json()
             headers = {
                 "Origin": "http://127.0.0.1:5173",
-                "X-Mini-Agent-Window": "origin-test",
-                "X-Mini-Agent-Window-Generation": str(ready["generation"]),
-                "X-Mini-Agent-Operation-Group": group,
-                "X-Mini-Agent-Seq": str(opened["seq"]),
-                "X-Mini-Agent-Ack": str(opened["ack"]),
+                "X-Praxis-Window": "origin-test",
+                "X-Praxis-Window-Generation": str(ready["generation"]),
+                "X-Praxis-Operation-Group": group,
+                "X-Praxis-Seq": str(opened["seq"]),
+                "X-Praxis-Ack": str(opened["ack"]),
             }
             rejected = client.post(
                 "/api/sidebar-threads", json={}, headers={**headers, "Origin": "https://outside.example"}
@@ -125,8 +125,8 @@ def test_browser_writes_require_an_allowed_loopback_origin_but_cli_writes_do_not
 
 
 def test_configured_browser_origins_must_remain_loopback(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("MINI_AGENT_ALLOWED_ORIGINS", "https://outside.example")
-    state = WebAppState(tmp_path / ".mini_agent")
+    monkeypatch.setenv("PRAXIS_ALLOWED_ORIGINS", "https://outside.example")
+    state = WebAppState(tmp_path / ".praxis")
 
     try:
         with pytest.raises(ValueError, match="loopback origins"):
@@ -136,8 +136,8 @@ def test_configured_browser_origins_must_remain_loopback(tmp_path: Path, monkeyp
 
 
 def test_provider_api_never_echoes_plaintext_and_reopens_the_encrypted_key(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("MINI_AGENT_LOCAL_DEK_FALLBACK", "test-local-key-material-that-is-at-least-32-bytes")
-    root = tmp_path / ".mini_agent"
+    monkeypatch.setenv("PRAXIS_LOCAL_DEK_FALLBACK", "test-local-key-material-that-is-at-least-32-bytes")
+    root = tmp_path / ".praxis"
     state = WebAppState(root)
     payload = {
         "provider_name": "local-test",

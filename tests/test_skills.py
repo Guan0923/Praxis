@@ -143,7 +143,7 @@ def test_discovers_valid_skill_and_explicit_reference(tmp_path: Path) -> None:
 def test_project_skills_are_ignored_when_global_root_is_given(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    global_root = tmp_path / "home" / "mini_agent" / "skills"
+    global_root = tmp_path / "home" / "praxis" / "skills"
     for name, instructions in (("shared", "Global instructions."), ("global-only", "Global only.")):
         directory = global_root / name
         directory.mkdir(parents=True)
@@ -309,7 +309,7 @@ def test_rejects_duplicate_catalog_names() -> None:
 
 
 def test_skill_snapshots_round_trip_and_old_state_defaults_empty() -> None:
-    snapshot = SkillSnapshot("demo", "Demo", "Instructions", ".mini_agent/skills/demo", "abc")
+    snapshot = SkillSnapshot("demo", "Demo", "Instructions", ".praxis/skills/demo", "abc")
     run = RunState(
         task="demo",
         mode="agent",
@@ -622,7 +622,7 @@ def test_explicit_user_skill_fails_when_capability_is_disabled(tmp_path: Path) -
 def _write_project_skill(
     workspace: Path, name: str, *, body: str = "Project body.", extra: dict[str, str] | None = None
 ) -> Path:
-    directory = workspace / ".mini_agent" / "skills" / name
+    directory = workspace / ".praxis" / "skills" / name
     directory.mkdir(parents=True)
     manifest = directory / "SKILL.md"
     manifest.write_text(f"---\nname: {name}\ndescription: Project {name}.\n---\n{body}\n", encoding="utf-8")
@@ -686,7 +686,7 @@ def test_project_skill_tree_hash_changes_when_any_file_changes(tmp_path: Path) -
     after_manifest = discover_project_skills(tmp_path, "project_1")[0].tree_sha256
     assert after_manifest != before
 
-    script = tmp_path / ".mini_agent" / "skills" / "demo" / "scripts" / "run.py"
+    script = tmp_path / ".praxis" / "skills" / "demo" / "scripts" / "run.py"
     script.parent.mkdir(parents=True)
     script.write_text("print('malicious')\n", encoding="utf-8")
     after_script = discover_project_skills(tmp_path, "project_1")[0].tree_sha256
@@ -699,7 +699,7 @@ def test_project_skill_rejects_symlink_escape(tmp_path: Path) -> None:
     _write_project_skill(tmp_path, "demo")
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
-    link = tmp_path / ".mini_agent" / "skills" / "demo" / "links" / "leak"
+    link = tmp_path / ".praxis" / "skills" / "demo" / "links" / "leak"
     link.parent.mkdir(parents=True)
     link.symlink_to(outside)
 
@@ -713,15 +713,15 @@ def test_project_skill_rejects_path_escape(tmp_path: Path) -> None:
     _write_project_skill(tmp_path, "demo")
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
-    (tmp_path / ".mini_agent" / "skills" / "demo" / "SKILL.md").unlink()
-    (tmp_path / ".mini_agent" / "skills" / "demo" / "SKILL.md").symlink_to(outside)
+    (tmp_path / ".praxis" / "skills" / "demo" / "SKILL.md").unlink()
+    (tmp_path / ".praxis" / "skills" / "demo" / "SKILL.md").symlink_to(outside)
 
     with pytest.raises(SkillConfigurationError, match="symbolic link|symlink|escape|not a regular file"):
         discover_project_skills(tmp_path, "project_1")
 
 
 def test_project_skill_bad_manifest_does_not_block_other_skills(tmp_path: Path) -> None:
-    bad = tmp_path / ".mini_agent" / "skills" / "bad"
+    bad = tmp_path / ".praxis" / "skills" / "bad"
     bad.mkdir(parents=True)
     (bad / "SKILL.md").write_text("no frontmatter", encoding="utf-8")
     _write_project_skill(tmp_path, "good")

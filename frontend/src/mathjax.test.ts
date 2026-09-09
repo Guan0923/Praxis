@@ -4,7 +4,7 @@ import { loadMathJax, mathJaxConfig, resetMathJaxLoaderForTests, supportsNativeM
 afterEach(() => {
   resetMathJaxLoaderForTests();
   window.MathJax = undefined;
-  document.querySelectorAll("script[data-mini-agent-mathjax]").forEach((script) => script.remove());
+  document.querySelectorAll("script[data-praxis-mathjax]").forEach((script) => script.remove());
 });
 
 describe("MathJax browser integration", () => {
@@ -27,7 +27,7 @@ describe("MathJax browser integration", () => {
       resolveStartup = resolve;
     });
     const loading = loadMathJax();
-    const script = document.querySelector<HTMLScriptElement>("script[data-mini-agent-mathjax]");
+    const script = document.querySelector<HTMLScriptElement>("script[data-praxis-mathjax]");
     expect(script).not.toBeNull();
 
     const instance = {
@@ -59,6 +59,6 @@ describe("MathJax browser integration", () => {
 
     expect(second).toBe(first);
     await expect(first).resolves.toBe(instance);
-    expect(document.querySelector("script[data-mini-agent-mathjax]")).toBeNull();
+    expect(document.querySelector("script[data-praxis-mathjax]")).toBeNull();
   });
 });

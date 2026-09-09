@@ -67,7 +67,7 @@ export function ChatMessageList({
         <div className="chat-messages">
           {messages.length === 0 ? (
             <div className="welcome">
-              <div className="logo">Mini-Agent</div>
+              <div className="logo">Praxis</div>
               <p className="welcome-sub">向你的智能体提问，它会调用文件、Shell、Web 等工具完成任务</p>
             </div>
           ) : messages.map((message) => message.role === "user" ? (

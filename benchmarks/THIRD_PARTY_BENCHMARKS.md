@@ -33,7 +33,7 @@ the task has passed environment acceptance.
 
 ## Retained local test fixtures (not registered)
 
-The Mini-Agent suite is an adapted, offline subset. The source projects and
+The Praxis suite is an adapted, offline subset. The source projects and
 their task contracts remain the authoritative references; this repository does
 not claim official leaderboard compatibility.
 
@@ -46,7 +46,7 @@ not claim official leaderboard compatibility.
 | τ³-bench retail tasks 0 and 113 | [sierra-research/tau2-bench](https://github.com/sierra-research/tau2-bench) | `v1.0.1` | MIT |
 | τ³-bench airline task 3 | [sierra-research/tau2-bench](https://github.com/sierra-research/tau2-bench) | `v1.0.1` | MIT |
 
-The Mini-Agent adaptations intentionally remove Docker wrappers, network calls,
+The Praxis adaptations intentionally remove Docker wrappers, network calls,
 large dependencies, and multi-turn user simulators. The τ³ tasks flatten the
 user simulator into a single authorized request while retaining policy,
 tool-argument, and final-state requirements. The SWE tasks vendor only the

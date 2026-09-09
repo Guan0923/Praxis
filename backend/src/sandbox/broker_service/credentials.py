@@ -37,7 +37,7 @@ class WindowsDpapiProvider:
         try:
             result = self._win32crypt.CryptProtectData(
                 value,
-                "Mini-Agent Sandbox Broker",
+                "Praxis Sandbox Broker",
                 None,
                 None,
                 None,

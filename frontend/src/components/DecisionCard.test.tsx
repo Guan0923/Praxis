@@ -81,7 +81,7 @@ describe("DecisionCard", () => {
           description: "Applies the migration workflow.",
           project_id: "project_1",
           tree_sha256: "a".repeat(64),
-          path: "C:/repo/.mini_agent/skills/database-migration",
+          path: "C:/repo/.praxis/skills/database-migration",
         }}
         onSubmit={onSubmit}
       />,

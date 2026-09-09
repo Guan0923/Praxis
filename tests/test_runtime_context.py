@@ -16,14 +16,14 @@ def test_messages_expose_required_fields_and_nest_tools() -> None:
         status="succeeded",
     )
     assistant = AssistantMessage(
-        name="mini-agent",
+        name="praxis",
         content=None,
         reasoning="Use arithmetic.",
         logprobs={"content": []},
         tool_messages=[tool],
     )
 
-    assert (assistant.name, assistant.role, assistant.content) == ("mini-agent", "assistant", None)
+    assert (assistant.name, assistant.role, assistant.content) == ("praxis", "assistant", None)
     assert (tool.name, tool.role, tool.content) == ("run_command", "tool", "4")
     assert assistant.tool_messages == [tool]
 

@@ -1,4 +1,4 @@
-"""Mini-Agent: a terminal-first agent execution lab."""
+"""Praxis: a terminal-first agent execution lab."""
 
 from __future__ import annotations
 

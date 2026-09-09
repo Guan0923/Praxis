@@ -11,7 +11,7 @@ from backend.storage.settings import LocalSettingsStore
 
 
 def test_appearance_defaults_and_persists_without_changing_other_settings(tmp_path: Path) -> None:
-    root = tmp_path / ".mini_agent"
+    root = tmp_path / ".praxis"
     store = LocalSettingsStore(root / "runtime" / "state.db", root / "config.toml")
     assert store.appearance_config() == {"mode": "light"}
     store.update_profile(display_name="Appearance test", agent_preferences="Keep this preference")
@@ -25,7 +25,7 @@ def test_appearance_defaults_and_persists_without_changing_other_settings(tmp_pa
 
 
 def test_appearance_api_validation_origin_protection_and_restart(tmp_path: Path) -> None:
-    root = tmp_path / ".mini_agent"
+    root = tmp_path / ".praxis"
     with TestClient(create_app(WebAppState(root))) as client:
         assert client.get("/api/settings").json()["appearance_config"] == {"mode": "light"}
         rejected = client.put(

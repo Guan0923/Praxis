@@ -1,4 +1,4 @@
-"""Data model for the source-backed Mini-Agent benchmark suite."""
+"""Data model for the source-backed Praxis benchmark suite."""
 
 from __future__ import annotations
 

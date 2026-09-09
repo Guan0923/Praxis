@@ -11,4 +11,4 @@ Agent 使用 `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_re
 
 资源 URI 只交给选定服务处理。文本输出最多 20,000 字符，非文本内容只返回元数据；提示词作为不可信工具结果返回。订阅不跨运行，不触发自动读取或新对话，断线和溢出会明确提示需要重新检查。
 
-本地测试：先以 `uv venv .tmp-mcp-v1` 和 `uv pip install --python .tmp-mcp-v1/Scripts/python.exe mcp==1.28.1 uvicorn` 安装独立旧版服务环境，或通过 `MINI_AGENT_MCP_V1_PYTHON` 指定该环境。执行 `uv run python -m pytest tests/test_mcp_capabilities.py tests/test_mcp_http_settings.py` 验证真实 stdio / HTTP 新旧协议矩阵。
+本地测试：先以 `uv venv .tmp-mcp-v1` 和 `uv pip install --python .tmp-mcp-v1/Scripts/python.exe mcp==1.28.1 uvicorn` 安装独立旧版服务环境，或通过 `PRAXIS_MCP_V1_PYTHON` 指定该环境。执行 `uv run python -m pytest tests/test_mcp_capabilities.py tests/test_mcp_http_settings.py` 验证真实 stdio / HTTP 新旧协议矩阵。

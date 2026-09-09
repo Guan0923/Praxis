@@ -191,12 +191,12 @@ class OperationControl:
             return
 
 
-OP_WINDOW_HEADER = "X-Mini-Agent-Window"
-OP_WINDOW_GENERATION_HEADER = "X-Mini-Agent-Window-Generation"
-OP_GROUP_HEADER = "X-Mini-Agent-Operation-Group"
-OP_SESSION_HEADER = "X-Mini-Agent-Session"
-OP_SEQ_HEADER = "X-Mini-Agent-Seq"
-OP_ACK_HEADER = "X-Mini-Agent-Ack"
+OP_WINDOW_HEADER = "X-Praxis-Window"
+OP_WINDOW_GENERATION_HEADER = "X-Praxis-Window-Generation"
+OP_GROUP_HEADER = "X-Praxis-Operation-Group"
+OP_SESSION_HEADER = "X-Praxis-Session"
+OP_SEQ_HEADER = "X-Praxis-Seq"
+OP_ACK_HEADER = "X-Praxis-Ack"
 
 
 def operation_headers(request) -> tuple[str, int, str, str | None, int, int] | None:

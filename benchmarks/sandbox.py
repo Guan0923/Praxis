@@ -1,6 +1,6 @@
 """Isolated client state, config seeding, and workspace materialization.
 
-The benchmark never touches the developer's real ``~/mini_agent`` directory. All
+The benchmark never touches the developer's real ``~/praxis`` directory. All
 client-owned data (config, logs, skills, session stores, MCP servers) lives
 under one sandbox root, seeded from a copy of the user's ``config.toml`` so the
 real model credentials are reused without mutating anything outside the sandbox.
@@ -57,7 +57,7 @@ class Sandbox:
         model_config: ModelConfig | None = None,
     ) -> None:
         self.root = Path(root).resolve()
-        self.paths = ClientPaths(self.root / "mini_agent")
+        self.paths = ClientPaths(self.root / "praxis")
         self.source_config = source_config
         self.model_config = model_config
         self.workspaces_dir = self.root / "workspaces"

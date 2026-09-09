@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
@@ -1890,8 +1891,8 @@ def test_real_http_sse_redis_subagents_auto_report_and_restart_idle_child(
     monkeypatch: pytest.MonkeyPatch,
     local_sandbox_runtime: None,
 ) -> None:
-    prefix = f"mini-agent:test:agents:{uuid4().hex}"
-    client = Redis.from_url("redis://127.0.0.1:6379/0", decode_responses=True)
+    prefix = f"praxis:test:agents:{uuid4().hex}"
+    client = Redis.from_url(os.environ.get("PRAXIS_TEST_REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True)
     try:
         client.ping()
     except Exception as exc:
@@ -2029,8 +2030,8 @@ def test_real_http_sse_redis_subagents_persist_model_trace(
     local_subagent_model: tuple[ModelConfig, list[str]],
 ) -> None:
     model_config, model_calls = local_subagent_model
-    prefix = f"mini-agent:test:agent-trace:{uuid4().hex}"
-    client = Redis.from_url("redis://127.0.0.1:6379/0", decode_responses=True)
+    prefix = f"praxis:test:agent-trace:{uuid4().hex}"
+    client = Redis.from_url(os.environ.get("PRAXIS_TEST_REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True)
     try:
         client.ping()
     except Exception as exc:

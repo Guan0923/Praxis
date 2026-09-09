@@ -1,4 +1,4 @@
-"""Command-line entry point for the mini-agent benchmark harness.
+"""Command-line entry point for the praxis benchmark harness.
 
 Usage::
 
@@ -23,7 +23,7 @@ sys.path.insert(0, str(REPO_ROOT / "backend" / "src"))
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m benchmarks.run",
-        description="Mini-Agent benchmark harness: run agent tasks and grade the results.",
+        description="Praxis benchmark harness: run agent tasks and grade the results.",
     )
     parser.add_argument("--list", action="store_true", help="List available tasks and exit.")
     parser.add_argument(
@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, help="JSON report path (default benchmarks/output/<ts>/report.json).")
     parser.add_argument("--sandbox", type=Path, help="Sandbox root directory for client state.")
     parser.add_argument(
-        "--config", type=Path, help="config.toml to seed the sandbox with (default ~/mini_agent/config.toml)."
+        "--config", type=Path, help="config.toml to seed the sandbox with (default ~/praxis/config.toml)."
     )
     parser.add_argument("--keep-workspaces", action="store_true", help="Keep per-task workspaces for debugging.")
     parser.add_argument("--max-tool-calls", type=int, help="Override max tool calls for every task.")
@@ -71,7 +71,7 @@ def _preflight_model_config(config_path: Path, parser: argparse.ArgumentParser) 
     if not config_path.exists():
         parser.error(
             f"model config not found at {config_path}. Configure api_key/base_url/model in "
-            "~/mini_agent/config.toml (any OpenAI-compatible endpoint works), or pass --config PATH."
+            "~/praxis/config.toml (any OpenAI-compatible endpoint works), or pass --config PATH."
         )
     try:
         with config_path.open("rb") as handle:
@@ -124,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         output_path = base / "report.json"
         sandbox_root = args.sandbox or base / "sandbox"
 
-    source_config = args.config or (Path.home() / ".mini_agent" / "config.toml")
+    source_config = args.config or (Path.home() / ".praxis" / "config.toml")
     model_config = None
     if args.planner == "llm":
         _preflight_model_config(source_config, parser)

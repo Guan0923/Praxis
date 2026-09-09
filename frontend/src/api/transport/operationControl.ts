@@ -135,12 +135,12 @@ class WindowOperationControl {
     const state = await this.openGroup(target.group);
     if (state.uncertain) throw new Error("上一次操作结果不明确，请刷新页面核对后再继续。");
     const headers = new Headers(init.headers);
-    headers.set("X-Mini-Agent-Window", this.windowId);
-    headers.set("X-Mini-Agent-Window-Generation", String(this.generation));
-    headers.set("X-Mini-Agent-Operation-Group", target.group);
-    headers.set("X-Mini-Agent-Seq", String(state.seq));
-    headers.set("X-Mini-Agent-Ack", String(state.ack));
-    if (target.sessionId) headers.set("X-Mini-Agent-Session", target.sessionId);
+    headers.set("X-Praxis-Window", this.windowId);
+    headers.set("X-Praxis-Window-Generation", String(this.generation));
+    headers.set("X-Praxis-Operation-Group", target.group);
+    headers.set("X-Praxis-Seq", String(state.seq));
+    headers.set("X-Praxis-Ack", String(state.ack));
+    if (target.sessionId) headers.set("X-Praxis-Session", target.sessionId);
     let response: Response;
     try {
       response = await sender(url, { ...init, headers });
@@ -152,8 +152,8 @@ class WindowOperationControl {
       this.setOwnership(target.sessionId, "readonly");
       return response;
     }
-    const responseSeq = Number(response.headers.get("X-Mini-Agent-Seq"));
-    const responseAck = Number(response.headers.get("X-Mini-Agent-Ack"));
+    const responseSeq = Number(response.headers.get("X-Praxis-Seq"));
+    const responseAck = Number(response.headers.get("X-Praxis-Ack"));
     if (!Number.isSafeInteger(responseSeq) || !Number.isSafeInteger(responseAck)) {
       state.uncertain = true;
       throw new Error("操作确认响应无效，请刷新页面核对。");

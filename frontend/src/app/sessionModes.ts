@@ -1,6 +1,6 @@
 import type { ChatMode } from "../types";
 
-export const MODE_STORAGE_KEY = "mini-agent-session-modes";
+export const MODE_STORAGE_KEY = "praxis-session-modes";
 
 export interface SimpleStorage {
   getItem(key: string): string | null;

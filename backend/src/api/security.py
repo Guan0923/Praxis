@@ -16,12 +16,12 @@ class LocalWebSettings:
 
     @classmethod
     def from_env(cls) -> LocalWebSettings:
-        raw = os.environ.get("MINI_AGENT_ALLOWED_ORIGINS", "")
+        raw = os.environ.get("PRAXIS_ALLOWED_ORIGINS", "")
         origins = tuple(item.strip().rstrip("/") for item in raw.split(",") if item.strip())
         resolved = origins or cls.allowed_origins
         invalid = [origin for origin in resolved if not _is_loopback_origin(origin)]
         if invalid:
-            raise ValueError("MINI_AGENT_ALLOWED_ORIGINS accepts only absolute HTTP(S) loopback origins")
+            raise ValueError("PRAXIS_ALLOWED_ORIGINS accepts only absolute HTTP(S) loopback origins")
         return cls(allowed_origins=resolved)
 
 

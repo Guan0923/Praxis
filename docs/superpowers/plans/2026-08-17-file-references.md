@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Uploads land immediately at `~/.mini_agent/<user_id>/runtime/<session_id>/workspace/uploads/`.
+- Uploads land immediately at `~/.praxis/<user_id>/runtime/<session_id>/workspace/uploads/`.
 - Upload batch: max 20 files, 50 MiB per file, 200 MiB total per request. Arbitrary formats allowed.
 - Reject path traversal, symlinks, special files. Names sanitized; conflicts become `name (2).ext`.
 - Clipboard images: `image-YYYYMMDD-HHmmss-<8 hex chars>.<ext>` (client-generated name, server sanitizes).

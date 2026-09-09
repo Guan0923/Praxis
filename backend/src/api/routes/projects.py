@@ -56,7 +56,7 @@ def _project_payload(project: Project, store: ProjectStore | None = None) -> dic
 
 
 def _pick_directory(request: Request) -> Path | None:
-    return pick_directory(request, title="选择 Mini-Agent 项目文件夹")
+    return pick_directory(request, title="选择 Praxis 项目文件夹")
 
 
 def _project_store(request: Request) -> ProjectStore:

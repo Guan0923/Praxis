@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-const PROJECT_STORAGE_KEY = "mini-agent-project-collapse";
+const PROJECT_STORAGE_KEY = "praxis-project-collapse";
 
 export function useProjectExpansion(projectIds: string[], currentProjectId?: string, projectsLoaded = true) {
   const [expandedProjectIds, setExpandedProjectIds] = useState<string[]>([]);

@@ -17,7 +17,7 @@ export const COMMANDS: CommandDefinition[] = [
 export const HELP_TEXT = [
   "# 使用说明",
   "",
-  "向 Mini-Agent 输入任务，它会自动调用文件、Shell、Web 等工具完成任务。",
+  "向 Praxis 输入任务，它会自动调用文件、Shell、Web 等工具完成任务。",
   "",
   "**模式选择：**",
   "- Agent：允许执行工具和修改工作区。",

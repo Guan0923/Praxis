@@ -33,7 +33,7 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
         finally:
             resolved.close()
 
-    app = FastAPI(title="Mini-Agent Web", version="0.0.1", lifespan=lifespan)
+    app = FastAPI(title="Praxis Web", version="0.0.1", lifespan=lifespan)
     install_error_handlers(app)
     app.state.web = resolved
     web_settings = LocalWebSettings.from_env()
@@ -75,15 +75,15 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
                             {"detail": "操作序号不匹配，未执行请求。", "code": "operation_sequence_mismatch"},
                             status_code=409,
                             headers={
-                                "X-Mini-Agent-Seq": str(state.server_seq),
-                                "X-Mini-Agent-Ack": str(state.client_seq),
+                                "X-Praxis-Seq": str(state.server_seq),
+                                "X-Praxis-Ack": str(state.client_seq),
                             },
                         )
                     response = await call_next(request)
-                    response.headers["X-Mini-Agent-Seq"] = str(state.server_seq)
+                    response.headers["X-Praxis-Seq"] = str(state.server_seq)
                     state.client_seq += 1
                     state.server_seq += 1
-                    response.headers["X-Mini-Agent-Ack"] = str(state.client_seq)
+                    response.headers["X-Praxis-Ack"] = str(state.client_seq)
             finally:
                 await resolved.operation_control.finish_operation(window_id, session_id)
         if request.url.path.startswith("/api/"):
@@ -135,7 +135,7 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
 
     @app.get("/api/health")
     def health() -> dict:
-        return {"status": "ok", "service": "mini-agent-backend"}
+        return {"status": "ok", "service": "praxis-backend"}
 
     @app.get("/api/ready")
     def ready() -> dict:
@@ -149,7 +149,7 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
             if isinstance(exc, MessageQueueUnavailable):
                 raise HTTPException(status_code=503, detail="message_queue_unavailable") from exc
             raise
-        return {"status": "ready", "service": "mini-agent-backend", "database": "ok", "redis": "ok"}
+        return {"status": "ready", "service": "praxis-backend", "database": "ok", "redis": "ok"}
 
     @app.api_route(
         "/api/{missing_path:path}",
@@ -163,7 +163,7 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
     # In production the local backend can serve the browser bundle from the
     # same loopback origin.  Development keeps using Vite's proxy, and an
     # absent ``dist`` directory simply leaves the API-only app unchanged.
-    frontend_dist = Path(os.environ.get("MINI_AGENT_FRONTEND_DIST", str(REPO_ROOT / "frontend" / "dist"))).expanduser()
+    frontend_dist = Path(os.environ.get("PRAXIS_FRONTEND_DIST", str(REPO_ROOT / "frontend" / "dist"))).expanduser()
     if frontend_dist.is_dir():
         app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
 

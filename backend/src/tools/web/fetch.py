@@ -104,7 +104,7 @@ class SafeWebFetcher:
     _DEFAULT_OUTPUT_CHARS = 50_000
     _ALLOWED_CONTENT_TYPES = {"text/html", "text/plain", "application/json"}
     _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
-    _USER_AGENT = "Mini-Agent/0.1 (+https://example.invalid/mini-agent)"
+    _USER_AGENT = "Praxis/0.1 (+https://example.invalid/praxis)"
     _DOH_ADDRESS = "1.1.1.1"
     _DOH_HOST = "cloudflare-dns.com"
     _SYNTHETIC_NETWORK = ipaddress.ip_network("198.18.0.0/15")

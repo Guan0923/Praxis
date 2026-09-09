@@ -18,7 +18,7 @@ class BrokerConfiguration:
     installation_id: str
     backend_instance_id: str
     program_data: Path
-    pipe_name: str = r"\\.\pipe\mini-agent-sandbox-broker"
+    pipe_name: str = r"\\.\pipe\praxis-sandbox-broker"
 
     @classmethod
     def create(
@@ -27,7 +27,7 @@ class BrokerConfiguration:
         program_data: Path | None = None,
         installation_id: str | None = None,
         backend_instance_id: str | None = None,
-        pipe_name: str = r"\\.\pipe\mini-agent-sandbox-broker",
+        pipe_name: str = r"\\.\pipe\praxis-sandbox-broker",
     ) -> BrokerConfiguration:
         resolved_program_data = Path(program_data or _default_program_data())
         if installation_id is None:

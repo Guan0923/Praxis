@@ -5,15 +5,15 @@
 #   scripts/dev.sh frontend  # client  -> http://localhost:5173
 #   scripts/dev.sh all       # backend + frontend together
 #
-# Model config defaults to ~/.mini_agent/config.toml; override with MINI_AGENT_CONFIG.
+# Model config defaults to ~/.praxis/config.toml; override with PRAXIS_CONFIG.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-CONFIG="${MINI_AGENT_CONFIG:-$HOME/.mini_agent/config.toml}"
+CONFIG="${PRAXIS_CONFIG:-$HOME/.praxis/config.toml}"
 
 start_backend() {
   echo "[dev] backend server: http://127.0.0.1:8000  (config: $CONFIG)"
-  MINI_AGENT_CONFIG="$CONFIG" uv run python -m backend.api
+  PRAXIS_CONFIG="$CONFIG" uv run python -m backend.api
 }
 
 start_frontend() {

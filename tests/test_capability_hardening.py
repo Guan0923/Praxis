@@ -46,7 +46,7 @@ def test_project_mcp_file_is_ignored(tmp_path: Path) -> None:
     paths = ClientPaths(tmp_path / "home")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    _write_mcp(workspace / ".mini_agent" / "mcp.toml")
+    _write_mcp(workspace / ".praxis" / "mcp.toml")
 
     plan = prepare_mcp_plan(paths, workspace)
 
@@ -70,7 +70,7 @@ def test_user_mcp_servers_are_started_and_project_file_is_ignored(tmp_path: Path
         return mcp_client.ExternalMcpResources()
 
     monkeypatch.setattr(app_factory, "start_external_tools", start)
-    _write_mcp(workspace / ".mini_agent" / "mcp.toml")
+    _write_mcp(workspace / ".praxis" / "mcp.toml")
 
     app_factory._external_resources(paths, {})
     assert started == []

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -220,13 +221,13 @@ class AutoCompactionTodoClient:
 
 @pytest.fixture
 def redis_store() -> tuple[TrackingRedisTodoListStore, Redis]:
-    client = Redis.from_url("redis://127.0.0.1:6379/0", decode_responses=True)
+    client = Redis.from_url(os.environ.get("PRAXIS_TEST_REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True)
     try:
         client.ping()
     except Exception as exc:
         client.close()
         pytest.skip(f"real Redis unavailable: {exc}")
-    prefix = f"mini-agent:test:todo-runtime:{uuid4().hex}"
+    prefix = f"praxis:test:todo-runtime:{uuid4().hex}"
     store = TrackingRedisTodoListStore(client, key_prefix=prefix)
     yield store, client
     keys = list(client.scan_iter(f"{prefix}:*"))
@@ -468,7 +469,7 @@ def test_failed_turn_expires_redis_state(
 
 def test_unavailable_redis_fails_without_memory_fallback(tmp_path: Path) -> None:
     client = Redis(host="127.0.0.1", port=1, decode_responses=True, socket_connect_timeout=0.05, socket_timeout=0.05)
-    store = RedisTodoListStore(client, key_prefix=f"mini-agent:test:unavailable:{uuid4().hex}")
+    store = RedisTodoListStore(client, key_prefix=f"praxis:test:unavailable:{uuid4().hex}")
     runner = AgentRunner(CrashRecoveryPlanner(), build_tool_registry(tmp_path), todo_store=store)
     runtime = runner.new_runtime(task="must use Redis")
     runtime.run.turn_id = "turn_unavailable"

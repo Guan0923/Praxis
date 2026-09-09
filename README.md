@@ -1,124 +1,95 @@
-# Mini-Agent
+# Praxis
 
-Mini-Agent 是纯本地、单用户的桌面 Agent 应用。React/Vite 前端通过 loopback HTTP/SSE 访问本机 FastAPI backend；对话运行时、模型 Provider、工具、Skills、MCP、Sandbox、项目、会话与设置均在本机运行和保存。
+**Turn ideas into action. On your machine. On your terms.**
 
-项目不包含账户、登录、设备授权、云同步、Cloud 服务或 PostgreSQL 部署层。
+Praxis is a personal AI workspace that runs locally and opens in your browser. Give it a task, bring in your files, and work through it together: inspect a project, change code, run commands, or gather information from the web. Follow the work as it happens, with plans, tool results, and permission decisions in the conversation.
 
-## 工作区组成
+**English** | [简体中文](README.zh-CN.md)
 
-| 目录 | 包 | 用途 |
-| --- | --- | --- |
-| [`backend/`](backend/README.md) | `mini-agent-backend` | FastAPI、本地 Agent Runtime、Provider、工具、MCP、Sandbox、Redis mailbox 与 SQLite/TOML 持久化 |
-| [`frontend/`](frontend/README.md) | `mini-agent-web` | React/Vite/TypeScript 客户端，包括 Chat、项目、设置和 Benchmark 界面 |
-| [`benchmarks/`](benchmarks/README.md) | benchmark harness | 9 个改编自开源基准的确定性任务、执行器与评分器 |
+<!-- DEMO: Add docs/assets/praxis-demo.gif, then uncomment the image below.
+![Praxis: from a task to a plan, tool execution, and a finished result](docs/assets/praxis-demo.gif)
+-->
 
-```text
-frontend/ ── HTTP/SSE ──> backend (127.0.0.1:8000)
-                              ├─ runtime / planning / providers / tools
-                              ├─ Skills / MCP / Sandbox
-                              ├─ ~/.mini_agent (TOML / SQLite / workspace)
-                              └─ Redis (queued messages / active Turn mailbox)
-```
+## Bring a task, not just a question
 
-开发时 Vite 把 `/api` 和 `/benchmark` 代理到 backend；生产本地模式由 backend 直接托管 `frontend/dist`。
+A useful assistant should help you move the work forward. Here are a few things to try with your own projects:
 
-## 环境要求
+| Start with... | Work toward... |
+| --- | --- |
+| "Explain how this project starts, and point me to the important files." | A guided tour grounded in the code in front of you. |
+| "Find the cause of this error. Propose a fix before changing anything." | A plan you can discuss, then an implementation you can inspect. |
+| "Read these logs and write a short report of the recurring failures." | A result saved in your workspace, not only an answer in chat. |
+| "Look up the documentation for this feature and compare the approaches." | Web research brought back into the context of your task. |
 
-- Python 3.11+
-- Node.js 20+
-- [`uv`](https://docs.astral.sh/uv/)
-- Docker Desktop（只用于仓库内 Redis 7.4）
-- Windows 开发环境使用 Conda `dev` 环境
+These are example tasks, not benchmark results. What Praxis can complete depends on your model, available tools, and the permissions you grant.
 
-## 安装与启动
+## Stay close to the work
 
-从仓库根目录安装 Python workspace 和前端依赖：
+### Think it through. Then put it to work.
+
+Use **Plan mode** to explore and discuss before making changes. Switch to **Agent mode** when you are ready for execution. Files, commands, and results stay connected to the conversation, so you can see what happened and decide what comes next.
+
+### Your projects, with their context attached
+
+Keep separate projects and conversations, reference files in a message, and inspect workspace files in the side panel. Continue a discussion or explore another direction without squeezing everything into one endless chat.
+
+### Make it fit the way you work
+
+Connect your chosen model service in Settings. Add **Skills** for reusable instructions and workflows, or connect **MCP servers** to bring in external tools. Project-supplied instructions and external tools still go through the relevant trust and approval checks.
+
+### Local by design, explicit about access
+
+Praxis does not require a Praxis account or a cloud-sync service. Application data lives on your machine. Tool access is checked against workspace boundaries and approval rules, and strict sandbox execution does not silently fall back to an unrestricted process.
+
+## Quick start
+
+The development workflow below targets **Windows**. Command isolation uses a Windows sandbox service; do not assume equivalent sandbox support on other operating systems.
+
+You will need **Python 3.11+**, **Node.js 20+**, **uv**, and **Docker Desktop** for Redis. If you use the project's Conda setup, run `conda activate dev` first. You also need a model service you are authorized to use.
+
+From the repository root:
 
 ```powershell
-conda activate dev
-uv sync
+uv sync --locked
 cd frontend
 npm ci
 cd ..
 docker compose up -d redis
-```
-
-启动 backend：
-
-```powershell
 uv run python -m backend.api
 ```
 
-另开终端启动 Vite：
+In a second terminal, from the repository root:
 
 ```powershell
-conda activate dev
 cd frontend
 npm run dev
 ```
 
-浏览器打开 <http://127.0.0.1:5173>。`/api/health` 只表示 backend 进程存活；`/api/ready` 会同时检查 SQLite 与 Redis，Redis 不可用时返回 503。
+Open **<http://127.0.0.1:5173>**, then:
 
-生产本地模式先构建前端，再启动 backend：
+1. Open **Settings** and configure your model provider, endpoint, model, and API key where required.
+2. Check the **Sandbox** settings. Installing the Windows sandbox requires administrator approval. Commands that require it remain blocked until it is ready.
+3. Create a conversation or open a project, reference the relevant files, and describe a task. Start in Plan mode when you want to agree on the approach first.
 
-```powershell
-cd frontend
-npm run build
-cd ..
-uv run python -m backend.api
-```
+Redis must be running for message queues and task execution. The app does not switch to an in-memory queue if Redis is unavailable.
 
-## 配置与本地数据
+For a single-server setup, build the frontend with `npm run build` inside `frontend/`, then run the backend. It serves the built app at <http://127.0.0.1:8000>.
 
-可参考 [`config.toml.example`](config.toml.example) 创建 `~/.mini_agent/config.toml`。Mini-Agent 使用以下顶层结构：
+## Your data and your permissions
 
-```text
-~/.mini_agent/
-├─ mcp/
-├─ plugins/
-├─ runtime/
-│  ├─ state.db
-│  ├─ projects.db
-│  └─ <session_id>/
-├─ skills/
-└─ config.toml
-```
+- **Stored locally:** configuration, projects, conversation history, and workspace files use `~/.praxis`. Provider API keys are encrypted before storage; they are not kept in the configuration TOML file.
+- **Local does not mean offline:** an online model receives the relevant request content. Web tools and external MCP servers may also send data outside your machine. Choose services and permissions to match the task.
+- **No application login:** Praxis is a local, single-user app, not a shared internet-facing service. Model providers and external tools may require their own credentials.
+- **A fresh installation identity:** this release does not import previous installation data or credentials. Existing users need to configure Praxis again; see the [installation notes](docs/development.md#praxis-installation).
 
-- `config.toml` 只保存非敏感的 Profile、Agent、Runtime、Sandbox、MCP 和 Skill 配置。
-- `runtime/state.db` 保存 Provider 元数据和加密后的 API Key。
-- `runtime/projects.db` 保存项目索引。
-- `runtime/<session_id>/` 保存会话数据库、workspace 和 uploads。
-- Redis 保存浏览器待发送草稿、active Turn steering mailbox 和幂等 receipt；未完成 delivery 的 receipt 不过期，acknowledged/returned receipt 保留 7 天，正式聊天历史仍以 SQLite 为权威。
-- Redis 使用 `compose.yaml` 的命名卷和 AOF（`appendfsync everysec`）。待发送消息是明文，只允许绑定 `127.0.0.1:6379`。
-- `MINI_AGENT_REDIS_URL` 默认是 `redis://127.0.0.1:6379/0`，属于部署环境变量，不写入 `config.toml`。
-- Provider API Key 使用 OS credential vault 中的安装级密钥加密，不写入 TOML，也不通过 API 回显。
+## Go deeper
 
-项目不会读取或迁移旧 UUID 用户目录、`user.db`、认证缓存、同步数据或旧密文。
+| Guide | What you will find |
+| --- | --- |
+| [Development](docs/development.md) | Setup, local data, troubleshooting, and verification commands. |
+| [Architecture](docs/architecture.md) | How the browser, runtime, tools, and storage fit together. |
+| [Backend](backend/README.md) | Local APIs, model connections, MCP, and sandbox details. |
+| [Frontend](frontend/README.md) | Browser client structure and development scripts. |
+| [Benchmarks](benchmarks/README.md) | The task suite and the limits of its scores. |
 
-Redis 不可用时不会回退到浏览器或进程内队列：历史读取仍可用，但 Turn 创建/恢复、queued-message CRUD 和 steering 会被阻断；运行中的 Turn 在最近安全边界以 `message_queue_unavailable` 失败。
-
-## 安全边界
-
-- 浏览器写请求只允许配置的 loopback Origin；无 `Origin` 的本地 CLI 请求允许执行。
-- CORS 不启用 credentials，前端不发送登录 Cookie 或 Bearer 凭据。
-- 可用逗号分隔的 `MINI_AGENT_ALLOWED_ORIGINS` 配置额外的精确本地来源；不要使用通配 Origin。
-- 工具参数经过 schema、审批与 workspace 边界检查；项目 Skills 和外部 MCP 输出按不可信输入处理。
-- 严格 Sandbox Broker 未就绪时不会静默降级为普通进程。
-
-## 开发验证
-
-```powershell
-conda activate dev
-uv run python -m ruff check .
-uv run python -m ruff format --check .
-uv run python -m pytest -q
-
-cd frontend
-npm run typecheck
-npm test
-npm run build
-```
-
-HTTP 与 Provider 测试不会调用付费模型 API。Windows 若 pytest 临时目录 ACL 阻止创建目录，请指定一个当前用户可写、此前不存在的唯一 `--basetemp`。
-
-更多设计约束见 [`docs/architecture.md`](docs/architecture.md) 与 [`docs/development.md`](docs/development.md)。
+Have a workflow to improve? Open an issue with the task, what you expected, and what happened, with secrets and private files removed. For code changes, start with the development guide and include the checks you ran.

@@ -269,7 +269,7 @@ class SandboxPolicy:
             base = Path(root).resolve(strict=True)
         else:
             temp_root = Path(tempfile.gettempdir()).resolve(strict=True)
-            base = temp_root / "mini-agent-sandbox" / session_component
+            base = temp_root / "praxis-sandbox" / session_component
         base.mkdir(parents=True, exist_ok=True)
         base = base.resolve(strict=True)
         result = Path(tempfile.mkdtemp(prefix=f"job-{job_component}-", dir=base))

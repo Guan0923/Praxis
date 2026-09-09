@@ -187,9 +187,9 @@ def main() -> int:
     target_ports = [int(server.server_address[1]) for server in servers]
     results: list[dict[str, object]] = []
     failures: list[dict[str, object]] = []
-    outside = Path(tempfile.gettempdir()).resolve().parent / f"mini-agent-outside-{uuid.uuid4().hex}.tmp"
+    outside = Path(tempfile.gettempdir()).resolve().parent / f"praxis-outside-{uuid.uuid4().hex}.tmp"
     try:
-        with tempfile.TemporaryDirectory(prefix="mini-agent-real-acceptance-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="praxis-real-acceptance-") as temporary:
             workspace = Path(temporary).resolve()
             network_probe = _compile_network_probe(workspace)
             terminal_commands = {
@@ -339,7 +339,7 @@ def main() -> int:
                     expected_direct = network_mode is NetworkMode.FULL_NETWORK
                     expected_alias = network_mode is NetworkMode.FULL_NETWORK
                     expected_identity = (
-                        "minisbxonline" if network_mode is NetworkMode.FULL_NETWORK else "minisbxoffline"
+                        "praxissbxonline" if network_mode is NetworkMode.FULL_NETWORK else "praxissbxoffline"
                     )
                     checks = (
                         row["workspace_write"] is expected_workspace,

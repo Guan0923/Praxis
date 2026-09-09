@@ -1,6 +1,6 @@
 # Architecture
 
-Mini-Agent 是纯本地单用户系统。浏览器是客户端，本机 backend 是唯一服务端；仓库不包含账户服务、Cloud、同步或 PostgreSQL 部署层。
+Praxis 是纯本地单用户系统。浏览器是客户端，本机 backend 是唯一服务端；仓库不包含账户服务、Cloud、同步或 PostgreSQL 部署层。
 
 ## 部署边界
 
@@ -8,7 +8,7 @@ Mini-Agent 是纯本地单用户系统。浏览器是客户端，本机 backend 
 frontend/ ── HTTP/SSE ──> backend (127.0.0.1:8000)
                                   ├─ local model providers
                                   ├─ tools / Skills / MCP / Sandbox
-                                  └─ ~/.mini_agent
+                                  └─ ~/.praxis
 ```
 
 - `frontend/` 不导入 Python，只调用本地 backend API。
@@ -38,8 +38,8 @@ frontend/ ── HTTP/SSE ──> backend (127.0.0.1:8000)
 ## 工具、Skills、MCP 与 Sandbox
 
 - 工具参数始终按 schema 校验，并保持 workspace 边界和审批策略。
-- 全局 Skills 位于 `~/.mini_agent/skills/`；项目 Skills 位于 `<workspace>/.mini_agent/skills/`，按项目和树哈希审批。
-- 全局 MCP 位于 `~/.mini_agent/mcp/`；项目 MCP 输出仍视为不可信。
+- 全局 Skills 位于 `~/.praxis/skills/`；项目 Skills 位于 `<workspace>/.praxis/skills/`，按项目和树哈希审批。
+- 全局 MCP 位于 `~/.praxis/mcp/`；项目 MCP 输出仍视为不可信。
 - Subagent 只允许单层 delegation。
 - 严格 Sandbox Broker 未就绪时不得降级为普通进程。
 - Sandbox 内部 `user_id` 只是 Broker 账户池/资源隔离键，不表示应用登录身份。
@@ -47,7 +47,7 @@ frontend/ ── HTTP/SSE ──> backend (127.0.0.1:8000)
 ## 本地持久化
 
 ```text
-~/.mini_agent/
+~/.praxis/
 ├─ mcp/
 ├─ plugins/
 ├─ runtime/

@@ -1,6 +1,6 @@
 """Un-trusted project Skill candidates and per-Skill directory fingerprints.
 
-Project Skills live in ``<workspace>/.mini_agent/skills/<name>`` and are
+Project Skills live in ``<workspace>/.praxis/skills/<name>`` and are
 treated as untrusted repository content.  Nothing from this module is ever
 merged into the runtime catalog or sent to the model before the user
 approves the exact Skill tree; approval is persisted per Skill name against
@@ -84,7 +84,7 @@ def discover_project_skills(workspace: Path, project_id: str) -> tuple[ProjectSk
     directory escaping the root, or an unreadable tree).
     """
 
-    skills_root = (workspace / ".mini_agent" / "skills").resolve()
+    skills_root = (workspace / ".praxis" / "skills").resolve()
     if not skills_root.exists():
         return ()
     if not skills_root.is_dir():

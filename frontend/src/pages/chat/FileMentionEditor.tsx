@@ -427,7 +427,7 @@ const FileMentionEditor = forwardRef<FileMentionEditorHandle, FileMentionEditorP
     restore: (prompt, references) => handleRef.current?.restore(prompt, references),
   }), []);
   const initialConfig = {
-    namespace: "mini-agent-file-mentions",
+    namespace: "praxis-file-mentions",
     nodes: [FileMentionNode],
     editable: !props.disabled,
     onError: (error: Error) => { throw error; },

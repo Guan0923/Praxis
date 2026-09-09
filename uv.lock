@@ -12,7 +12,7 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "mini-agent-backend",
+    "praxis-backend",
 ]
 
 [manifest.dependency-groups]
@@ -741,7 +741,7 @@ wheels = [
 ]
 
 [[package]]
-name = "mini-agent-backend"
+name = "praxis-backend"
 version = "0.0.1"
 source = { editable = "backend" }
 dependencies = [

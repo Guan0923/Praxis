@@ -181,7 +181,7 @@ export default function AppSidebar({
     >
       <div className={`sidebar-reveal-shell${page === "chat" ? " sidebar-reveal-active" : ""}`} key={revealKey}>
         <div className="sidebar-header sidebar-reveal-item" data-reveal-index="0">
-          <Typography.Text className="sidebar-project-title">Mini-Agent</Typography.Text>
+          <Typography.Text className="sidebar-project-title">Praxis</Typography.Text>
           {onToggleCollapse ? (
             <Button
               className="sidebar-collapse-button"

@@ -289,7 +289,7 @@ class ModelRequestExecutor:
 
     @staticmethod
     def _trace_tool(tool: ToolSpec) -> dict[str, object]:
-        audit = tool.provider_options.get("mini_agent", {}).get("trace_origin")
+        audit = tool.provider_options.get("praxis", {}).get("trace_origin")
         origin = dict(audit) if isinstance(audit, Mapping) else {"kind": "local", "tool": tool.name}
         return {
             "name": tool.name,

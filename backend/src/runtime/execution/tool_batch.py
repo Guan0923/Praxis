@@ -232,7 +232,7 @@ class ToolBatchExecutor:
                 stop.set()
         fatal: BaseException | None = None
         mode_change_requested = False
-        with ThreadPoolExecutor(max_workers=len(tools), thread_name_prefix="mini-agent-tool") as pool:
+        with ThreadPoolExecutor(max_workers=len(tools), thread_name_prefix="praxis-tool") as pool:
             futures: dict[Future[ToolStepResult], int] = {
                 pool.submit(run_one, index): index for index in range(len(tools))
             }

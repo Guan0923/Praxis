@@ -48,7 +48,7 @@ import type {
   LocalProfile,
 } from "../types";
 
-export const ACTION_ERROR_MESSAGE_KEY = "mini-agent-action-error";
+export const ACTION_ERROR_MESSAGE_KEY = "praxis-action-error";
 
 function AgentApp() {
   const initialSettings = useInitialSettings();

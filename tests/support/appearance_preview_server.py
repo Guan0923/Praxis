@@ -26,12 +26,12 @@ def main() -> None:
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--port", type=int, default=18143)
     parser.add_argument("--redis-url", help="Optional Redis connection for real terminal checks")
-    parser.add_argument("--redis-prefix", default="mini-agent:appearance-preview")
+    parser.add_argument("--redis-prefix", default="praxis:appearance-preview")
     args = parser.parse_args()
     root = args.data_root.resolve()
-    if root == (Path.home() / ".mini_agent").resolve():
+    if root == (Path.home() / ".praxis").resolve():
         parser.error("Use an isolated test data directory, not the live application data.")
-    os.environ["MINI_AGENT_ALLOWED_ORIGINS"] = f"http://127.0.0.1:{args.port},http://localhost:{args.port}"
+    os.environ["PRAXIS_ALLOWED_ORIGINS"] = f"http://127.0.0.1:{args.port},http://localhost:{args.port}"
     queue = (
         RedisMessageQueue.from_url(args.redis_url, key_prefix=args.redis_prefix)
         if args.redis_url

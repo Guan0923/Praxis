@@ -36,7 +36,7 @@ _CHUNK_SIZE = 1024 * 1024
 _IGNORED_DIRECTORIES = frozenset(
     {
         ".git",
-        ".mini_agent",
+        ".praxis",
         ".mypy_cache",
         ".pytest_cache",
         ".ruff_cache",
@@ -364,7 +364,7 @@ class SessionFileStore:
             raw = prefixes[canonical] + raw
         if len(raw) > MAX_EDITABLE_FILE_BYTES:
             raise SessionFileError("文件保存后超过 5 MB，已取消保存。")
-        temporary = resolved.with_name(f".{resolved.name}.mini-agent-{uuid4().hex}.tmp")
+        temporary = resolved.with_name(f".{resolved.name}.praxis-{uuid4().hex}.tmp")
         mode = stat.S_IMODE(resolved.stat().st_mode)
         try:
             with temporary.open("wb") as handle:
@@ -447,7 +447,7 @@ class SessionFileStore:
             if source == target_source:
                 current.rename(target)
             else:
-                temporary = target.with_name(f".{target.name}.mini-agent-{uuid4().hex}.tmp")
+                temporary = target.with_name(f".{target.name}.praxis-{uuid4().hex}.tmp")
                 if current.is_dir():
                     self._validate_tree_for_copy(current)
                     shutil.copytree(current, temporary)

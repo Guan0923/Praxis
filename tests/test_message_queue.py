@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from time import monotonic, sleep
@@ -301,8 +302,8 @@ def test_create_turn_fails_closed_when_message_queue_is_unavailable(tmp_path: Pa
 
 @pytest.fixture
 def redis_queue() -> RedisMessageQueue:
-    prefix = f"mini-agent:test:{uuid4().hex}"
-    client = Redis.from_url("redis://127.0.0.1:6379/0", decode_responses=True)
+    prefix = f"praxis:test:{uuid4().hex}"
+    client = Redis.from_url(os.environ.get("PRAXIS_TEST_REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True)
     try:
         client.ping()
     except Exception as exc:

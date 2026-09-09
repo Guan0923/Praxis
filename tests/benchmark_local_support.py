@@ -151,7 +151,7 @@ if __name__ == "__main__":
         "--public", action="store_true", help="Show the public suite with a free local smoke-test model."
     )
     args = parser.parse_args()
-    os.environ["MINI_AGENT_ALLOWED_ORIGINS"] = f"http://127.0.0.1:{args.port}"
+    os.environ["PRAXIS_ALLOWED_ORIGINS"] = f"http://127.0.0.1:{args.port}"
     if not args.public:
         benchmarks.tasks.ALL_TASKS = local_tasks()
         benchmarks.tasks.TASKS_BY_NAME = {task.name: task for task in benchmarks.tasks.ALL_TASKS}

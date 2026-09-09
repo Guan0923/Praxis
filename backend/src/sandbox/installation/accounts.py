@@ -18,11 +18,11 @@ from .contracts import (
     TransactionFailure,
 )
 
-OFFLINE_ACCOUNT = "MiniSbxOffline"
-ONLINE_ACCOUNT = "MiniSbxOnline"
-ACCOUNT_GROUP = "MiniAgentSandboxUsers"
-ACCOUNT_COMMENT = "Mini-Agent sandbox account (managed)"
-GROUP_COMMENT = "Mini-Agent sandbox users (managed)"
+OFFLINE_ACCOUNT = "PraxisSbxOffline"
+ONLINE_ACCOUNT = "PraxisSbxOnline"
+ACCOUNT_GROUP = "PraxisSandboxUsers"
+ACCOUNT_COMMENT = "Praxis sandbox account (managed)"
+GROUP_COMMENT = "Praxis sandbox users (managed)"
 
 
 def provision_fixed_accounts(
@@ -194,7 +194,7 @@ def credential_works(name: str, password: str, security: Any, win32con: Any) -> 
 
 
 def remove_owned_accounts(data_path: Path) -> None:
-    """Delete only accounts proven to belong to this Mini-Agent install."""
+    """Delete only accounts proven to belong to this Praxis install."""
 
     try:
         import win32net  # type: ignore[import-not-found]

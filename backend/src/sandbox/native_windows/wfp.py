@@ -39,8 +39,9 @@ _FWP_E_FILTER_NOT_FOUND = 0x80320003
 _FWP_E_PROVIDER_NOT_FOUND = 0x80320005
 _FWP_E_SUBLAYER_NOT_FOUND = 0x80320007
 
-_PROVIDER_UUID = uuid.UUID("46f58f79-63f8-57c2-8c5c-5ac18fe1ed04")
-_SUBLAYER_UUID = uuid.UUID("7c80efba-5207-521d-afb4-9ff8a25f9fa7")
+# Installation-owned identities must not overlap a previous product's rules.
+_PROVIDER_UUID = uuid.UUID("43fa8639-b89b-49db-a37f-edcde6572af3")
+_SUBLAYER_UUID = uuid.UUID("115c78d8-331f-47a1-99a5-ce520774c0ca")
 
 _LAYER_CONNECT_V4 = uuid.UUID("c38d57d1-05a7-4c33-904f-7fbceee60e82")
 _LAYER_CONNECT_V6 = uuid.UUID("4a72393b-319f-44bc-84c3-ba54dcb3b6b4")
@@ -53,7 +54,7 @@ _CONDITION_IP_PROTOCOL = uuid.UUID("3971ef2b-623e-4f9a-8cb1-6e79b806b9a7")
 _CONDITION_IP_REMOTE_PORT = uuid.UUID("c35a604d-d22b-4e1a-91b4-68f674ee674b")
 _CONDITION_IP_REMOTE_ADDRESS = uuid.UUID("b235ae9a-1d64-49b8-a44c-5ff3d9095045")
 
-_FILTER_NAMESPACE = uuid.UUID("71962528-c050-5993-a2cc-b15d3a71530f")
+_FILTER_NAMESPACE = uuid.UUID("6f33d834-52c9-4ac5-ba3b-3152c9d486d1")
 _SID_PATTERN = re.compile(r"S-\d+(?:-\d+)+", flags=re.IGNORECASE)
 
 
@@ -338,7 +339,7 @@ class _WfpApi:
 
 
 def configure_static_wfp(offline_sid: str, online_sid: str, proxy_port: int) -> None:
-    """Atomically replace Mini-Agent's persistent WFP filters."""
+    """Atomically replace Praxis's persistent WFP filters."""
 
     specs = build_static_filter_specs(offline_sid, online_sid, proxy_port)
     api = _WfpApi()
@@ -364,7 +365,7 @@ def configure_static_wfp(offline_sid: str, online_sid: str, proxy_port: int) -> 
 
         provider = _Provider(
             provider_key,
-            _DisplayData("Mini-Agent run_command sandbox", "Static filters for fixed sandbox accounts"),
+            _DisplayData("Praxis run_command sandbox", "Static filters for fixed sandbox accounts"),
             _FWPM_PROVIDER_FLAG_PERSISTENT,
             _ByteBlob(),
             None,
@@ -372,7 +373,7 @@ def configure_static_wfp(offline_sid: str, online_sid: str, proxy_port: int) -> 
         api.check(api.library.FwpmProviderAdd0(handle, ctypes.byref(provider), None), "provider add")
         sublayer = _SubLayer(
             sublayer_key,
-            _DisplayData("Mini-Agent run_command sandbox", "Account network isolation"),
+            _DisplayData("Praxis run_command sandbox", "Account network isolation"),
             _FWPM_SUBLAYER_FLAG_PERSISTENT,
             ctypes.pointer(provider_key),
             _ByteBlob(),
@@ -392,7 +393,7 @@ def configure_static_wfp(offline_sid: str, online_sid: str, proxy_port: int) -> 
 
 
 def remove_static_wfp() -> None:
-    """Atomically remove only Mini-Agent's persistent WFP objects."""
+    """Atomically remove only Praxis's persistent WFP objects."""
 
     api = _WfpApi()
     handle = wintypes.HANDLE()
@@ -425,7 +426,7 @@ def remove_static_wfp() -> None:
 
 
 def _delete_owned_filters(api: _WfpApi, engine: wintypes.HANDLE) -> None:
-    """Delete every filter in Mini-Agent's sublayer, independent of old names."""
+    """Delete every filter in Praxis's sublayer, independent of old names."""
 
     enum_handle = wintypes.HANDLE()
     api.check(
@@ -509,7 +510,7 @@ def _add_filter(
     action.type = spec.action
     filter_value = _Filter(
         _Guid.from_uuid(spec.key),
-        _DisplayData(f"Mini-Agent {spec.name}", "Fixed-account run_command isolation"),
+        _DisplayData(f"Praxis {spec.name}", "Fixed-account run_command isolation"),
         _FWPM_FILTER_FLAG_PERSISTENT,
         ctypes.pointer(provider_key),
         _ByteBlob(),

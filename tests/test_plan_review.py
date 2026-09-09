@@ -51,7 +51,7 @@ def test_valid_plan_review_opens_existing_review_and_preserves_one_control_messa
     planner = ScriptedPlanPlanner([AssistantMessage(tool_messages=[review_call(PLAN)])])
     runner = AgentRunner(planner, ToolRegistry(tmp_path))
     requests = []
-    skill = SkillSnapshot("demo", "Demo", "Instructions", ".mini_agent/skills/demo", "abc")
+    skill = SkillSnapshot("demo", "Demo", "Instructions", ".praxis/skills/demo", "abc")
     runtime = runner.new_runtime(
         task="Plan the change",
         mode="plan",

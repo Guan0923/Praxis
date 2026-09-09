@@ -21,7 +21,7 @@ def _canonical(value: Mapping[str, Any]) -> bytes:
 
 def _default_program_data() -> Path:
     root = os.environ.get("PROGRAMDATA") if os.name == "nt" else None
-    return Path(root or (Path(tempfile.gettempdir()) / "mini-agent-programdata")) / "Mini-Agent" / "SandboxBroker"
+    return Path(root or (Path(tempfile.gettempdir()) / "praxis-programdata")) / "Praxis" / "SandboxBroker"
 
 
 def _atomic_temporary(parent: Path, prefix: str) -> tuple[int, str]:

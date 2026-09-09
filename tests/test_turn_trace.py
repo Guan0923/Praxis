@@ -319,7 +319,7 @@ def test_first_decision_initializes_one_redacted_context_and_current_user_item(t
             "mcp_demo_search",
             "Search",
             {"type": "object", "password": "private"},
-            {"mini_agent": {"trace_origin": {"kind": "mcp", "server": "demo", "tool": "search"}}},
+            {"praxis": {"trace_origin": {"kind": "mcp", "server": "demo", "tool": "search"}}},
         ),
     ]
     runtime.exchange.context["trace_system_message"] = "base\nCookie=private"

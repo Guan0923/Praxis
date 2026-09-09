@@ -92,7 +92,7 @@ env_refs = { SECRET = "env://SECRET" }
 """.strip(),
         encoding="utf-8",
     )
-    project_file = tmp_path / "workspace" / ".mini_agent" / "mcp.toml"
+    project_file = tmp_path / "workspace" / ".praxis" / "mcp.toml"
     project_file.parent.mkdir(parents=True)
     project_file.write_text(
         """

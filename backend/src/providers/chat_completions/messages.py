@@ -110,7 +110,7 @@ def _wire_messages_from(source: list[ChatMessage]) -> list[dict[str, Any]]:
         if not message.tool_messages:
             # Runtime history may contain an in-flight placeholder or a
             # reasoning/control-only assistant node.  Those are valid inside
-            # Mini-Agent, but OpenAI-compatible providers require assistant
+            # Praxis, but OpenAI-compatible providers require assistant
             # messages to contain either visible content or tool_calls.
             # Omitting the non-wire turn preserves the surrounding history
             # without inventing user-visible text.

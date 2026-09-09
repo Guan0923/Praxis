@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { cancelBenchmark, listBenchmarkRuns, runAllBenchmark, runBenchmark } from "../../api";
 import type { BenchmarkRun, BenchmarkStatus } from "../../types";
 
-const INSTANCE_KEY = "mini-agent:benchmark-instance";
+const INSTANCE_KEY = "praxis:benchmark-instance";
 
 export function isActive(status: BenchmarkStatus): boolean {
   return status === "queued" || status === "running" || status === "stopping";

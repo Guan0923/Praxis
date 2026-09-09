@@ -66,7 +66,7 @@ def make_env(tmp_path) -> dict[str, str]:  # noqa: ANN001
         if IS_WINDOWS
         else {"PATH": os.getenv("PATH") or ""}
     )
-    return {**minimal, "MINI_AGENT_JOB_TEST": "1"}
+    return {**minimal, "PRAXIS_JOB_TEST": "1"}
 
 
 def make_job(

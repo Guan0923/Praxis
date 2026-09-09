@@ -22,14 +22,14 @@ from backend.tools import ToolError, ToolRegistry
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tests/support/mcp_capabilities_server.py"
-LEGACY_PYTHON = Path(os.environ.get("MINI_AGENT_MCP_V1_PYTHON", str(ROOT / ".tmp-mcp-v1/Scripts/python.exe")))
+LEGACY_PYTHON = Path(os.environ.get("PRAXIS_MCP_V1_PYTHON", str(ROOT / ".tmp-mcp-v1/Scripts/python.exe")))
 
 
 @contextmanager
 def peer(era="modern", transport="stdio", *, token=None, only=None):
     python = sys.executable if era == "modern" else str(LEGACY_PYTHON)
     if era == "legacy" and not Path(python).exists():
-        pytest.skip("Install the isolated MCP v1 test environment or set MINI_AGENT_MCP_V1_PYTHON")
+        pytest.skip("Install the isolated MCP v1 test environment or set PRAXIS_MCP_V1_PYTHON")
     env = {}
     if only:
         env["MCP_TEST_ONLY"] = only

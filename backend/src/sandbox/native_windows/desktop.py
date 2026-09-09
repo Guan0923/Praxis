@@ -49,7 +49,7 @@ class WindowsPrivateDesktop:
         )
         participant = desktop_all & ~(con.DELETE | con.WRITE_DAC | con.WRITE_OWNER)
         attributes = _security_attributes(desktop_all, participant, logon_sid, service_sid)
-        name = f"MiniAgentSandboxDesktop-{uuid.uuid4().hex}"
+        name = f"PraxisSandboxDesktop-{uuid.uuid4().hex}"
 
         with _WINDOW_STATION_LOCK:
             current = service.GetProcessWindowStation()

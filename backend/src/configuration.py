@@ -35,7 +35,7 @@ class ClientPaths:
 
     @classmethod
     def from_home(cls, home: Path | None = None) -> ClientPaths:
-        return cls((home or Path.home()) / ".mini_agent")
+        return cls((home or Path.home()) / ".praxis")
 
     @property
     def config_file(self) -> Path:

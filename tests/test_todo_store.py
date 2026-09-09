@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
@@ -12,8 +13,8 @@ from backend.storage.todo_list import TODO_TTL_SECONDS, MemoryTodoListStore, Red
 
 @pytest.fixture
 def redis_todo_store() -> tuple[RedisTodoListStore, Redis, str]:
-    prefix = f"mini-agent:test:todo:{uuid4().hex}"
-    client = Redis.from_url("redis://127.0.0.1:6379/0", decode_responses=True)
+    prefix = f"praxis:test:todo:{uuid4().hex}"
+    client = Redis.from_url(os.environ.get("PRAXIS_TEST_REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True)
     try:
         client.ping()
     except Exception as exc:

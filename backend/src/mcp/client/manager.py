@@ -68,7 +68,7 @@ class ExternalMcpManager:
         self._configs = configs
         self._settings = settings or McpSettings()
         self._loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(target=self._run_loop, name="mini-agent-mcp", daemon=True)
+        self._thread = threading.Thread(target=self._run_loop, name="praxis-mcp", daemon=True)
         self._connections: dict[str, asyncio.Task] = {}
         self._stops: dict[str, asyncio.Event] = {}
         self._sessions: dict[str, Client] = {}

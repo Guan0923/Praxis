@@ -28,7 +28,7 @@ def _make_root() -> Path:
 
 
 def _write_project_skill(workspace: Path, name: str, *, body: str = "Project body.") -> None:
-    directory = workspace / ".mini_agent" / "skills" / name
+    directory = workspace / ".praxis" / "skills" / name
     directory.mkdir(parents=True)
     (directory / "SKILL.md").write_text(
         f"---\nname: {name}\ndescription: Project {name}.\n---\n{body}\n",

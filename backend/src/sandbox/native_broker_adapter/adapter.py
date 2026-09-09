@@ -252,7 +252,7 @@ class WindowsNativeBrokerAdapter:
             limits = ResourceLimits.from_mapping(
                 policy.get("limits") if isinstance(policy.get("limits"), Mapping) else None
             )
-            job = WindowsJobObject(f"mini-agent-{reservation.job_id}", limits)
+            job = WindowsJobObject(f"praxis-{reservation.job_id}", limits)
         except Exception:
             self._close_reservation(reservation)
             raise

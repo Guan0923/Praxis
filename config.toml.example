@@ -1,4 +1,4 @@
-# Copy this file to ~/.mini_agent/config.toml.
+# Copy this file to ~/.praxis/config.toml.
 # Provider metadata and encrypted API keys live in runtime/state.db, not TOML.
 [profile]
 display_name = "本地用户"

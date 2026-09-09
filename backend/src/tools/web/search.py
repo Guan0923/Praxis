@@ -87,7 +87,7 @@ class DuckDuckGoWebSearch:
     _MAX_RESULTS = 10
     _MAX_RESPONSE_BYTES = 1_000_000
     _MAX_SNIPPET_CHARS = 2_000
-    _USER_AGENT = "Mini-Agent/0.1 (+https://example.invalid/mini-agent)"
+    _USER_AGENT = "Praxis/0.1 (+https://example.invalid/praxis)"
 
     def __init__(
         self,

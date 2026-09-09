@@ -18,6 +18,8 @@ def test_fresh_home_uses_exact_five_item_layout_and_ignores_legacy_env(tmp_path:
     home = tmp_path / "home"
     paths = ClientPaths.from_home(home)
 
+    assert paths.root == home / ".praxis"
+
     initialize_config(paths, workspace)
 
     assert legacy.exists()
@@ -27,11 +29,11 @@ def test_fresh_home_uses_exact_five_item_layout_and_ignores_legacy_env(tmp_path:
     assert not (paths.root / "sync").exists()
     assert not (paths.root / "user.db").exists()
     assert not (paths.root / "projects.db").exists()
-    assert not (home / ".mini_agent-cache").exists()
+    assert not (home / ".praxis-cache").exists()
 
 
 def test_sqlite_persists_empty_runtime_and_time_zone_locally(tmp_path: Path) -> None:
-    store = SQLiteSessionStore(ClientPaths(tmp_path / "mini_agent"))
+    store = SQLiteSessionStore(ClientPaths(tmp_path / "praxis"))
     session = store.create_session("empty")
     state = RuntimeState(session_id=session.session_id, timezone="UTC")
 
@@ -61,7 +63,7 @@ def test_sqlite_closes_connection_when_schema_initialization_fails(tmp_path: Pat
 
     connection = BrokenConnection()
     monkeypatch.setattr(sqlite3, "connect", lambda _path: connection)
-    store = SQLiteSessionStore(ClientPaths(tmp_path / "mini_agent"))
+    store = SQLiteSessionStore(ClientPaths(tmp_path / "praxis"))
 
     with pytest.raises(sqlite3.DatabaseError, match="broken schema"):
         with store._connection("session_broken"):

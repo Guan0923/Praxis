@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -29,8 +30,8 @@ from backend.storage.sqlite import SQLiteSessionStore
 
 @pytest.fixture
 def redis_event_stream() -> tuple[RedisRuntimeEventStream, Redis, str]:
-    prefix = f"mini-agent:test:runtime-events:{uuid4().hex}"
-    client = Redis.from_url("redis://127.0.0.1:6379/0", decode_responses=True)
+    prefix = f"praxis:test:runtime-events:{uuid4().hex}"
+    client = Redis.from_url(os.environ.get("PRAXIS_TEST_REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True)
     try:
         client.ping()
     except Exception as exc:

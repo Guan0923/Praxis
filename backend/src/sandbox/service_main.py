@@ -38,7 +38,7 @@ else:  # pragma: no cover - the service class is loaded only by Windows SCM
 
 
 def _configuration() -> BrokerConfiguration:
-    program_data = os.environ.get("MINI_AGENT_SANDBOX_PROGRAM_DATA")
+    program_data = os.environ.get("PRAXIS_SANDBOX_PROGRAM_DATA")
     return BrokerConfiguration.create(program_data=Path(program_data) if program_data else None)
 
 
@@ -50,7 +50,7 @@ def _server() -> WindowsNamedPipeServer:
         backend_sid = configuration.backend_sid_path.read_text(encoding="ascii").strip()
     except OSError as exc:
         raise SandboxInitializationError("Broker backend SID is unavailable") from exc
-    service_sid = windows_service_sid("MiniAgentSandboxBroker")
+    service_sid = windows_service_sid("PraxisSandboxBroker")
     return WindowsNamedPipeServer(
         service,
         # The service SID is required for subsequent CreateNamedPipe calls;
@@ -61,12 +61,12 @@ def _server() -> WindowsNamedPipeServer:
 
 if win32serviceutil is not None:
 
-    class MiniAgentSandboxBrokerService(win32serviceutil.ServiceFramework):
+    class PraxisSandboxBrokerService(win32serviceutil.ServiceFramework):
         """Top-level pywin32 service class loaded by ``pythonservice.exe``."""
 
-        _svc_name_ = "MiniAgentSandboxBroker"
-        _svc_display_name_ = "Mini-Agent Sandbox Broker"
-        _svc_description_ = "Privileged control plane for Mini-Agent Windows sandbox jobs."
+        _svc_name_ = "PraxisSandboxBroker"
+        _svc_display_name_ = "Praxis Sandbox Broker"
+        _svc_description_ = "Privileged control plane for Praxis Windows sandbox jobs."
 
         def __init__(self, args: Any) -> None:
             super().__init__(args)
@@ -80,7 +80,7 @@ if win32serviceutil is not None:
             win32event.SetEvent(self.stop_event)
 
         def SvcDoRun(self) -> None:
-            servicemanager.LogInfoMsg("Mini-Agent Sandbox Broker starting")
+            servicemanager.LogInfoMsg("Praxis Sandbox Broker starting")
             self.server = _server()
             self.server.serve_forever(
                 stop=lambda: win32event.WaitForSingleObject(self.stop_event, 0) == win32event.WAIT_OBJECT_0
@@ -88,7 +88,7 @@ if win32serviceutil is not None:
 
 else:
 
-    class MiniAgentSandboxBrokerService:  # pragma: no cover - import compatibility on non-Windows
+    class PraxisSandboxBrokerService:  # pragma: no cover - import compatibility on non-Windows
         pass
 
 
@@ -101,10 +101,10 @@ def main() -> int:
     command = sys.argv[1] if len(sys.argv) > 1 else "run"
     if command == "run":
         servicemanager.Initialize()
-        servicemanager.PrepareToHostSingle(MiniAgentSandboxBrokerService)
+        servicemanager.PrepareToHostSingle(PraxisSandboxBrokerService)
         servicemanager.StartServiceCtrlDispatcher()
         return 0
-    win32serviceutil.HandleCommandLine(MiniAgentSandboxBrokerService)
+    win32serviceutil.HandleCommandLine(PraxisSandboxBrokerService)
     return 0
 
 
@@ -112,4 +112,4 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["MiniAgentSandboxBrokerService", "main"]
+__all__ = ["PraxisSandboxBrokerService", "main"]

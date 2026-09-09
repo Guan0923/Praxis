@@ -34,7 +34,7 @@ def test_cli_timeout_terminates_its_child():
 
 
 @pytest.mark.skipif(
-    os.environ.get("MINI_AGENT_TEST_DOCKER") != "1", reason="Set MINI_AGENT_TEST_DOCKER=1 for real Docker tests"
+    os.environ.get("PRAXIS_TEST_DOCKER") != "1", reason="Set PRAXIS_TEST_DOCKER=1 for real Docker tests"
 )
 def test_real_container_files_are_isolated_and_stop_terminates_execution():
     original = TASKS_BY_NAME["tb2-log-summary-date-ranges"]
@@ -74,7 +74,7 @@ def test_real_container_files_are_isolated_and_stop_terminates_execution():
 
 
 @pytest.mark.skipif(
-    os.environ.get("MINI_AGENT_TEST_DOCKER") != "1", reason="Set MINI_AGENT_TEST_DOCKER=1 for real Docker tests"
+    os.environ.get("PRAXIS_TEST_DOCKER") != "1", reason="Set PRAXIS_TEST_DOCKER=1 for real Docker tests"
 )
 @pytest.mark.parametrize(
     ("name", "solved"),
@@ -132,7 +132,7 @@ def test_public_task_real_http_runtime_container_and_upstream_grading(name, solv
 
 
 @pytest.mark.skipif(
-    os.environ.get("MINI_AGENT_TEST_DOCKER") != "1", reason="Set MINI_AGENT_TEST_DOCKER=1 for real Docker tests"
+    os.environ.get("PRAXIS_TEST_DOCKER") != "1", reason="Set PRAXIS_TEST_DOCKER=1 for real Docker tests"
 )
 @pytest.mark.parametrize("failure", ["timeout", "environment"])
 def test_real_runtime_distinguishes_timeout_and_environment_errors(failure, tmp_path):
@@ -154,7 +154,7 @@ def test_real_runtime_distinguishes_timeout_and_environment_errors(failure, tmp_
 
 
 @pytest.mark.skipif(
-    os.environ.get("MINI_AGENT_TEST_DOCKER") != "1", reason="Set MINI_AGENT_TEST_DOCKER=1 for real Docker tests"
+    os.environ.get("PRAXIS_TEST_DOCKER") != "1", reason="Set PRAXIS_TEST_DOCKER=1 for real Docker tests"
 )
 @pytest.mark.parametrize("task", list(TASKS_BY_NAME.values()), ids=lambda task: task.name)
 def test_every_public_task_hides_grading_material_and_host_access(task):

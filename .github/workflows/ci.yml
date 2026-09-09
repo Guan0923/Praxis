@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      MINI_AGENT_MCP_V1_PYTHON: ${{ github.workspace }}/.tmp-mcp-v1/bin/python
+      PRAXIS_MCP_V1_PYTHON: ${{ github.workspace }}/.tmp-mcp-v1/bin/python
     services:
       redis:
         image: redis:7.4-alpine
@@ -84,7 +84,7 @@ jobs:
       - name: Prepare MCP v1 integration peer
         run: |
           uv venv .tmp-mcp-v1 --python ${{ matrix.python-version }}
-          uv pip install --python "$MINI_AGENT_MCP_V1_PYTHON" "mcp==1.29.1"
+          uv pip install --python "$PRAXIS_MCP_V1_PYTHON" "mcp==1.29.1"
       - name: Require Redis for integration tests
         run: uv run python -c "from redis import Redis; Redis.from_url('redis://127.0.0.1:6379/0').ping()"
       - name: Run tests from tests/
@@ -95,7 +95,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     env:
-      MINI_AGENT_MCP_V1_PYTHON: ${{ github.workspace }}/.tmp-mcp-v1/Scripts/python.exe
+      PRAXIS_MCP_V1_PYTHON: ${{ github.workspace }}/.tmp-mcp-v1/Scripts/python.exe
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -109,6 +109,6 @@ jobs:
       - name: Prepare MCP v1 integration peer
         run: |
           uv venv .tmp-mcp-v1 --python 3.11
-          uv pip install --python "$env:MINI_AGENT_MCP_V1_PYTHON" "mcp==1.29.1"
+          uv pip install --python "$env:PRAXIS_MCP_V1_PYTHON" "mcp==1.29.1"
       - name: Run tests from tests/
         run: uv run python -m pytest tests --cov=backend --cov-report=term-missing --durations=20

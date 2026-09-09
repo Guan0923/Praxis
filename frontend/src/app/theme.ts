@@ -47,7 +47,7 @@ export function applyAppearance(mode: AppearanceMode) {
 export function appearanceTheme(mode: AppearanceMode): ThemeConfig {
   const p = palettes[mode];
   return {
-    cssVar: { prefix: "mini-agent" },
+    cssVar: { prefix: "praxis" },
     algorithm: mode === "dark" ? theme.darkAlgorithm : theme.defaultAlgorithm,
     token: {
       colorPrimary: p.accent, colorInfo: p.info, colorSuccess: p.success,

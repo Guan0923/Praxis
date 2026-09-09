@@ -123,7 +123,7 @@ def test_web_fetch_extracts_static_html_with_safety_limits() -> None:
             {
                 "headers": {
                     "Accept": "text/html, text/plain, application/json",
-                    "User-Agent": "Mini-Agent/0.1 (+https://example.invalid/mini-agent)",
+                    "User-Agent": "Praxis/0.1 (+https://example.invalid/praxis)",
                 },
                 "allow_redirects": False,
                 "stream": True,

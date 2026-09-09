@@ -33,7 +33,7 @@ def test_read_file_validates_ranges_paths_and_utf8(tmp_path: Path) -> None:
 
 def test_read_file_allows_only_absolute_paths_in_read_only_whitelist(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
-    skill_root = tmp_path / "user" / ".mini_agent" / "skills"
+    skill_root = tmp_path / "user" / ".praxis" / "skills"
     nested = skill_root / "brainstorming" / "references" / "guide.md"
     outside = tmp_path / "outside.txt"
     workspace.mkdir()
@@ -59,7 +59,7 @@ def test_read_file_allows_only_absolute_paths_in_read_only_whitelist(tmp_path: P
 def test_read_file_rejects_tilde_even_inside_configured_skill_root(tmp_path: Path, monkeypatch) -> None:
     profile = tmp_path / "profile"
     workspace = tmp_path / "workspace"
-    skill_root = profile / ".mini_agent" / "skills"
+    skill_root = profile / ".praxis" / "skills"
     manifest = skill_root / "demo" / "SKILL.md"
     workspace.mkdir()
     manifest.parent.mkdir(parents=True)
@@ -69,7 +69,7 @@ def test_read_file_rejects_tilde_even_inside_configured_skill_root(tmp_path: Pat
     files = WorkspaceFiles(workspace, read_file_roots=(skill_root,))
 
     with pytest.raises(ToolError, match="Not a file"):
-        files.read_file("~/.mini_agent/skills/demo/SKILL.md")
+        files.read_file("~/.praxis/skills/demo/SKILL.md")
 
 
 def test_glob_matches_root_and_nested_files_and_skips_internal_directories(tmp_path: Path) -> None:

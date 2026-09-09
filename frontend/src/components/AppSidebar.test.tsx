@@ -78,7 +78,7 @@ describe("AppSidebar utility navigation", () => {
 
     const header = document.querySelector(".sidebar-header");
     expect(header).not.toBeNull();
-    expect(screen.getByText("Mini-Agent", { selector: ".sidebar-project-title" })).toBeInTheDocument();
+    expect(screen.getByText("Praxis", { selector: ".sidebar-project-title" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "折叠侧边栏" })).toHaveAttribute("aria-expanded", "true");
     expect(document.querySelectorAll(".sidebar-reveal-item")).toHaveLength(6);
     await user.click(screen.getByRole("button", { name: "折叠侧边栏" }));

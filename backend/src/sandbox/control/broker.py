@@ -96,7 +96,7 @@ class WindowsBrokerClient:
     def __init__(
         self,
         *,
-        pipe_name: str = r"\\.\pipe\mini-agent-sandbox-broker",
+        pipe_name: str = r"\\.\pipe\praxis-sandbox-broker",
         installation_key: bytes | None = None,
         transport: Callable[[bytes], bytes] | None = None,
         is_windows: bool | None = None,
@@ -153,7 +153,7 @@ class WindowsBrokerClient:
         runtime_base_prefix = Path(_absolute_windows_path(sys.base_prefix))
         installer = WindowsServiceInstaller(
             (_absolute_windows_path(Path(sys.prefix) / "pythonservice.exe"),),
-            service_class=(rf"{source_root}\sandbox_service_bootstrap.MiniAgentSandboxBrokerService"),
+            service_class=(rf"{source_root}\sandbox_service_bootstrap.PraxisSandboxBrokerService"),
             backend_sid_path=configuration.backend_sid_path,
             program_data_path=configuration.program_data,
             service_code_path=source_root,

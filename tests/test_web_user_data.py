@@ -9,7 +9,7 @@ from backend.configuration import ClientPaths, ConfigurationError
 
 
 def test_local_layout_is_canonical_and_rejects_unsafe_session_ids(tmp_path: Path) -> None:
-    paths = ClientPaths(tmp_path / ".mini_agent")
+    paths = ClientPaths(tmp_path / ".praxis")
     paths.ensure()
 
     assert {item.name for item in paths.root.iterdir()} == {"mcp", "plugins", "runtime", "skills", "config.toml"}
@@ -22,7 +22,7 @@ def test_local_layout_is_canonical_and_rejects_unsafe_session_ids(tmp_path: Path
 
 
 def test_each_session_has_an_independent_workspace_and_branch_copy(tmp_path: Path) -> None:
-    paths = ClientPaths(tmp_path / ".mini_agent")
+    paths = ClientPaths(tmp_path / ".praxis")
     paths.ensure_session("session_source")
     source = paths.session_workspace("session_source")
     (source / "notes.txt").write_text("source", encoding="utf-8")
@@ -38,7 +38,7 @@ def test_each_session_has_an_independent_workspace_and_branch_copy(tmp_path: Pat
 
 
 def test_old_sibling_uploads_are_not_migrated(tmp_path: Path) -> None:
-    paths = ClientPaths(tmp_path / ".mini_agent")
+    paths = ClientPaths(tmp_path / ".praxis")
     root = paths.session_root("session_migrate")
     root.mkdir(parents=True)
     (root / "workspace").mkdir()
@@ -53,7 +53,7 @@ def test_old_sibling_uploads_are_not_migrated(tmp_path: Path) -> None:
 
 
 def test_branch_copy_ignores_old_sibling_uploads(tmp_path: Path) -> None:
-    paths = ClientPaths(tmp_path / ".mini_agent")
+    paths = ClientPaths(tmp_path / ".praxis")
     source_root = paths.session_root("session_legacy_source")
     source_root.mkdir(parents=True)
     (source_root / "workspace").mkdir()

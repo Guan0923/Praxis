@@ -33,7 +33,7 @@ class ContainerTimeout(TimeoutError):
 
 
 def cache_root() -> Path:
-    return Path(os.environ.get("MINI_AGENT_BENCHMARK_CACHE", str(Path.home() / ".cache" / "mini-agent-benchmark")))
+    return Path(os.environ.get("PRAXIS_BENCHMARK_CACHE", str(Path.home() / ".cache" / "praxis-benchmark")))
 
 
 def command(
@@ -108,7 +108,7 @@ class TaskContainer:
         self.spec = task.container
         self.cache = cache or cache_root()
         self.cancelled = cancelled
-        self.name = "mini-agent-bench-" + uuid4().hex
+        self.name = "praxis-bench-" + uuid4().hex
         self.image = ""
         self.workdir = "/app"
         self.started = False
@@ -193,7 +193,7 @@ class TaskContainer:
                 "--name",
                 self.name,
                 "--label",
-                "mini-agent.benchmark=true",
+                "praxis.benchmark=true",
                 "--network",
                 "bridge" if network else "none",
                 "--memory",

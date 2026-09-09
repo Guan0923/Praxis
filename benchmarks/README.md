@@ -1,4 +1,4 @@
-# Mini-Agent 公开综合基准
+# Praxis 公开综合基准
 
 正式清单为 `public_suite.json` 中固定的 30 题。保留原始提示词、完整任务环境与上游评分，不再使用缩减后的代码片段。旧 9 题仅作为流程测试数据保留，不进入正式注册列表。
 
@@ -16,7 +16,7 @@
 
 ## 准备与验收
 
-需要运行中的 Linux Docker。缓存默认在 `~/.cache/mini-agent-benchmark`，可通过 `MINI_AGENT_BENCHMARK_CACHE` 指定独立位置。
+需要运行中的 Linux Docker。缓存默认在 `~/.cache/praxis-benchmark`，可通过 `PRAXIS_BENCHMARK_CACHE` 指定独立位置。
 
 ```powershell
 conda activate dev
@@ -29,7 +29,7 @@ uv run python -m benchmarks.prepare --verify
 本轮 30 题验收与浏览器验证见 [`VALIDATION.md`](VALIDATION.md)。真实容器接入测试使用独立本地模型响应服务：
 
 ```powershell
-$env:MINI_AGENT_TEST_DOCKER = "1"
+$env:PRAXIS_TEST_DOCKER = "1"
 uv run python -m pytest -q tests/test_benchmark_containers.py
 ```
 

@@ -566,7 +566,7 @@ def test_broker_reservation_rejects_hash_tampering_and_expiry(tmp_path: Path) ->
             )
 
     class Desktop:
-        startup_name = r"Winsta0\MiniAgentTest"
+        startup_name = r"Winsta0\PraxisTest"
 
         def __init__(self) -> None:
             self.closed = False

@@ -79,7 +79,7 @@ class WindowsBrokerService:
             from ..native_broker_adapter.adapter import WindowsNativeBrokerAdapter
             from ..native_windows import windows_service_sid
 
-            service_sid = windows_service_sid("MiniAgentSandboxBroker")
+            service_sid = windows_service_sid("PraxisSandboxBroker")
             self.adapter = WindowsNativeBrokerAdapter(credentials=credentials, service_sid=service_sid)
         if self.manifest.records():
             self.recover_orphans(set())

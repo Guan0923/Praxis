@@ -57,9 +57,9 @@ class RedisMessageQueue:
 
     @classmethod
     def from_url(cls, url: str | None = None, *, key_prefix: str | None = None) -> RedisMessageQueue:
-        resolved_url = url or os.environ.get("MINI_AGENT_REDIS_URL", DEFAULT_REDIS_URL)
+        resolved_url = url or os.environ.get("PRAXIS_REDIS_URL", DEFAULT_REDIS_URL)
         client = Redis.from_url(resolved_url, decode_responses=True, socket_connect_timeout=1, socket_timeout=2)
-        return cls(client, key_prefix=key_prefix or os.environ.get("MINI_AGENT_REDIS_KEY_PREFIX", DEFAULT_KEY_PREFIX))
+        return cls(client, key_prefix=key_prefix or os.environ.get("PRAXIS_REDIS_KEY_PREFIX", DEFAULT_KEY_PREFIX))
 
     def _thread_keys(self, thread_id: str) -> tuple[str, str, str]:
         base = f"{self.key_prefix}:thread:{thread_id}:queued"

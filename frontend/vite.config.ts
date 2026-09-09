@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import { viteStaticCopy } from "vite-plugin-static-copy";
 import { resolve } from "node:path";
 
-const backendUrl = process.env.MINI_AGENT_BACKEND_URL ?? "http://127.0.0.1:8000";
+const backendUrl = process.env.PRAXIS_BACKEND_URL ?? "http://127.0.0.1:8000";
 
 export default defineConfig({
   resolve: {

@@ -161,7 +161,7 @@ def test_right_panel_layout_is_isolated_per_session_and_keeps_width_when_collaps
 
 
 def test_side_chat_api_stays_out_of_sidebar_and_close_keeps_empty_panel_open(tmp_path: Path) -> None:
-    state = WebAppState(tmp_path / ".mini_agent")
+    state = WebAppState(tmp_path / ".praxis")
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
         store = web_session_store(state)
@@ -202,7 +202,7 @@ def test_side_chat_api_stays_out_of_sidebar_and_close_keeps_empty_panel_open(tmp
 
 
 def test_files_window_is_unique_and_does_not_require_a_turn(tmp_path: Path) -> None:
-    state = WebAppState(tmp_path / ".mini_agent")
+    state = WebAppState(tmp_path / ".praxis")
     with TestClient(create_app(state)) as client:
         session_id = client.post("/api/sidebar-threads", json={}).json()["session_id"]
         first = client.post(f"/api/right-panel/{session_id}/files")
@@ -217,7 +217,7 @@ def test_files_window_is_unique_and_does_not_require_a_turn(tmp_path: Path) -> N
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows terminal test")
 def test_terminal_creation_fails_closed_without_redis_and_restart_drops_stale_metadata(tmp_path: Path) -> None:
-    state = WebAppState(tmp_path / ".mini_agent")
+    state = WebAppState(tmp_path / ".praxis")
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
         store = web_session_store(state)
@@ -459,7 +459,7 @@ class _WsTerminalManager:
 
 
 def test_terminal_websocket_checks_origin_and_carries_input_resize_cursor_and_exit(tmp_path: Path) -> None:
-    state = WebAppState(tmp_path / ".mini_agent")
+    state = WebAppState(tmp_path / ".praxis")
     manager = _WsTerminalManager()
     state.terminal_manager = manager  # type: ignore[assignment]
     with TestClient(create_app(state)) as client:

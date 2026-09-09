@@ -135,9 +135,9 @@ def test_provider_requests_use_configured_model_parameters(protocol: str, token_
 
 
 def test_local_settings_encrypts_provider_key_and_reopens_without_identity(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("MINI_AGENT_LOCAL_DEK_FALLBACK", "test-local-key-material-that-is-at-least-32-bytes")
-    state_db = tmp_path / ".mini_agent" / "runtime" / "state.db"
-    config_file = tmp_path / ".mini_agent" / "config.toml"
+    monkeypatch.setenv("PRAXIS_LOCAL_DEK_FALLBACK", "test-local-key-material-that-is-at-least-32-bytes")
+    state_db = tmp_path / ".praxis" / "runtime" / "state.db"
+    config_file = tmp_path / ".praxis" / "config.toml"
     store = LocalSettingsStore(state_db, config_file)
 
     saved = store.update_provider_config(
@@ -162,8 +162,8 @@ def test_local_settings_encrypts_provider_key_and_reopens_without_identity(tmp_p
 
 
 def test_provider_model_parameters_persist_and_legacy_temperature_defaults(tmp_path: Path) -> None:
-    state_db = tmp_path / ".mini_agent" / "runtime" / "state.db"
-    config_file = tmp_path / ".mini_agent" / "config.toml"
+    state_db = tmp_path / ".praxis" / "runtime" / "state.db"
+    config_file = tmp_path / ".praxis" / "config.toml"
     store = LocalSettingsStore(state_db, config_file)
 
     saved = store.update_provider_config(

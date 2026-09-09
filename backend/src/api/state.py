@@ -31,12 +31,12 @@ from backend.tools.terminal import available_terminal_executables, effective_ter
 from .agent_report_projection import project_frame
 from .agent_thread_stream import AgentThreadEventHub
 
-DEFAULT_DATA_ROOT = Path.home() / ".mini_agent"
+DEFAULT_DATA_ROOT = Path.home() / ".praxis"
 INTERRUPTED_TURN_MESSAGE = "Turn interrupted because its backend process stopped."
 
 
 class WebAppState:
-    """Process-owned state for one local Mini-Agent installation."""
+    """Process-owned state for one local Praxis installation."""
 
     def __init__(
         self,
@@ -56,7 +56,7 @@ class WebAppState:
         self.settings = LocalSettingsStore(self.paths.state_db, self.paths.config_file)
         self.projects = ProjectStore(self.paths.projects_db)
         self.chat_workspace = self.paths.runtime_dir
-        self.benchmark_root = self.data_root.parent / ".mini_agent-cache" / "benchmark"
+        self.benchmark_root = self.data_root.parent / ".praxis-cache" / "benchmark"
         self.benchmark_service = None
         self.benchmark_lock = RLock()
         self.project_picker = project_picker

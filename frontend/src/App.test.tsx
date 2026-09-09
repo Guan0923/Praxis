@@ -38,21 +38,21 @@ describe("conversation recovery", () => {
     expect(countUnreadArchived(archived, read)).toBe(0);
     expect(markArchivedAsRead(read, archived)).toBe(read);
 
-    localStorage.setItem("mini-agent-archive-read", JSON.stringify(read));
+    localStorage.setItem("praxis-archive-read", JSON.stringify(read));
     expect(loadArchiveReadState()).toEqual(read);
     expect(countUnreadArchived([...archived, { ...archived[0], id: "archived-2" }], read)).toBe(1);
   });
 
   it("clears conversation data while preserving UI-only preferences", () => {
-    localStorage.setItem("mini-agent-conversations:user-1", "old history");
-    localStorage.setItem("mini-agent-archive-read:user-1", "old archive state");
-    localStorage.setItem("mini-agent-session-modes", "old modes");
+    localStorage.setItem("praxis-conversations:user-1", "old history");
+    localStorage.setItem("praxis-archive-read:user-1", "old archive state");
+    localStorage.setItem("praxis-session-modes", "old modes");
 
     resetLegacyBrowserState();
 
-    expect(localStorage.getItem("mini-agent-conversations:user-1")).toBeNull();
-    expect(localStorage.getItem("mini-agent-archive-read:user-1")).toBe("old archive state");
-    expect(localStorage.getItem("mini-agent-session-modes")).toBe("old modes");
+    expect(localStorage.getItem("praxis-conversations:user-1")).toBeNull();
+    expect(localStorage.getItem("praxis-archive-read:user-1")).toBe("old archive state");
+    expect(localStorage.getItem("praxis-session-modes")).toBe("old modes");
     expect(localStorage.getItem(BROWSER_STATE_VERSION_KEY)).toBe(BROWSER_STATE_VERSION);
 
   });

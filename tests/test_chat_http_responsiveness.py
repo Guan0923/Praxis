@@ -83,7 +83,7 @@ def test_browser_with_real_redis_http_and_small_model_chunks(tmp_path, monkeypat
     model = ThreadingHTTPServer(("127.0.0.1", 0), Model)
     model_thread = threading.Thread(target=model.serve_forever, daemon=True)
     model_thread.start()
-    queue = RedisMessageQueue.from_url(key_prefix=f"mini-agent:test:chat-latency:{uuid4().hex}")
+    queue = RedisMessageQueue.from_url(key_prefix=f"praxis:test:chat-latency:{uuid4().hex}")
     queue.ping()
 
     class TestBroker:
@@ -105,11 +105,11 @@ def test_browser_with_real_redis_http_and_small_model_chunks(tmp_path, monkeypat
         return application
 
     monkeypatch.setattr(chat_routes, "build_local_application", local_application)
-    monkeypatch.setenv("MINI_AGENT_FRONTEND_DIST", str(root / "frontend/dist"))
+    monkeypatch.setenv("PRAXIS_FRONTEND_DIST", str(root / "frontend/dist"))
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     port = listener.getsockname()[1]
-    monkeypatch.setenv("MINI_AGENT_ALLOWED_ORIGINS", f"http://127.0.0.1:{port}")
+    monkeypatch.setenv("PRAXIS_ALLOWED_ORIGINS", f"http://127.0.0.1:{port}")
     app = create_app(state)
 
     @app.middleware("http")

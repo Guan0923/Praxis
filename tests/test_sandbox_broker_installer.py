@@ -163,16 +163,16 @@ def test_broker_status_distinguishes_invalid_service_configuration() -> None:
     ("left", "right"),
     [
         (
-            r"C:\Program Files\Mini Agent\pythonservice.exe",
-            r"\\?\C:\Program Files\Mini Agent\pythonservice.exe",
+            r"C:\Program Files\Praxis Project\pythonservice.exe",
+            r"\\?\C:\Program Files\Praxis Project\pythonservice.exe",
         ),
         (
-            r"C:\Program Files\Mini Agent\pythonservice.exe",
-            r"c:/program files/mini agent/pythonservice.exe",
+            r"C:\Program Files\Praxis Project\pythonservice.exe",
+            r"c:/program files/praxis project/pythonservice.exe",
         ),
         (
-            r"\\server\share\Mini Agent\pythonservice.exe",
-            r"\\?\UNC\SERVER\SHARE\Mini Agent\pythonservice.exe",
+            r"\\server\share\Praxis Project\pythonservice.exe",
+            r"\\?\UNC\SERVER\SHARE\Praxis Project\pythonservice.exe",
         ),
     ],
 )
@@ -181,14 +181,16 @@ def test_windows_path_normalization_treats_equivalent_spellings_as_equal(left: s
 
 
 def test_absolute_windows_path_removes_extended_prefix() -> None:
-    assert _absolute_windows_path(r"\\?\C:\Mini Agent\pythonservice.exe") == (r"C:\Mini Agent\pythonservice.exe")
+    assert _absolute_windows_path(r"\\?\C:\Praxis Project\pythonservice.exe") == (
+        r"C:\Praxis Project\pythonservice.exe"
+    )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="uses the Windows command-line parser")
 def test_service_command_check_normalizes_only_the_executable_path() -> None:
-    expected = (r"C:\Program Files\Mini Agent\pythonservice.exe", "--mode", "broker value")
+    expected = (r"C:\Program Files\Praxis Project\pythonservice.exe", "--mode", "broker value")
     equivalent = subprocess.list2cmdline(
-        [r"\\?\c:\program files\mini agent\pythonservice.exe", "--mode", "broker value"]
+        [r"\\?\c:\program files\praxis project\pythonservice.exe", "--mode", "broker value"]
     )
 
     assert _service_command_check(equivalent, expected)[0] is None
@@ -219,17 +221,17 @@ def test_configuration_health_accepts_equivalent_service_paths(
         def __exit__(self, *_args):
             return None
 
-    expected_command = (r"C:\Program Files\Mini Agent\pythonservice.exe", "--mode", "broker value")
-    expected_class = r"C:\Mini Agent\backend\src\sandbox_service_bootstrap.MiniAgentSandboxBrokerService"
+    expected_command = (r"C:\Program Files\Praxis Project\pythonservice.exe", "--mode", "broker value")
+    expected_class = r"C:\Praxis Project\backend\src\sandbox_service_bootstrap.PraxisSandboxBrokerService"
     config = [
         16,
         3,
         0,
-        subprocess.list2cmdline([r"\\?\c:\program files\mini agent\pythonservice.exe", "--mode", "broker value"]),
+        subprocess.list2cmdline([r"\\?\c:\program files\praxis project\pythonservice.exe", "--mode", "broker value"]),
         None,
         None,
         None,
-        r"NT SERVICE\MiniAgentSandboxBroker",
+        r"NT SERVICE\PraxisSandboxBroker",
     ]
     fake_win32service = types.SimpleNamespace(
         SC_MANAGER_CONNECT=1,
@@ -250,7 +252,7 @@ def test_configuration_health_accepts_equivalent_service_paths(
         REG_SZ=1,
         OpenKey=lambda *_args: RegistryKey(),
         QueryValueEx=lambda *_args: (
-            r"\\?\c:/mini agent/backend/src/sandbox_service_bootstrap.MiniAgentSandboxBrokerService",
+            r"\\?\c:/praxis project/backend/src/sandbox_service_bootstrap.PraxisSandboxBrokerService",
             1,
         ),
     )
@@ -266,18 +268,18 @@ def test_configuration_health_accepts_equivalent_service_paths(
 
 
 def test_service_class_normalizes_only_the_directory() -> None:
-    expected = r"C:\Mini Agent\backend\src\sandbox_service_bootstrap.MiniAgentSandboxBrokerService"
+    expected = r"C:\Praxis Project\backend\src\sandbox_service_bootstrap.PraxisSandboxBrokerService"
 
     assert _service_class_matches(
-        r"\\?\c:/mini agent/backend/src/sandbox_service_bootstrap.MiniAgentSandboxBrokerService",
+        r"\\?\c:/praxis project/backend/src/sandbox_service_bootstrap.PraxisSandboxBrokerService",
         expected,
     )
     assert not _service_class_matches(
-        r"C:\Mini Agent\backend\src\sandbox_service_bootstrap.OtherService",
+        r"C:\Praxis Project\backend\src\sandbox_service_bootstrap.OtherService",
         expected,
     )
     assert not _service_class_matches(
-        r"C:\Other\backend\src\sandbox_service_bootstrap.MiniAgentSandboxBrokerService",
+        r"C:\Other\backend\src\sandbox_service_bootstrap.PraxisSandboxBrokerService",
         expected,
     )
 
@@ -571,7 +573,7 @@ def test_injected_runner_executes_one_local_transaction() -> None:
     installer.install()
 
     assert [call[:2] for call in calls] == [["sc.exe", "create"], ["sc.exe", "sidtype"], ["sc.exe", "start"]]
-    assert calls[0][calls[0].index("obj=") + 1] == r"NT SERVICE\MiniAgentSandboxBroker"
+    assert calls[0][calls[0].index("obj=") + 1] == r"NT SERVICE\PraxisSandboxBroker"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows service host test")
@@ -602,7 +604,7 @@ def test_pywin32_service_host_is_resolved_before_elevation(monkeypatch: pytest.M
     monkeypatch.setitem(sys.modules, "servicemanager", types.SimpleNamespace(__file__=str(servicemanager_pyd)))
     installer = WindowsServiceInstaller(
         ("placeholder.exe",),
-        service_class="sandbox_service_bootstrap.MiniAgentSandboxBrokerService",
+        service_class="sandbox_service_bootstrap.PraxisSandboxBrokerService",
         is_windows=True,
     )
 
@@ -618,14 +620,14 @@ def test_pywin32_service_host_is_resolved_before_elevation(monkeypatch: pytest.M
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows runtime path normalization test")
 def test_broker_factory_normalizes_prefixed_runtime_paths(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "prefix", r"\\?\C:\Mini Agent\.venv")
+    monkeypatch.setattr(sys, "prefix", r"\\?\C:\Praxis Project\.venv")
     monkeypatch.setattr(sys, "base_prefix", r"\\?\C:\Runtime\Python312")
 
     client = WindowsBrokerClient.from_system()
 
-    assert client._installer.service_command == (r"C:\Mini Agent\.venv\pythonservice.exe",)
+    assert client._installer.service_command == (r"C:\Praxis Project\.venv\pythonservice.exe",)
     assert client._installer.service_runtime_paths == (
-        Path(r"C:\Mini Agent\.venv"),
+        Path(r"C:\Praxis Project\.venv"),
         Path(r"C:\Runtime\Python312"),
     )
 
@@ -667,10 +669,10 @@ def test_injected_runner_uses_prefixed_sid_for_acl(monkeypatch: pytest.MonkeyPat
         ("python.exe", "-m", "backend.sandbox.service_main", "run"),
         runner=runner,
         is_windows=True,
-        backend_sid_path=Path("C:/ProgramData/Mini-Agent/SandboxBroker/backend.sid"),
-        program_data_path=Path("C:/ProgramData/Mini-Agent/SandboxBroker"),
-        service_code_path=Path("C:/workspace/mini_agent/backend/src"),
-        service_code_boundary_path=Path("C:/workspace/mini_agent"),
+        backend_sid_path=Path("C:/ProgramData/Praxis/SandboxBroker/backend.sid"),
+        program_data_path=Path("C:/ProgramData/Praxis/SandboxBroker"),
+        service_code_path=Path("C:/workspace/praxis/backend/src"),
+        service_code_boundary_path=Path("C:/workspace/praxis"),
     )
     installer._run_local_transaction("repair", "S-1-5-21-1-2-3-500")
 
@@ -680,7 +682,7 @@ def test_injected_runner_uses_prefixed_sid_for_acl(monkeypatch: pytest.MonkeyPat
     takeown_call = next(call for call in calls if call[:3] == ["takeown.exe", "/F", str(key_path)])
     key_acl_call = next(call for call in calls if call[:2] == ["icacls.exe", str(key_path)])
     source_call = next(call for call in calls if call[:2] == ["win32-acl", str(installer.service_code_path)])
-    service_sid = _service_sid("MiniAgentSandboxBroker")
+    service_sid = _service_sid("PraxisSandboxBroker")
 
     assert "*S-1-5-21-1-2-3-500:(OI)(CI)(M)" in program_data_call
     assert len(sid_calls) == 2
@@ -713,7 +715,7 @@ def test_injected_repair_installs_when_service_is_missing() -> None:
     installer = WindowsServiceInstaller(("python.exe", "-m", "broker"), runner=runner, is_windows=True)
     installer.repair()
 
-    assert calls[0][:3] == ["sc.exe", "query", "MiniAgentSandboxBroker"]
+    assert calls[0][:3] == ["sc.exe", "query", "PraxisSandboxBroker"]
     assert calls[1][:2] == ["sc.exe", "create"]
 
 
@@ -731,12 +733,12 @@ def test_injected_repair_reconfigures_service_and_accepts_already_running() -> N
     installer = WindowsServiceInstaller(("python.exe", "-m", "broker"), runner=runner, is_windows=True)
     installer.repair()
 
-    assert calls[1] == ["sc.exe", "stop", "MiniAgentSandboxBroker"]
+    assert calls[1] == ["sc.exe", "stop", "PraxisSandboxBroker"]
     config = calls[2]
     assert config[:2] == ["sc.exe", "config"]
-    assert config[config.index("obj=") + 1] == r"NT SERVICE\MiniAgentSandboxBroker"
+    assert config[config.index("obj=") + 1] == r"NT SERVICE\PraxisSandboxBroker"
     assert config[config.index("binPath=") + 1] == "python.exe -m broker"
-    assert ["sc.exe", "sidtype", "MiniAgentSandboxBroker", "unrestricted"] in calls
+    assert ["sc.exe", "sidtype", "PraxisSandboxBroker", "unrestricted"] in calls
 
 
 def _install_fake_pywin32(monkeypatch: pytest.MonkeyPatch, shell_execute, *, exit_code: int = 0):
@@ -1232,24 +1234,24 @@ def test_local_reinstall_transaction_deletes_then_recreates_service() -> None:
     calls: list[list[str]] = []
     installer = WindowsServiceInstaller(
         ("C:/runtime/pythonservice.exe",),
-        service_class="sandbox_service_bootstrap.MiniAgentSandboxBrokerService",
+        service_class="sandbox_service_bootstrap.PraxisSandboxBrokerService",
         runner=lambda command, **_kwargs: calls.append(list(command)) or _Result(),
         is_windows=True,
     )
 
     installer._run_local_transaction("reinstall", None)
 
-    assert calls[0] == ["sc.exe", "stop", "MiniAgentSandboxBroker"]
-    assert calls[1] == ["sc.exe", "delete", "MiniAgentSandboxBroker"]
-    assert calls[2][:3] == ["sc.exe", "create", "MiniAgentSandboxBroker"]
-    assert calls[-1] == ["sc.exe", "start", "MiniAgentSandboxBroker"]
+    assert calls[0] == ["sc.exe", "stop", "PraxisSandboxBroker"]
+    assert calls[1] == ["sc.exe", "delete", "PraxisSandboxBroker"]
+    assert calls[2][:3] == ["sc.exe", "create", "PraxisSandboxBroker"]
+    assert calls[-1] == ["sc.exe", "start", "PraxisSandboxBroker"]
 
 
 def test_reinstall_removes_ready_marker_before_destructive_steps(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    data_path = tmp_path / "Mini-Agent" / "SandboxBroker"
+    data_path = tmp_path / "Praxis" / "SandboxBroker"
     data_path.mkdir(parents=True)
     ready_path = data_path / "ready.json"
     ready_path.write_text("{}", encoding="utf-8")
@@ -1262,7 +1264,7 @@ def test_reinstall_removes_ready_marker_before_destructive_steps(
         run_transaction(
             {
                 "operation": "reinstall",
-                "service_name": "MiniAgentSandboxBroker",
+                "service_name": "PraxisSandboxBroker",
                 "service_command": ["python.exe"],
                 "program_data_path": str(data_path),
             }
@@ -1311,7 +1313,7 @@ def test_account_cleanup_fails_closed_when_credentials_are_missing_for_managed_i
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    fake_net = types.SimpleNamespace(NetUserGetInfo=lambda *_args: {"name": "MiniSbxOffline"})
+    fake_net = types.SimpleNamespace(NetUserGetInfo=lambda *_args: {"name": "PraxisSbxOffline"})
     monkeypatch.setitem(sys.modules, "win32net", fake_net)
     monkeypatch.setitem(sys.modules, "win32security", types.SimpleNamespace())
     monkeypatch.setattr(
@@ -1326,7 +1328,7 @@ def test_account_cleanup_fails_closed_when_credentials_are_missing_for_managed_i
 
 
 @pytest.mark.parametrize("missing_account_rights", [False, True])
-def test_account_cleanup_deletes_only_fully_verified_mini_agent_identities(
+def test_account_cleanup_deletes_only_fully_verified_praxis_identities(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     missing_account_rights: bool,
@@ -1338,16 +1340,16 @@ def test_account_cleanup_deletes_only_fully_verified_mini_agent_identities(
     class FakeNet:
         @staticmethod
         def NetLocalGroupGetInfo(_server, name, _level):
-            assert name == "MiniAgentSandboxUsers"
-            return {"comment": "Mini-Agent sandbox users (managed)"}
+            assert name == "PraxisSandboxUsers"
+            return {"comment": "Praxis sandbox users (managed)"}
 
         @staticmethod
         def NetLocalGroupGetMembers(_server, name, _level):
-            assert name == "MiniAgentSandboxUsers"
+            assert name == "PraxisSandboxUsers"
             return (
                 [
-                    {"domainandname": r"HOST\MiniSbxOffline"},
-                    {"domainandname": r"HOST\MiniSbxOnline"},
+                    {"domainandname": r"HOST\PraxisSbxOffline"},
+                    {"domainandname": r"HOST\PraxisSbxOnline"},
                 ],
                 2,
                 0,
@@ -1355,12 +1357,12 @@ def test_account_cleanup_deletes_only_fully_verified_mini_agent_identities(
 
         @staticmethod
         def NetUserGetInfo(_server, name, _level):
-            assert name in {"MiniSbxOffline", "MiniSbxOnline"}
-            return {"priv": 0, "comment": "Mini-Agent sandbox account (managed)"}
+            assert name in {"PraxisSbxOffline", "PraxisSbxOnline"}
+            return {"priv": 0, "comment": "Praxis sandbox account (managed)"}
 
         @staticmethod
         def NetUserGetLocalGroups(_server, _name, _level):
-            return ["MiniAgentSandboxUsers"]
+            return ["PraxisSandboxUsers"]
 
         @staticmethod
         def NetUserDel(_server, name):
@@ -1371,9 +1373,9 @@ def test_account_cleanup_deletes_only_fully_verified_mini_agent_identities(
             deleted.append(name)
 
     sid_by_name = {
-        "MiniAgentSandboxUsers": "group-sid",
-        "MiniSbxOffline": offline_sid,
-        "MiniSbxOnline": online_sid,
+        "PraxisSandboxUsers": "group-sid",
+        "PraxisSbxOffline": offline_sid,
+        "PraxisSbxOnline": online_sid,
     }
 
     class MissingAccountRightsError(RuntimeError):
@@ -1396,10 +1398,10 @@ def test_account_cleanup_deletes_only_fully_verified_mini_agent_identities(
         "backend.sandbox.broker_service.credentials.DpapiCredentialStore.load",
         lambda _self: BrokerCredentialPackage(
             "current",
-            "MiniSbxOffline",
+            "PraxisSbxOffline",
             offline_sid,
             "offline",
-            "MiniSbxOnline",
+            "PraxisSbxOnline",
             online_sid,
             "online",
         ),
@@ -1407,7 +1409,7 @@ def test_account_cleanup_deletes_only_fully_verified_mini_agent_identities(
 
     _remove_owned_accounts(tmp_path)
 
-    assert deleted == ["MiniSbxOffline", "MiniSbxOnline", "MiniAgentSandboxUsers"]
+    assert deleted == ["PraxisSbxOffline", "PraxisSbxOnline", "PraxisSandboxUsers"]
 
 
 @pytest.mark.parametrize("stop_returncode", [0, 1])
@@ -1416,14 +1418,14 @@ def test_repair_waits_for_stopped_after_any_stop_result(stop_returncode: int) ->
     states = iter([3, 1])
 
     _stop_service_for_repair(
-        "MiniAgentSandboxBroker",
+        "PraxisSandboxBroker",
         runner=lambda command, **kwargs: calls.append(list(command)) or _Result(stop_returncode),
         state_reader=lambda service_name: next(states),
         clock=lambda: 0.0,
         sleeper=lambda seconds: None,
     )
 
-    assert calls == [["sc.exe", "stop", "MiniAgentSandboxBroker"]]
+    assert calls == [["sc.exe", "stop", "PraxisSandboxBroker"]]
 
 
 def test_repair_stop_timeout_has_dedicated_exit_code() -> None:
@@ -1431,7 +1433,7 @@ def test_repair_stop_timeout_has_dedicated_exit_code() -> None:
 
     with pytest.raises(_TransactionFailure) as raised:
         _stop_service_for_repair(
-            "MiniAgentSandboxBroker",
+            "PraxisSandboxBroker",
             runner=lambda command, **kwargs: _Result(),
             state_reader=lambda service_name: 4,
             clock=lambda: next(ticks),
@@ -1456,9 +1458,9 @@ def test_repair_state_query_failure_aborts_before_config(monkeypatch: pytest.Mon
         run_transaction(
             {
                 "operation": "repair",
-                "service_name": "MiniAgentSandboxBroker",
+                "service_name": "PraxisSandboxBroker",
                 "service_command": ["python.exe", "-m", "backend.sandbox.service_main", "run"],
-                "service_class": "sandbox_service_bootstrap.MiniAgentSandboxBrokerService",
+                "service_class": "sandbox_service_bootstrap.PraxisSandboxBrokerService",
                 "backend_sid": None,
                 "backend_sid_path": None,
                 "program_data_path": None,
@@ -1468,7 +1470,7 @@ def test_repair_state_query_failure_aborts_before_config(monkeypatch: pytest.Mon
         )
 
     assert raised.value.exit_code == EXIT_SERVICE_STOP_FAILED
-    assert calls == [["sc.exe", "stop", "MiniAgentSandboxBroker"]]
+    assert calls == [["sc.exe", "stop", "PraxisSandboxBroker"]]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows icacls test")
@@ -1488,17 +1490,17 @@ def test_numeric_sid_is_prefixed_for_icacls(monkeypatch: pytest.MonkeyPatch) -> 
         lambda command, **kwargs: calls.append(list(command)) or Result(),
     )
     _secure_program_data(
-        Path("C:/ProgramData/Mini-Agent/SandboxBroker"),
-        Path("C:/ProgramData/Mini-Agent/SandboxBroker/backend.sid"),
-        "MiniAgentSandboxBroker",
+        Path("C:/ProgramData/Praxis/SandboxBroker"),
+        Path("C:/ProgramData/Praxis/SandboxBroker/backend.sid"),
+        "PraxisSandboxBroker",
     )
 
     assert "*S-1-5-21-1-2-3-500:(OI)(CI)(M)" in calls[0]
-    assert f"*{_service_sid('MiniAgentSandboxBroker')}:(R)" in calls[1]
+    assert f"*{_service_sid('PraxisSandboxBroker')}:(R)" in calls[1]
 
 
 def test_service_sid_matches_windows_virtual_account() -> None:
-    assert _service_sid("MiniAgentSandboxBroker") == ("S-1-5-80-2596524395-1801458667-1993906640-1419760394-1149293312")
+    assert _service_sid("PraxisSandboxBroker") == ("S-1-5-80-2016461151-3834670916-2240187935-1380477427-2977801491")
 
 
 def test_persist_sid_atomically_replaces_an_existing_file(tmp_path: Path) -> None:
@@ -1523,11 +1525,11 @@ def test_invalid_sid_is_rejected_before_replacing_existing_file(tmp_path: Path) 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows source ACL test")
 def test_source_acl_is_confined_to_rx_on_source_tree() -> None:
-    source = Path("C:/workspace/mini_agent/backend/src")
-    boundary = Path("C:/workspace/mini_agent")
+    source = Path("C:/workspace/praxis/backend/src")
+    boundary = Path("C:/workspace/praxis")
 
-    grants = _source_acl_grants(source, boundary, "MiniAgentSandboxBroker")
-    service_sid = _service_sid("MiniAgentSandboxBroker")
+    grants = _source_acl_grants(source, boundary, "PraxisSandboxBroker")
+    service_sid = _service_sid("PraxisSandboxBroker")
 
     assert [grant.path for grant in grants] == [boundary, boundary / "backend", source]
     assert [grant.rights for grant in grants] == ["X", "X", "RX"]
@@ -1539,16 +1541,16 @@ def test_source_acl_is_confined_to_rx_on_source_tree() -> None:
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows runtime ACL test")
 def test_runtime_acl_requires_the_service_executable_and_grants_rx() -> None:
-    runtime = Path("C:/workspace/mini_agent/.venv")
+    runtime = Path("C:/workspace/praxis/.venv")
     base_runtime = Path("C:/python/cpython-3.12")
     executable = runtime / "Scripts" / "python.exe"
 
-    grants = _runtime_acl_grants((runtime, base_runtime, runtime), executable, "MiniAgentSandboxBroker")
+    grants = _runtime_acl_grants((runtime, base_runtime, runtime), executable, "PraxisSandboxBroker")
 
     assert [grant.path for grant in grants] == [runtime, base_runtime]
     assert all(grant.rights == "RX" and grant.inherit and grant.existing_children for grant in grants)
     with pytest.raises(ValueError):
-        _runtime_acl_grants((base_runtime,), executable, "MiniAgentSandboxBroker")
+        _runtime_acl_grants((base_runtime,), executable, "PraxisSandboxBroker")
 
 
 def test_acl_tree_applies_rx_to_existing_children_and_future_descendants(
@@ -1723,7 +1725,7 @@ def test_reinstall_acl_cleanup_visits_existing_source_and_runtime_children(
         boundary,
         (runtime,),
         executable,
-        "MiniAgentSandboxBroker",
+        "PraxisSandboxBroker",
     )
 
     assert source_file in removed
@@ -1739,7 +1741,7 @@ def test_helper_transaction_orders_sid_service_acl_source_and_start(
     tmp_path: Path,
 ) -> None:
     calls: list[list[str]] = []
-    program_data = tmp_path / "Mini-Agent" / "SandboxBroker"
+    program_data = tmp_path / "Praxis" / "SandboxBroker"
     sid_path = program_data / "backend.sid"
     source = tmp_path / "repo" / "backend" / "src"
 
@@ -1757,10 +1759,10 @@ def test_helper_transaction_orders_sid_service_acl_source_and_start(
     )
     package = BrokerCredentialPackage(
         "generation-test",
-        "MiniSbxOffline",
+        "PraxisSbxOffline",
         "S-1-5-21-1-2-3-1001",
         "offline-password",
-        "MiniSbxOnline",
+        "PraxisSbxOnline",
         "S-1-5-21-1-2-3-1002",
         "online-password",
     )
@@ -1773,9 +1775,9 @@ def test_helper_transaction_orders_sid_service_acl_source_and_start(
         run_transaction(
             {
                 "operation": "repair",
-                "service_name": "MiniAgentSandboxBroker",
+                "service_name": "PraxisSandboxBroker",
                 "service_command": ["python.exe", "-m", "backend.sandbox.service_main", "run"],
-                "service_class": rf"{source}\sandbox_service_bootstrap.MiniAgentSandboxBrokerService",
+                "service_class": rf"{source}\sandbox_service_bootstrap.PraxisSandboxBrokerService",
                 "backend_sid": "S-1-5-21-1-2-3-500",
                 "backend_sid_path": str(sid_path),
                 "program_data_path": str(program_data),
@@ -1787,27 +1789,27 @@ def test_helper_transaction_orders_sid_service_acl_source_and_start(
     )
 
     assert calls[0][:2] == ["icacls.exe", str(sid_path)]
-    service_sid = f"*{_service_sid('MiniAgentSandboxBroker')}"
+    service_sid = f"*{_service_sid('PraxisSandboxBroker')}"
     assert f"{service_sid}:(R)" not in calls[0]
-    assert calls[1] == ["sc.exe", "stop", "MiniAgentSandboxBroker"]
+    assert calls[1] == ["sc.exe", "stop", "PraxisSandboxBroker"]
     assert calls[2][:2] == ["sc.exe", "config"]
     assert calls[3] == [
         "reg.exe",
         "add",
-        r"HKLM\SYSTEM\CurrentControlSet\Services\MiniAgentSandboxBroker\PythonClass",
+        r"HKLM\SYSTEM\CurrentControlSet\Services\PraxisSandboxBroker\PythonClass",
         "/ve",
         "/t",
         "REG_SZ",
         "/d",
-        rf"{source}\sandbox_service_bootstrap.MiniAgentSandboxBrokerService",
+        rf"{source}\sandbox_service_bootstrap.PraxisSandboxBrokerService",
         "/f",
     ]
-    assert calls[4] == ["sc.exe", "sidtype", "MiniAgentSandboxBroker", "unrestricted"]
+    assert calls[4] == ["sc.exe", "sidtype", "PraxisSandboxBroker", "unrestricted"]
     assert calls[5][:2] == ["icacls.exe", str(program_data)]
     assert calls[6][:2] == ["icacls.exe", str(sid_path)]
     assert f"{service_sid}:(R)" in calls[6]
-    assert calls[-4] == ["win32-acl-batch", str(source), str(tmp_path / "repo"), "MiniAgentSandboxBroker"]
+    assert calls[-4] == ["win32-acl-batch", str(source), str(tmp_path / "repo"), "PraxisSandboxBroker"]
     assert calls[-3] == ["takeown.exe", "/F", str(program_data / "ready.json"), "/A"]
     assert calls[-2][:2] == ["icacls.exe", str(program_data / "ready.json")]
     assert "*S-1-5-21-1-2-3-500:(R)" in calls[-2]
-    assert calls[-1] == ["sc.exe", "start", "MiniAgentSandboxBroker"]
+    assert calls[-1] == ["sc.exe", "start", "PraxisSandboxBroker"]

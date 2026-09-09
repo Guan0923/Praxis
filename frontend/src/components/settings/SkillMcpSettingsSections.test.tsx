@@ -30,7 +30,7 @@ const skillSettings = {
     description: "Demo workflow.",
     metadata: { owner: "local" },
     allowed_tools: ["read_file"],
-    root: "C:/Users/demo/.mini_agent/skills/demo-folder",
+    root: "C:/Users/demo/.praxis/skills/demo-folder",
     enabled: true,
   }],
 };

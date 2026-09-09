@@ -1,1 +1,1 @@
-"""Benchmark harness for the mini-agent runtime."""
+"""Benchmark harness for the praxis runtime."""

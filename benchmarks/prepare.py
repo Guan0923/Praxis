@@ -87,9 +87,7 @@ def prepare_task(task, cache: Path, cancelled=None) -> dict:
             container.exec(
                 'printf \'Acquire::Retries "0";\\nAcquire::http::Timeout "2";\\nAcquire::https::Timeout "2";\\n\' > /etc/apt/apt.conf.d/99benchmark-timeouts'
             )
-            _, image = container.docker(
-                "commit", container.name, "mini-agent-benchmark:prepared-" + task.name, timeout=120
-            )
+            _, image = container.docker("commit", container.name, "praxis-benchmark:prepared-" + task.name, timeout=120)
             report["image_id"] = image.strip()
         finally:
             container.close()

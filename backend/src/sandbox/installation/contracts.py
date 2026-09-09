@@ -19,7 +19,7 @@ EXIT_CREDENTIAL_FAILED = 9
 EXIT_RIGHTS_FAILED = 10
 EXIT_NETWORK_FAILED = 11
 
-BROKER_SERVICE_CLASS = "sandbox_service_bootstrap.MiniAgentSandboxBrokerService"
+BROKER_SERVICE_CLASS = "sandbox_service_bootstrap.PraxisSandboxBrokerService"
 
 
 class TransactionFailure(RuntimeError):
@@ -94,7 +94,7 @@ def validate_payload(
     if data_path is not None and not data_path.is_absolute():
         raise ValueError("Broker ProgramData path must be absolute")
     if data_path is not None and (
-        data_path.name.casefold() != "sandboxbroker" or data_path.parent.name.casefold() != "mini-agent"
+        data_path.name.casefold() != "sandboxbroker" or data_path.parent.name.casefold() != "praxis"
     ):
         raise ValueError("Broker ProgramData path is outside the managed directory")
     if code_path is not None and not code_path.is_absolute():

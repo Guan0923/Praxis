@@ -27,7 +27,7 @@ class WorkspaceFiles(FileReadMixin, FileWriteMixin, WorkspacePathMixin, FileIOMi
     _TEXT_CHUNK_CHARS = 8_192
     _IGNORED_DIRECTORIES = {
         ".git",
-        ".mini_agent",
+        ".praxis",
         ".mypy_cache",
         ".pytest_cache",
         ".ruff_cache",

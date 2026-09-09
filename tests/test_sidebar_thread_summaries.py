@@ -51,7 +51,7 @@ def _summary(client: TestClient, thread_id: str) -> dict[str, object]:
 
 
 def test_sidebar_summary_tracks_durable_messages_without_opening_the_conversation(tmp_path: Path) -> None:
-    state = WebAppState(tmp_path / ".mini_agent", message_queue=MemoryMessageQueue())
+    state = WebAppState(tmp_path / ".praxis", message_queue=MemoryMessageQueue())
     with TestClient(create_app(state)) as client:
         created = client.post("/api/sidebar-threads", json={}).json()
         assert created["message_count"] == 0
@@ -89,7 +89,7 @@ def test_sidebar_summary_tracks_durable_messages_without_opening_the_conversatio
 
 
 def test_sidebar_summary_follows_each_thread_head_and_excludes_sibling_branches(tmp_path: Path) -> None:
-    state = WebAppState(tmp_path / ".mini_agent", message_queue=MemoryMessageQueue())
+    state = WebAppState(tmp_path / ".praxis", message_queue=MemoryMessageQueue())
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={"title": "source"}).json()
         store = _store(state)
@@ -162,7 +162,7 @@ def test_sidebar_summary_follows_each_thread_head_and_excludes_sibling_branches(
 
 
 def test_sidebar_summary_crud_responses_keep_the_same_contract(tmp_path: Path) -> None:
-    state = WebAppState(tmp_path / ".mini_agent", message_queue=MemoryMessageQueue())
+    state = WebAppState(tmp_path / ".praxis", message_queue=MemoryMessageQueue())
     with TestClient(create_app(state)) as client:
         created = client.post("/api/sidebar-threads", json={}).json()
         expected = {"message_count", "conversation_updated_at"}
@@ -195,7 +195,7 @@ def test_sidebar_summary_crud_responses_keep_the_same_contract(tmp_path: Path) -
 def test_sidebar_refresh_keeps_one_snapshot_during_turn_creation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, has_previous_turn: bool
 ) -> None:
-    state = WebAppState(tmp_path / ".mini_agent", message_queue=MemoryMessageQueue())
+    state = WebAppState(tmp_path / ".praxis", message_queue=MemoryMessageQueue())
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
         session_id, thread_id = sidebar["session_id"], sidebar["thread_id"]
@@ -240,7 +240,7 @@ def test_sidebar_refresh_keeps_one_snapshot_during_turn_creation(
 
 
 def test_sidebar_summary_does_not_hide_a_broken_turn_reference(tmp_path: Path) -> None:
-    state = WebAppState(tmp_path / ".mini_agent", message_queue=MemoryMessageQueue())
+    state = WebAppState(tmp_path / ".praxis", message_queue=MemoryMessageQueue())
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
         store = _store(state)

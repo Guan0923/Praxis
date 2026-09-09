@@ -32,7 +32,7 @@ class RecordingClient:
 def test_composes_agent_prompt_from_instruction_shared_and_agent_templates() -> None:
     prompt = compose_system_prompt("agent")
 
-    assert prompt.count("# Mini-Agent") == 1
+    assert prompt.count("# Praxis") == 1
     assert prompt.count("# Working Rules") == 1
     assert prompt.count("# Agent Mode") == 1
     assert "# Plan Mode" not in prompt
@@ -42,7 +42,7 @@ def test_composes_agent_prompt_from_instruction_shared_and_agent_templates() -> 
 def test_composes_plan_prompt_without_agent_only_capabilities() -> None:
     prompt = compose_system_prompt("plan")
 
-    assert prompt.count("# Mini-Agent") == 1
+    assert prompt.count("# Praxis") == 1
     assert prompt.count("# Working Rules") == 1
     assert prompt.count("# Plan Mode") == 1
     assert "# Agent Mode" not in prompt
@@ -89,7 +89,7 @@ def test_missing_prompt_resource_has_clear_error(monkeypatch) -> None:
 def test_decision_prompt_appends_active_skills_after_composed_base() -> None:
     client = RecordingClient()
     planner = LLMPlanner(client, [], [])
-    skill = SkillSnapshot("demo", "Demo", "Follow the demo.", ".mini_agent/skills/demo", "abc")
+    skill = SkillSnapshot("demo", "Demo", "Follow the demo.", ".praxis/skills/demo", "abc")
     runtime = AgentRunner(planner, ToolRegistry()).new_runtime(
         task="Implement the change",
         active_skills=[skill],

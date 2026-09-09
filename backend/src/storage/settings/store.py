@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS provider_settings (
 
 
 class LocalSettingsStore:
-    """Own settings for the one local Mini-Agent installation."""
+    """Own settings for the one local Praxis installation."""
 
     def __init__(self, path: Path, config_path: Path) -> None:
         self.path = Path(path)

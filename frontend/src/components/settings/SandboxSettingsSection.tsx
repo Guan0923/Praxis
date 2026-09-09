@@ -111,7 +111,7 @@ export function SandboxSettingsSection({ state }: SectionProps) {
         <AutoRecoveryStatus health={state.sandboxHealth} />
         <Popconfirm
           title="卸载并重装 Sandbox Broker？"
-          description="需要 UAC 管理员授权；将删除 Mini-Agent 沙箱安装数据。仅在没有运行或等待启动的沙箱命令时执行。"
+          description="需要 UAC 管理员授权；将删除 Praxis 沙箱安装数据。仅在没有运行或等待启动的沙箱命令时执行。"
           okText="卸载并重装"
           cancelText="取消"
           okType="danger"

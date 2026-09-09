@@ -102,7 +102,7 @@ class SandboxLauncher:
         self.environment = dict(os.environ if environment is None else environment)
         self.admission = admission
         self.acl_manager = acl_manager or WindowsAclManager()
-        default_lease_path = Path(tempfile.gettempdir()) / "mini-agent-sandbox" / "backend-leases-v1.json"
+        default_lease_path = Path(tempfile.gettempdir()) / "praxis-sandbox" / "backend-leases-v1.json"
         self.lease_store = CommandLeaseStore(Path(lease_store_path or default_lease_path), self.acl_manager)
         self.proxy_factory = proxy_factory or RunCommandProxy.shared
         self.maintenance_gate = maintenance_gate or SandboxMaintenanceGate()

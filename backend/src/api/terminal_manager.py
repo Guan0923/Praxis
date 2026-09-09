@@ -86,7 +86,7 @@ class TerminalSession:
 class TerminalManager:
     def __init__(self, message_queue: object) -> None:
         client = getattr(message_queue, "client", None)
-        key_prefix = getattr(message_queue, "key_prefix", "mini-agent:v1")
+        key_prefix = getattr(message_queue, "key_prefix", "praxis:v1")
         self.output = RedisTerminalOutputStream(client, key_prefix=key_prefix) if client is not None else None
         self._sessions: dict[str, TerminalSession] = {}
         self._lock = RLock()

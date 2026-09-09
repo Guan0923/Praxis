@@ -284,7 +284,7 @@ def _configure_static_network(offline_sid: str, online_sid: str, proxy_port: int
     # active.  This avoids both an enforcement gap and stale proxy-port rules.
     script = """
 $ErrorActionPreference='Stop'
-Get-NetFirewallRule -Name 'MiniAgentSandbox-*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+Get-NetFirewallRule -Name 'PraxisSandbox-*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 """
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     _run(
@@ -353,7 +353,7 @@ def _remove_program_data(path: Path) -> None:
     resolved = path.resolve(strict=False)
     if (
         resolved.name.casefold() != "sandboxbroker"
-        or resolved.parent.name.casefold() != "mini-agent"
+        or resolved.parent.name.casefold() != "praxis"
         or len(resolved.parts) < 3
     ):
         raise ValueError("Broker ProgramData path is outside the managed directory")

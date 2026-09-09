@@ -53,7 +53,7 @@ class Tool:
 
     @property
     def spec(self) -> ToolSpec:
-        options = {"mini_agent": {"trace_origin": dict(self.trace_origin)}} if self.trace_origin else {}
+        options = {"praxis": {"trace_origin": dict(self.trace_origin)}} if self.trace_origin else {}
         return ToolSpec(self.name, self.description, self.parameters, options)
 
 

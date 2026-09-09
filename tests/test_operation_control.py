@@ -20,7 +20,7 @@ class _Socket:
 
 
 def test_browser_write_requires_operation_protocol_but_local_cli_does_not(tmp_path: Path) -> None:
-    state = WebAppState(tmp_path / ".mini_agent")
+    state = WebAppState(tmp_path / ".praxis")
     with TestClient(create_app(state)) as client:
         rejected = client.post(
             "/api/sidebar-threads",
@@ -74,7 +74,7 @@ def test_window_owner_reconnect_generation_and_waiter_promotion() -> None:
 
 
 def test_operation_seq_ack_rejects_duplicate_without_repeating_write(tmp_path: Path) -> None:
-    state = WebAppState(tmp_path / ".mini_agent")
+    state = WebAppState(tmp_path / ".praxis")
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
         session_id = sidebar["session_id"]
@@ -90,12 +90,12 @@ def test_operation_seq_ack_rejects_duplicate_without_repeating_write(tmp_path: P
             websocket.send_json({"type": "group.open", "group": group, "request_id": "group"})
             opened = websocket.receive_json()
             headers = {
-                "X-Mini-Agent-Window": "window-one",
-                "X-Mini-Agent-Window-Generation": str(ready["generation"]),
-                "X-Mini-Agent-Operation-Group": group,
-                "X-Mini-Agent-Session": session_id,
-                "X-Mini-Agent-Seq": str(opened["seq"]),
-                "X-Mini-Agent-Ack": str(opened["ack"]),
+                "X-Praxis-Window": "window-one",
+                "X-Praxis-Window-Generation": str(ready["generation"]),
+                "X-Praxis-Operation-Group": group,
+                "X-Praxis-Session": session_id,
+                "X-Praxis-Seq": str(opened["seq"]),
+                "X-Praxis-Ack": str(opened["ack"]),
             }
             body = {"id": "5c1a7d20-2ff3-45f6-bf59-5dbb13dbf58f", "content": "only once", "references": []}
             first = client.post(f"/api/sidebar-threads/{thread_id}/queued-messages", json=body, headers=headers)
@@ -108,7 +108,7 @@ def test_operation_seq_ack_rejects_duplicate_without_repeating_write(tmp_path: P
 
 
 def test_operation_body_reaches_endpoint_and_old_generation_is_rejected(tmp_path: Path) -> None:
-    state = WebAppState(tmp_path / ".mini_agent")
+    state = WebAppState(tmp_path / ".praxis")
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
         session_id = sidebar["session_id"]
@@ -123,12 +123,12 @@ def test_operation_body_reaches_endpoint_and_old_generation_is_rejected(tmp_path
             websocket.send_json({"type": "group.open", "group": group, "request_id": "group"})
             opened = websocket.receive_json()
             headers = {
-                "X-Mini-Agent-Window": "window-one",
-                "X-Mini-Agent-Window-Generation": str(ready["generation"]),
-                "X-Mini-Agent-Operation-Group": group,
-                "X-Mini-Agent-Session": session_id,
-                "X-Mini-Agent-Seq": str(opened["seq"]),
-                "X-Mini-Agent-Ack": str(opened["ack"]),
+                "X-Praxis-Window": "window-one",
+                "X-Praxis-Window-Generation": str(ready["generation"]),
+                "X-Praxis-Operation-Group": group,
+                "X-Praxis-Session": session_id,
+                "X-Praxis-Seq": str(opened["seq"]),
+                "X-Praxis-Ack": str(opened["ack"]),
             }
             decision_id = "decision-body-replay"
             pending = registry.register(decision_id)
@@ -145,8 +145,8 @@ def test_operation_body_reaches_endpoint_and_old_generation_is_rejected(tmp_path
 
             stale_headers = {
                 **headers,
-                "X-Mini-Agent-Seq": response.headers["X-Mini-Agent-Ack"],
-                "X-Mini-Agent-Ack": str(int(response.headers["X-Mini-Agent-Seq"]) + 1),
+                "X-Praxis-Seq": response.headers["X-Praxis-Ack"],
+                "X-Praxis-Ack": str(int(response.headers["X-Praxis-Seq"]) + 1),
             }
             token = ready["token"]
             with client.websocket_connect(

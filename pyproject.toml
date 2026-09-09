@@ -3,7 +3,7 @@
 members = ["backend"]
 
 [tool.uv.sources]
-mini-agent-backend = { workspace = true }
+praxis-backend = { workspace = true }
 
 [dependency-groups]
 dev = [

@@ -188,14 +188,14 @@
 }
 
 .auth-form > div {
-  --mini-agent-form-item-margin-bottom: 16px !important;
-  --mini-agent-form-label-height: auto !important;
-  --mini-agent-form-vertical-label-padding: 0 0 4px !important;
+  --praxis-form-item-margin-bottom: 16px !important;
+  --praxis-form-label-height: auto !important;
+  --praxis-form-vertical-label-padding: 0 0 4px !important;
 }
 .auth-form .code-row > div {
-  --mini-agent-form-item-margin-bottom: 16px !important;
-  --mini-agent-form-label-height: auto !important;
-  --mini-agent-form-vertical-label-padding: 0 0 4px !important;
+  --praxis-form-item-margin-bottom: 16px !important;
+  --praxis-form-label-height: auto !important;
+  --praxis-form-vertical-label-padding: 0 0 4px !important;
 }
 .auth-form .code-row .code-field {
   margin-bottom: 0;

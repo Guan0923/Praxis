@@ -1,4 +1,4 @@
-"""The composition root for a local-first Mini-Agent client."""
+"""The composition root for a local-first Praxis client."""
 
 from __future__ import annotations
 

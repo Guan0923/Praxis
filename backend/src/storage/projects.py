@@ -68,7 +68,7 @@ class Project:
 
 
 class ProjectStore:
-    """Thread-safe project index for the local Mini-Agent installation."""
+    """Thread-safe project index for the local Praxis installation."""
 
     def __init__(self, path: Path) -> None:
         path = Path(path)

@@ -13,7 +13,7 @@ from backend.configuration import ClientPaths, ConfigurationError, atomic_write_
 
 from .config import McpServerConfig, read_server_configs
 
-KEYRING_SERVICE = "mini-agent-mcp"
+KEYRING_SERVICE = "praxis-mcp"
 _MANAGED_REFERENCE_PREFIX = f"keyring://{KEYRING_SERVICE}/"
 
 

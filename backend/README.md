@@ -1,6 +1,6 @@
-# Mini-Agent Backend
+# Praxis Backend
 
-`mini-agent-backend` 是 Mini-Agent 的 Python 3.11+ 本地服务包，提供 loopback FastAPI、Agent Runtime、模型 Provider、工具、Skills、MCP、Sandbox、Redis mailbox 以及 TOML/SQLite 持久化。
+`praxis-backend` 是 Praxis 的 Python 3.11+ 本地服务包，提供 loopback FastAPI、Agent Runtime、模型 Provider、工具、Skills、MCP、Sandbox、Redis mailbox 以及 TOML/SQLite 持久化。
 
 它面向单机单用户运行，不包含账户、登录、Cloud、同步或 PostgreSQL 服务。
 
@@ -21,7 +21,7 @@ uv run python -m backend.api
 - `GET /api/ready`：本地设置、项目数据库和 Redis 就绪检查；Redis 不可用时返回 503
 - `/docs`：FastAPI OpenAPI 界面
 
-如果 `frontend/dist` 存在，backend 会在 `/` 托管该构建；可通过 `MINI_AGENT_FRONTEND_DIST` 指定其他构建目录。
+如果 `frontend/dist` 存在，backend 会在 `/` 托管该构建；可通过 `PRAXIS_FRONTEND_DIST` 指定其他构建目录。
 
 ## 包结构
 
@@ -59,14 +59,14 @@ src/
 | `/api/sandbox` | Sandbox 状态、安装与修复 |
 | `/benchmark` | 独立挂载的本地 benchmark 子应用 |
 
-浏览器非只读请求会校验 `Origin`。默认只允许配置的 loopback 来源；`MINI_AGENT_ALLOWED_ORIGINS` 接受逗号分隔的精确 Origin。无 `Origin` 的本地 CLI 请求允许执行，CORS 不启用 credentials。
+浏览器非只读请求会校验 `Origin`。默认只允许配置的 loopback 来源；`PRAXIS_ALLOWED_ORIGINS` 接受逗号分隔的精确 Origin。无 `Origin` 的本地 CLI 请求允许执行，CORS 不启用 credentials。
 
 ## 配置与持久化
 
-默认数据根目录为 `~/.mini_agent`：
+默认数据根目录为 `~/.praxis`：
 
 ```text
-~/.mini_agent/
+~/.praxis/
 ├─ mcp/
 ├─ plugins/
 ├─ runtime/
@@ -79,11 +79,11 @@ src/
 
 `config.toml` 只保存非敏感配置。Provider API Key 使用 OS credential vault 中的安装级密钥加密后写入 `runtime/state.db`。不要把密钥、Cookie、认证头或完整环境写入日志和测试输出。
 
-Redis 连接由 `MINI_AGENT_REDIS_URL` 指定，默认 `redis://127.0.0.1:6379/0`，不进入 `config.toml`。Redis 保存明文待发送草稿、Turn Stream 和短期 delivery receipt，因此 Compose 端口只能绑定 loopback。Redis 中断不回退：running Turn 在安全边界失败，未 ack delivery 在恢复 reconciliation 时回退 pending。
+Redis 连接由 `PRAXIS_REDIS_URL` 指定，默认 `redis://127.0.0.1:6379/0`，不进入 `config.toml`。Redis 保存明文待发送草稿、Turn Stream 和短期 delivery receipt，因此 Compose 端口只能绑定 loopback。Redis 中断不回退：running Turn 在安全边界失败，未 ack delivery 在恢复 reconciliation 时回退 pending。
 
 ## MCP 客户端
 
-Mini-Agent 只作为 MCP 客户端使用外部工具、资源与提示词，不提供 MCP 服务端命令。在设置页选择本地命令或 Streamable HTTP；SDK 自动优先使用 `2026-07-28` 并兼容旧版初始化协议。
+Praxis 只作为 MCP 客户端使用外部工具、资源与提示词，不提供 MCP 服务端命令。在设置页选择本地命令或 Streamable HTTP；SDK 自动优先使用 `2026-07-28` 并兼容旧版初始化协议。
 
 HTTP 请求头中的 Token 和 API Key 存入 OS 凭据库，配置只保存引用。HTTP 可明文传输内容；HTTPS 校验证书，连接不自动跟随重定向。不提供 OAuth 或旧 SSE 连接。
 

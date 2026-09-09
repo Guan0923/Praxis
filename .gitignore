@@ -76,11 +76,11 @@ frontend/.review-*.png
 logs/
 webapp-data/
 backend/webapp-data/
-/.mini_agent-cache/
-/.mini_agent/*
-!/.mini_agent/skills/
-!/.mini_agent/skills/**
-/.mini_agent-local/
+/.praxis-cache/
+/.praxis/*
+!/.praxis/skills/
+!/.praxis/skills/**
+/.praxis-local/
 
 # Backend, frontend and benchmark run artifacts
 /backend_run*.log

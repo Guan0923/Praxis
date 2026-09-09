@@ -175,7 +175,7 @@ def test_mcp_crud_persists_redacts_and_manages_keyring(
         assert fake.values[(KEYRING_SERVICE, "demo.API_TOKEN")] == "first-secret"
         raw = state.paths.mcp_file.read_text(encoding="utf-8")
         assert "first-secret" not in raw
-        assert 'API_TOKEN = "keyring://mini-agent-mcp/demo.API_TOKEN"' in raw
+        assert 'API_TOKEN = "keyring://praxis-mcp/demo.API_TOKEN"' in raw
 
         cannot_rename = {**_server_payload(), "name": "renamed", "secrets": {}}
         assert client.put("/api/settings/mcp/servers/demo", json=cannot_rename).status_code == 422

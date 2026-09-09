@@ -1,6 +1,6 @@
-# Mini-Agent Web
+# Praxis Web
 
-`mini-agent-web` 是 Mini-Agent 的 React 18、Vite 5、TypeScript 本地客户端。它只通过 HTTP/SSE 调用本机 backend，不直接访问 Python 实现或本地数据库。
+`praxis-web` 是 Praxis 的 React 18、Vite 5、TypeScript 本地客户端。它只通过 HTTP/SSE 调用本机 backend，不直接访问 Python 实现或本地数据库。
 
 应用包含 Chat、Turn 运行状态、项目与对话管理、本地设置、文件引用和 Benchmark 页面；访问 `/` 直接进入 Chat，不包含登录、注册、设备授权或云同步页面。
 
@@ -23,7 +23,7 @@ npm ci
 npm run dev
 ```
 
-打开 <http://127.0.0.1:5173>。Vite 默认把 `/api` 和 `/benchmark` 代理到 <http://127.0.0.1:8000>；需要其他本地 backend 时设置 `MINI_AGENT_BACKEND_URL`。
+打开 <http://127.0.0.1:5173>。Vite 默认把 `/api` 和 `/benchmark` 代理到 <http://127.0.0.1:8000>；需要其他本地 backend 时设置 `PRAXIS_BACKEND_URL`。
 
 ## 可用脚本
 
@@ -66,7 +66,7 @@ src/
 - 前端不发送登录 Cookie 或 Bearer 凭据。
 - 带 `Origin` 的写请求必须来自 backend 配置的 loopback 来源。
 - 开发默认允许 `http://localhost:5173` 与 `http://127.0.0.1:5173`，CORS 不启用 credentials。
-- Provider API Key 不写入浏览器存储、不在响应中回显；backend 加密后保存到 `~/.mini_agent/runtime/state.db`。
+- Provider API Key 不写入浏览器存储、不在响应中回显；backend 加密后保存到 `~/.praxis/runtime/state.db`。
 - 待发送消息不写入 localStorage；前端通过 queued-message API 读取 Redis 权威状态，POST 成功后才清空 Composer。
 
 ## 验证
