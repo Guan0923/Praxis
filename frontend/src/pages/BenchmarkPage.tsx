@@ -11,8 +11,8 @@ import {
   DownloadOutlined,
   DeleteOutlined,
 } from "@ant-design/icons";
-import { getBenchmarkTrace, listTasks } from "../api";
-import type { BenchmarkResult, BenchmarkTaskRun, BenchmarkTraceEvent, TaskInfo } from "../types";
+import { benchmarkTraceDownloadUrl, listTasks } from "../api";
+import type { BenchmarkResult, BenchmarkTaskRun, TaskInfo } from "../types";
 import { isActive, useBenchmarkRuns } from "./benchmark/useBenchmarkRuns";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -55,27 +55,7 @@ function ResultCard({ result, runId, taskRun }: { result: BenchmarkResult; runId
   const passed = result.passed;
   const statusLabel = score == null ? "未评分" : passed === true ? "通过" : "未通过";
   const statusColor = score == null ? "default" : passed === true ? "success" : "error";
-  const [trace, setTrace] = useState<BenchmarkTraceEvent[] | null>(null);
-  const [traceOpen, setTraceOpen] = useState(false);
-  const [traceError, setTraceError] = useState<string | null>(null);
-  useEffect(() => {
-    if (!traceOpen || trace !== null) return;
-    const controller = new AbortController();
-    setTraceError(null);
-    getBenchmarkTrace(runId, taskRun.id, controller.signal)
-      .then((value) => { if (!controller.signal.aborted) setTrace(value); })
-      .catch((error) => { if (!controller.signal.aborted) setTraceError(String(error.message ?? error)); });
-    return () => controller.abort();
-  }, [traceOpen, trace, runId, taskRun.id]);
   const failurePhase = typeof result.failure_phase === "string" ? result.failure_phase : "";
-
-  function jsonText(value: unknown): string {
-    try {
-      return JSON.stringify(value ?? {}, null, 2);
-    } catch {
-      return String(value);
-    }
-  }
 
   return (
     <section className="result-card">
@@ -118,29 +98,18 @@ function ResultCard({ result, runId, taskRun }: { result: BenchmarkResult; runId
           items={[{ key: "answer", label: "最终答复", children: <pre>{String(result.final_answer)}</pre> }]}
         />
       ) : null}
-      <Collapse
-        className="benchmark-trace"
-        size="small"
-        onChange={(keys) => setTraceOpen(keys.includes("trace"))}
-        items={[{
-          key: "trace",
-          label: `完整 Trace（${taskRun.trace_count} 条事件）`,
-          children: traceError ? <Alert type="error" title={traceError} /> : trace === null ? <Spin /> : trace.length === 0 ? <Typography.Text type="secondary">没有可显示的运行事件。</Typography.Text> : (
-            <div className="benchmark-trace-list">
-              {trace.map((event, index) => (
-                <div className="benchmark-trace-event" key={`${event.timestamp}-${event.kind}-${index}`}>
-                  <div className="benchmark-trace-head">
-                    <Tag>{event.kind}</Tag>
-                    <Typography.Text type="secondary">{event.timestamp}</Typography.Text>
-                  </div>
-                  {event.message ? <pre className="benchmark-trace-message">{event.message}</pre> : null}
-                  <pre className="benchmark-trace-data">{jsonText(event.data)}</pre>
-                </div>
-              ))}
-            </div>
-          ),
-        }]}
-      />
+      {!isActive(taskRun.status) ? (
+        <Button
+          className="benchmark-trace-download"
+          icon={<DownloadOutlined />}
+          href={benchmarkTraceDownloadUrl(runId, taskRun.id)}
+          target="_blank"
+          rel="noopener noreferrer"
+          download
+        >
+          下载 Trace
+        </Button>
+      ) : null}
     </section>
   );
 }

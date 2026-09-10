@@ -5,6 +5,11 @@ export async function listTurns(sessionId: string): Promise<RuntimeTreeNode[]> {
   return requestJson(`/api/turns?session_id=${encodeURIComponent(sessionId)}`);
 }
 
+export function threadTraceDownloadUrl(sessionId: string, threadId: string): string {
+  const query = new URLSearchParams({ session_id: sessionId, thread_id: threadId });
+  return `/api/turns/trace/export?${query.toString()}`;
+}
+
 export async function getTurnTrace(
   turnId: string,
   dataIdx: number,

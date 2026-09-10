@@ -114,6 +114,28 @@ function clickTurnHeader(turnId: string): void {
 }
 
 describe("TracePage", () => {
+  it("downloads the entire thread independently of expanded turns and preview versions", async () => {
+    const older = turn("turn-older", "2026-09-09T00:00:00Z");
+    const latest = turn("turn-latest", "2026-09-10T00:00:00Z");
+    vi.mocked(getTurnTrace).mockImplementation(async (id, dataIdx) => response(id === older.id ? older : latest, dataIdx));
+    render(<AntApp><TracePage turns={[older, latest]} /></AntApp>);
+    await waitFor(() => expect(getTurnTrace).toHaveBeenCalledTimes(1));
+    const download = screen.getByRole("link", { name: /下载 Trace/ });
+    const url = "/api/turns/trace/export?session_id=session-a&thread_id=thread-a";
+    expect(download).toHaveAttribute("href", url);
+    expect(download).toHaveAttribute("download");
+    fireEvent.click(screen.getByLabelText(`${latest.id} 上一个 data 版本`));
+    await waitFor(() => expect(getTurnTrace).toHaveBeenCalledWith(latest.id, 0, expect.any(AbortSignal), undefined));
+    expect(download).toHaveAttribute("href", url);
+    clickTurnHeader(latest.id);
+    expect(screen.getAllByRole("link", { name: /下载 Trace/ })).toHaveLength(1);
+  });
+
+  it("does not offer a download before the thread has any turns", () => {
+    render(<AntApp><TracePage turns={[]} /></AntApp>);
+    expect(screen.queryByRole("link", { name: /下载 Trace/ })).not.toBeInTheDocument();
+  });
+
   it("renders completed parallel tools as one outer group with call-ID children", async () => {
     const latest = turn("turn-parallel", "2026-09-05T00:00:00Z");
     const group = "parallel:call-1";

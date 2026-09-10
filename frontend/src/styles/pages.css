@@ -194,9 +194,7 @@
   min-height: 32px;
 }
 
-.benchmark-task-prompt,
-.benchmark-trace-message,
-.benchmark-trace-data {
+.benchmark-task-prompt {
   max-height: 260px;
   margin: 8px 0 0;
   overflow: auto;
@@ -217,30 +215,8 @@
   margin-top: 10px;
 }
 
-.benchmark-trace {
+.benchmark-trace-download {
   margin-top: 10px;
-}
-
-.benchmark-trace-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-height: 560px;
-  overflow: auto;
-}
-
-.benchmark-trace-event {
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-}
-
-.benchmark-trace-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 .muted {

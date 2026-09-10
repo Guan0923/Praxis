@@ -10,11 +10,13 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from backend.domain import safe_error_message
 
 from ..error_handlers import install_error_handlers
+from ..jsonl import jsonl_download
 from ..state import WebAppState
 
 if TYPE_CHECKING:
@@ -168,6 +170,11 @@ def get_trace(run_id: str, task_id: str, request: Request) -> list[dict]:
         return _service(request).trace(run_id, task_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="运行记录不存在或已失效。") from None
+
+
+@router.get("/runs/{run_id}/tasks/{task_id}/trace/export")
+def export_trace(run_id: str, task_id: str, request: Request) -> StreamingResponse:
+    return jsonl_download(get_trace(run_id, task_id, request), f"benchmark-{run_id}-{task_id}-trace.jsonl")
 
 
 @router.post("/runs/{run_id}/cancel", status_code=202)
