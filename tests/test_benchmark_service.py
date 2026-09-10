@@ -30,7 +30,16 @@ def result_for(task, *, passed=True):
         RunMetrics(1, 1, 1, 0, 0, 0, 0, []),
         [],
         passed=passed,
-        trace=[{"kind": "run_finished", "timestamp": "test", "message": "done", "data": {}}],
+        trace=[
+            {
+                "type": "context",
+                "session_id": "session-test",
+                "thread_id": "thread-test",
+                "turn_id": "turn-test",
+                "data_idx": 0,
+                "data": None,
+            }
+        ],
     )
 
 

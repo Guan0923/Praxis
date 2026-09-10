@@ -1,3 +1,5 @@
+import type { TurnTraceContext, TurnTraceItem } from "./runtime";
+
 export interface TaskInfo {
   name: string;
   capability: string;
@@ -22,12 +24,15 @@ export interface TaskInfo {
   planner_modes: string[];
 }
 
-export interface BenchmarkTraceEvent {
-  kind: string;
-  timestamp: string;
-  message: string;
-  data: Record<string, unknown>;
-}
+export type BenchmarkTraceRecord = {
+  session_id: string;
+  thread_id: string;
+  turn_id: string;
+  data_idx: number;
+} & (
+  | { type: "context"; data: TurnTraceContext | null }
+  | { type: "item"; data: TurnTraceItem }
+);
 
 export interface BenchmarkResult {
   task_name: string;
@@ -41,7 +46,7 @@ export interface BenchmarkResult {
   run_id?: string | null;
   passed?: boolean;
   attempt?: number;
-  trace?: BenchmarkTraceEvent[];
+  trace?: BenchmarkTraceRecord[];
   failure_phase?: string | null;
 }
 

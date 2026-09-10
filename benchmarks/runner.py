@@ -10,6 +10,7 @@ from time import monotonic, perf_counter
 
 from backend.providers import ModelConfigurationError
 from backend.runtime import RunnerSettings, build_application
+from backend.runtime.conversation.trace import conversation_trace_records
 from backend.runtime.core.contracts import InterruptDecision, InterruptRequest
 from backend.runtime.core.events import RuntimeEvent
 from backend.runtime.persistence.recording import persistent_event
@@ -67,7 +68,7 @@ def _error_result(
     message: str,
     *,
     attempt: int = 1,
-    collector: EventCollector | None = None,
+    trace: list[dict] | None = None,
     failure_phase: str | None = None,
 ) -> TaskResult:
     diagnostic_event = RuntimeEvent(
@@ -75,9 +76,7 @@ def _error_result(
         message,
         {"failure_phase": failure_phase or "unknown"},
     )
-    if collector is not None and (not collector.events or collector.events[-1].kind != "error"):
-        collector(diagnostic_event)
-    safe_message, safe_data = persistent_event(diagnostic_event, include_full_messages=True)
+    safe_message, _ = persistent_event(diagnostic_event, include_full_messages=True)
     return TaskResult(
         task_name=task.name,
         capability=task.capability,
@@ -89,16 +88,7 @@ def _error_result(
         error=safe_message,
         passed=False,
         attempt=attempt,
-        trace=collector.trace()
-        if collector is not None
-        else [
-            {
-                "kind": diagnostic_event.kind,
-                "timestamp": diagnostic_event.timestamp,
-                "message": safe_message,
-                "data": safe_data,
-            }
-        ],
+        trace=trace if trace is not None else [],
         failure_phase=failure_phase,
     )
 
@@ -128,6 +118,8 @@ def run_one_task(
     task = apply_budget_overrides(task, max_tool_calls=max_tool_calls)
     workspace: Path | None = None
     app = None
+    conversation = None
+    trace: list[dict] = []
     collector = EventCollector()
     phase = "workspace"
     container = None
@@ -154,7 +146,7 @@ def run_one_task(
     try:
         progress("workspace")
         if cancelled():
-            return replace(_error_result(task, "Run cancelled."), status="cancelled")
+            return replace(_error_result(task, "Run cancelled.", trace=trace), status="cancelled")
         workspace = sandbox.materialize_workspace(task)
         if task.container is not None:
             progress("environment")
@@ -204,7 +196,7 @@ def run_one_task(
         deadline = None
         if timed_out:
             return replace(
-                _error_result(task, "Task execution timed out.", collector=collector, failure_phase="timeout"),
+                _error_result(task, "Task execution timed out.", trace=trace, failure_phase="timeout"),
                 metrics=metrics,
             )
         context = CheckContext(
@@ -217,7 +209,7 @@ def run_one_task(
         )
         if cancelled():
             return replace(
-                _error_result(task, "Run cancelled.", collector=collector, failure_phase="agent"),
+                _error_result(task, "Run cancelled.", trace=trace, failure_phase="agent"),
                 status="cancelled",
                 metrics=metrics,
             )
@@ -237,23 +229,21 @@ def run_one_task(
             run_id=state.run_id,
             passed=score == 1.0,
             attempt=attempt,
-            trace=collector.trace(),
+            trace=trace,
             failure_phase="agent" if state.status != "completed" else None,
         )
     except ContainerCancelled:
         if timed_out:
-            return _error_result(task, "Task execution timed out.", collector=collector, failure_phase="timeout")
-        return replace(
-            _error_result(task, "Run cancelled.", collector=collector, failure_phase=phase), status="cancelled"
-        )
+            return _error_result(task, "Task execution timed out.", trace=trace, failure_phase="timeout")
+        return replace(_error_result(task, "Run cancelled.", trace=trace, failure_phase=phase), status="cancelled")
     except ContainerTimeout:
-        return _error_result(task, "Benchmark operation timed out.", collector=collector, failure_phase="timeout")
+        return _error_result(task, "Benchmark operation timed out.", trace=trace, failure_phase="timeout")
     except ModelConfigurationError as exc:
         return _error_result(
             task,
             f"model is not configured: {exc}",
             attempt=attempt,
-            collector=collector,
+            trace=trace,
             failure_phase="configuration",
         )
     except Exception as exc:  # keep the harness alive across task failures
@@ -261,22 +251,34 @@ def run_one_task(
             task,
             f"{type(exc).__name__}: {exc}",
             attempt=attempt,
-            collector=collector,
+            trace=trace,
             failure_phase=phase,
         )
     finally:
+        # Every result shares this list; collect finalized Items before closing
+        # the application, including when execution or grading raised an error.
+        finalization_errors: list[str] = []
+        failure_phase = "cleanup"
+        if conversation is not None and conversation.runtime is not None:
+            try:
+                runtime_state = conversation.runtime.state
+                trace.extend(
+                    conversation_trace_records(app.session_store, runtime_state.session_id, runtime_state.thread_id)
+                )
+            except Exception as exc:
+                failure_phase = "trace"
+                finalization_errors.append(f"Trace export failed: {type(exc).__name__}: {exc}")
         progress("cleanup")
-        cleanup_errors: list[str] = []
         if container is not None:
             try:
                 container.close()
             except Exception as exc:
-                cleanup_errors.append(f"{type(exc).__name__}: {exc}")
+                finalization_errors.append(f"{type(exc).__name__}: {exc}")
         if app is not None:
             try:
                 app.close()
             except Exception as exc:
-                cleanup_errors.append(f"{type(exc).__name__}: {exc}")
+                finalization_errors.append(f"{type(exc).__name__}: {exc}")
         if workspace is not None and not keep_workspaces:
             try:
                 target = workspace.resolve()
@@ -286,8 +288,8 @@ def run_one_task(
                 if target.exists():
                     shutil.rmtree(target)
             except Exception as exc:
-                cleanup_errors.append(f"{type(exc).__name__}: {exc}")
-        if cleanup_errors:
+                finalization_errors.append(f"{type(exc).__name__}: {exc}")
+        if finalization_errors:
             return _error_result(
-                task, "; ".join(cleanup_errors), attempt=attempt, collector=collector, failure_phase="cleanup"
+                task, "; ".join(finalization_errors), attempt=attempt, trace=trace, failure_phase=failure_phase
             )

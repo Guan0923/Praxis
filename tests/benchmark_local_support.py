@@ -39,7 +39,14 @@ def local_tasks() -> list[BenchmarkTask]:
 
 
 @contextmanager
-def local_model(*, delay: float = 0, tool_name: str = "read_file", tool_arguments: dict | None = None):
+def local_model(
+    *,
+    delay: float = 0,
+    tool_name: str = "read_file",
+    tool_arguments: dict | None = None,
+    reasoning_chunks: tuple[str, ...] = (),
+    interrupt_stream: bool = False,
+):
     calls: list[dict] = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -88,7 +95,19 @@ def local_model(*, delay: float = 0, tool_name: str = "read_file", tool_argument
                     },
                     {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}},
                 ]
-                body = ("".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n").encode()
+                reasoning = [
+                    {
+                        "id": "local-response",
+                        "model": payload["model"],
+                        "choices": [{"index": 0, "delta": {"reasoning_content": text}, "finish_reason": None}],
+                    }
+                    for text in reasoning_chunks
+                    if has_tool
+                ]
+                interrupted = interrupt_stream and has_tool
+                events = reasoning if interrupted else reasoning + chunks
+                ending = "" if interrupted else "data: [DONE]\n\n"
+                body = ("".join(f"data: {json.dumps(chunk)}\n\n" for chunk in events) + ending).encode()
                 content_type = "text/event-stream"
             else:
                 body = json.dumps(

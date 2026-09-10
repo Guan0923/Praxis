@@ -12,6 +12,7 @@ from backend.api.session_store import session_store
 from backend.api.state import WebAppState
 from backend.domain.runtime_state import RuntimeState
 from backend.domain.turn_trace import TurnTrace, TurnTraceContext, TurnTraceItem
+from backend.runtime.conversation.trace import conversation_trace_records
 from benchmarks.resources import ResourceStore
 from benchmarks.service import BatchRun, BenchmarkService, TaskRun
 from benchmarks.tasks import ALL_TASKS
@@ -87,21 +88,12 @@ def seed_thread(web: WebAppState) -> tuple[str, list[RuntimeState]]:
     return session_id, turns
 
 
-def seed_benchmark(web: WebAppState) -> tuple[str, str, list[dict]]:
+def seed_benchmark(web: WebAppState, *, session_id: str | None = None) -> tuple[str, str, list[dict]]:
     task = ALL_TASKS[0]
     result = result_for(task)
-    result.trace = [
-        {
-            "kind": "tool_result",
-            "timestamp": "2026-09-10T00:00:00Z",
-            "message": "读取文件\n完成",
-            "data": {
-                "content": LONG_RESULT,
-                "headers": {"Authorization": "[REDACTED]"},
-            },
-        },
-        *result.trace,
-    ]
+    if session_id is None:
+        session_id, _ = seed_thread(web)
+    result.trace = list(conversation_trace_records(session_store(web), session_id, session_id))
     service = BenchmarkService(
         web.job_registry, web.paths.root / "benchmark-tests", resources=ResourceStore(web.paths.root / "resources")
     )
@@ -157,6 +149,9 @@ def test_thread_export_current_versions_order_and_complete_content(trace_app):
     assert rows[2]["data"]["item"]["headers"]["Authorization"] == "[REDACTED]"
     assert "HISTORICAL_ONLY" not in response.text
     assert response.content.endswith(b"\n")
+    run_id, task_id, _ = seed_benchmark(web, session_id=session_id)
+    benchmark = client.get(f"/benchmark/runs/{run_id}/tasks/{task_id}/trace/export")
+    assert benchmark.content == response.content
 
 
 def test_thread_export_empty_missing_and_unavailable(trace_app):
@@ -180,7 +175,7 @@ def test_thread_export_empty_missing_and_unavailable(trace_app):
         )
 
 
-def test_benchmark_export_preserves_events_empty_and_missing(trace_app):
+def test_benchmark_export_preserves_records_empty_and_missing(trace_app):
     web, client, _, _ = trace_app
     run_id, task_id, events = seed_benchmark(web)
     url = f"/benchmark/runs/{run_id}/tasks/{task_id}/trace/export"

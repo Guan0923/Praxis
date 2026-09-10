@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -15,6 +14,7 @@ from backend.domain.runtime_state import (
     new_node_id,
     new_thread_id,
 )
+from backend.runtime.conversation.trace import conversation_trace_records
 from backend.sandbox import SandboxInitializationError
 
 from ..agent_report_projection import project_turn
@@ -69,31 +69,7 @@ def export_thread_trace(
     sidebar = store.get_sidebar_thread(thread_id)
     if sidebar is not None and sidebar.state != "active":
         raise HTTPException(status_code=409, detail="对话已归档或删除，请先恢复。")
-    turns = sorted(
-        (
-            node
-            for node in store.load_nodes(session_id)
-            if isinstance(node, RuntimeState) and node.session_id == session_id and node.thread_id == thread_id
-        ),
-        key=lambda node: (node.timestamp, node.id),
-    )
-
-    def records() -> Iterator[dict[str, object]]:
-        for turn in turns:
-            data_idx = turn.current_data_idx
-            trace = store.load_turn_trace(session_id, turn.id, data_idx)
-            identity = {
-                "session_id": session_id,
-                "thread_id": thread_id,
-                "turn_id": turn.id,
-                "data_idx": data_idx,
-            }
-            yield {"type": "context", **identity, "data": trace.context.to_dict() if trace is not None else None}
-            if trace is not None:
-                for item in sorted(trace.items, key=lambda item: item.sequence):
-                    yield {"type": "item", **identity, "data": item.to_dict()}
-
-    return jsonl_download(records(), f"thread-{thread_id}-trace.jsonl")
+    return jsonl_download(conversation_trace_records(store, session_id, thread_id), f"thread-{thread_id}-trace.jsonl")
 
 
 @router.get("/{turn_id}/trace")

@@ -127,13 +127,10 @@ def test_event_collector_publishes_subagent_metrics() -> None:
     assert metrics.subagent_completed == 1
     assert metrics.subagent_failed == 1
     assert metrics.to_dict()["subagent_completed"] == 1
-    trace = collector.trace()
-    assert [event["kind"] for event in trace] == ["model_request", "subagent_completed", "subagent_failed"]
-    assert "secret-value" not in json.dumps(trace)
-    assert trace[0]["data"]["prompt"] == "read this"
+    assert not hasattr(collector, "events")
 
 
-def test_runner_returns_a_redacted_failure_trace_with_phase() -> None:
+def test_runner_returns_empty_trace_and_redacted_error_before_turn_creation() -> None:
     task = BenchmarkTask(
         name="broken-workspace",
         description="Exercise safe harness failures.",
@@ -153,7 +150,7 @@ def test_runner_returns_a_redacted_failure_trace_with_phase() -> None:
     encoded = json.dumps(result.to_dict(), ensure_ascii=False)
     assert result.status == "error"
     assert result.failure_phase == "workspace"
-    assert [event["kind"] for event in result.trace] == ["error"]
+    assert result.trace == []
     assert "RuntimeError" in result.error
     assert "secret-value" not in encoded
     assert "Traceback" not in encoded
@@ -184,6 +181,8 @@ def test_rule_planner_smoke_uses_a_temporary_unregistered_task(
     result = run_one_task(task, planner="rule", sandbox=sandbox)
     assert result.status == "completed"
     assert result.score == 1.0
+    assert result.trace[0]["type"] == "context"
+    assert result.trace[0]["data"] is None
 
 
 def test_registry_is_thirty_source_backed_tasks() -> None:

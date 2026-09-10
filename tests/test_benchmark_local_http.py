@@ -17,7 +17,8 @@ def test_real_http_runtime_file_tool_and_grading(tmp_path_factory, monkeypatch, 
     tasks = local_tasks()
     monkeypatch.setattr(benchmarks.tasks, "ALL_TASKS", tasks)
     monkeypatch.setattr(benchmarks.tasks, "TASKS_BY_NAME", {task.name: task for task in tasks})
-    with local_model(delay=0.05) as (config, calls):
+    reasoning = ("Inspect the local file. \u4e2d\u6587\u601d\u8003\n",) * 12
+    with local_model(delay=0.05, reasoning_chunks=reasoning) as (config, calls):
         app = acceptance_app(tmp_path_factory.mktemp("http") / "web", config)
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
@@ -41,7 +42,16 @@ def test_real_http_runtime_file_tool_and_grading(tmp_path_factory, monkeypatch, 
                 assert result["metrics"]["tool_calls"] == 1
                 assert result["metrics"]["model_calls"] == 2
                 trace = client.get(f"/benchmark/runs/{batch['id']}/tasks/{batch['tasks'][0]['id']}/trace").json()
-                assert any(event["kind"] == "tool_call" for event in trace)
+                assert any(
+                    record["type"] == "item" and record["data"]["item"]["type"] == "tool_call" for record in trace
+                )
+                thoughts = [
+                    record["data"]["item"]["text"]
+                    for record in trace
+                    if record["type"] == "item" and record["data"]["item"]["type"] == "reasoning"
+                ]
+                assert thoughts == ["".join(reasoning)]
+                assert finished["tasks"][0]["trace_count"] == len(trace)
                 exported = client.get(f"/benchmark/runs/{batch['id']}/tasks/{batch['tasks'][0]['id']}/trace/export")
                 assert exported.status_code == 200
                 assert [json.loads(line) for line in exported.iter_lines()] == trace

@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from backend.runtime.core.events import RuntimeEvent
-from backend.runtime.persistence.recording import persistent_event
 
 
 def _token_value(usage: Any, key: str) -> int:
@@ -30,7 +29,6 @@ class EventCollector:
     """
 
     def __init__(self) -> None:
-        self.events: list[RuntimeEvent] = []
         self.run_finished: dict[str, Any] | None = None
         self.prompt_tokens = 0
         self.completion_tokens = 0
@@ -40,7 +38,6 @@ class EventCollector:
         self.subagent_failed = 0
 
     def __call__(self, event: RuntimeEvent) -> None:
-        self.events.append(event)
         if event.kind == "run_finished":
             self.run_finished = event.data
         elif event.kind == "model_response":
@@ -55,19 +52,3 @@ class EventCollector:
             self.subagent_completed += 1
         elif event.kind == "subagent_failed":
             self.subagent_failed += 1
-
-    def trace(self) -> list[dict[str, Any]]:
-        """Return the full, recursively redacted event stream for diagnostics."""
-
-        trace: list[dict[str, Any]] = []
-        for event in sorted(self.events, key=lambda item: item.timestamp):
-            message, data = persistent_event(event, include_full_messages=True)
-            trace.append(
-                {
-                    "kind": event.kind,
-                    "timestamp": event.timestamp,
-                    "message": message,
-                    "data": data,
-                }
-            )
-        return trace

@@ -34,7 +34,7 @@ def export_preview_app(data_root: Path):
     last = turns[-1]
     last.status = "success"
     session_store(web).update_node(last)
-    run_id, task_id, events = seed_benchmark(web)
+    run_id, task_id, events = seed_benchmark(web, session_id=session_id)
     return create_app(web), session_id, run_id, task_id, events
 
 
