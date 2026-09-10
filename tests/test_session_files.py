@@ -20,7 +20,7 @@ from backend.api.session_files.store import (
     SessionFileStore,
 )
 from backend.api.state import WebAppState
-from backend.configuration import ClientPaths
+from backend.configuration import ClientPaths, ConfigurationError
 
 
 @pytest.fixture()
@@ -267,7 +267,7 @@ def test_store_resolve_rejects_symbolic_link_upload_root(tmp_path: Path) -> None
     except OSError:
         pytest.skip("当前 Windows 环境不允许创建符号链接。")
     store = SessionFileStore(paths, "session_x")
-    with pytest.raises(SessionFileError):
+    with pytest.raises(ConfigurationError, match="symbolic links"):
         store.resolve("upload", str(upload_root / "note.txt"))
 
 

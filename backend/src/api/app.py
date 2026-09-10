@@ -16,6 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend.api.error_handlers import error_response
+
 from .error_handlers import install_error_handlers
 from .security import LocalWebSettings, origin_allowed
 from .state import DEFAULT_DATA_ROOT, WebAppState
@@ -147,7 +149,7 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
             from backend.domain import MessageQueueUnavailable
 
             if isinstance(exc, MessageQueueUnavailable):
-                raise HTTPException(status_code=503, detail="message_queue_unavailable") from exc
+                return error_response(exc, status_code=503, detail="message_queue_unavailable")
             raise
         return {"status": "ready", "service": "praxis-backend", "database": "ok", "redis": "ok"}
 

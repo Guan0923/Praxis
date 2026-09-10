@@ -13,6 +13,15 @@ from backend.configuration import ClientPaths, ConfigurationError, atomic_write_
 
 from .config import McpServerConfig, read_server_configs
 
+
+class McpServerNotFound(ValueError):
+    """The requested configured server does not exist."""
+
+
+class McpServerConflict(ValueError):
+    """A configured server already owns this name."""
+
+
 KEYRING_SERVICE = "praxis-mcp"
 _MANAGED_REFERENCE_PREFIX = f"keyring://{KEYRING_SERVICE}/"
 
@@ -96,7 +105,7 @@ class McpSettingsStore:
     def server(self, name: str) -> McpServerConfig:
         found = next((item for item in self.servers() if item.name == name), None)
         if found is None:
-            raise ValueError("MCP server not found")
+            raise McpServerNotFound("MCP server not found")
         return found
 
     @staticmethod
@@ -133,7 +142,7 @@ class McpSettingsStore:
         with self._lock():
             current = list(self.servers())
             if any(item.name == name for item in current):
-                raise ValueError("MCP server name already exists")
+                raise McpServerConflict("MCP server name already exists")
             references = {key: _reference(name, key) for key in secrets}
             overlap = set(env) & set(references)
             if overlap:
@@ -182,7 +191,7 @@ class McpSettingsStore:
             current = list(self.servers())
             previous = next((item for item in current if item.name == name), None)
             if previous is None:
-                raise ValueError("MCP server not found")
+                raise McpServerNotFound("MCP server not found")
             references = dict(previous.env_refs or {}) if transport == "stdio" else {}
             for environment_name in remove_secrets:
                 references.pop(environment_name, None)
@@ -226,7 +235,7 @@ class McpSettingsStore:
             current = list(self.servers())
             previous = next((item for item in current if item.name == name), None)
             if previous is None:
-                raise ValueError("MCP server not found")
+                raise McpServerNotFound("MCP server not found")
             updated = replace(previous, enabled=enabled)
             self._commit(tuple(updated if item.name == name else item for item in current))
             return updated
@@ -236,7 +245,7 @@ class McpSettingsStore:
             current = list(self.servers())
             previous = next((item for item in current if item.name == name), None)
             if previous is None:
-                raise ValueError("MCP server not found")
+                raise McpServerNotFound("MCP server not found")
             accounts = tuple(
                 account
                 for reference in _references(previous).values()

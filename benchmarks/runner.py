@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from time import monotonic, perf_counter
 
+from backend.domain import error_report, safe_error_message
 from backend.providers import ModelConfigurationError
 from backend.runtime import RunnerSettings, build_application
 from backend.runtime.conversation.trace import conversation_trace_records
@@ -65,12 +66,14 @@ def apply_budget_overrides(task: BenchmarkTask, *, max_tool_calls: int | None) -
 
 def _error_result(
     task: BenchmarkTask,
-    message: str,
+    message: str | BaseException,
     *,
     attempt: int = 1,
     trace: list[dict] | None = None,
     failure_phase: str | None = None,
 ) -> TaskResult:
+    report = error_report(message) if isinstance(message, BaseException) else None
+    message = safe_error_message(message) if isinstance(message, BaseException) else message
     diagnostic_event = RuntimeEvent(
         "error",
         message,
@@ -86,6 +89,7 @@ def _error_result(
         metrics=RunMetrics(0.0, 0, 0, 0, 0, 0, 0, []),
         verdicts=[],
         error=safe_message,
+        error_report=report,
         passed=False,
         attempt=attempt,
         trace=trace if trace is not None else [],
@@ -121,6 +125,7 @@ def run_one_task(
     conversation = None
     trace: list[dict] = []
     collector = EventCollector()
+    primary_error: BaseException | None = None
     phase = "workspace"
     container = None
     deadline: float | None = None
@@ -239,17 +244,19 @@ def run_one_task(
     except ContainerTimeout:
         return _error_result(task, "Benchmark operation timed out.", trace=trace, failure_phase="timeout")
     except ModelConfigurationError as exc:
+        primary_error = exc
         return _error_result(
             task,
-            f"model is not configured: {exc}",
+            exc,
             attempt=attempt,
             trace=trace,
             failure_phase="configuration",
         )
     except Exception as exc:  # keep the harness alive across task failures
+        primary_error = exc
         return _error_result(
             task,
-            f"{type(exc).__name__}: {exc}",
+            exc,
             attempt=attempt,
             trace=trace,
             failure_phase=phase,
@@ -257,7 +264,7 @@ def run_one_task(
     finally:
         # Every result shares this list; collect finalized Items before closing
         # the application, including when execution or grading raised an error.
-        finalization_errors: list[str] = []
+        finalization_errors: list[BaseException] = []
         failure_phase = "cleanup"
         if conversation is not None and conversation.runtime is not None:
             try:
@@ -267,18 +274,18 @@ def run_one_task(
                 )
             except Exception as exc:
                 failure_phase = "trace"
-                finalization_errors.append(f"Trace export failed: {type(exc).__name__}: {exc}")
+                finalization_errors.append(exc)
         progress("cleanup")
         if container is not None:
             try:
                 container.close()
             except Exception as exc:
-                finalization_errors.append(f"{type(exc).__name__}: {exc}")
+                finalization_errors.append(exc)
         if app is not None:
             try:
                 app.close()
             except Exception as exc:
-                finalization_errors.append(f"{type(exc).__name__}: {exc}")
+                finalization_errors.append(exc)
         if workspace is not None and not keep_workspaces:
             try:
                 target = workspace.resolve()
@@ -288,8 +295,8 @@ def run_one_task(
                 if target.exists():
                     shutil.rmtree(target)
             except Exception as exc:
-                finalization_errors.append(f"{type(exc).__name__}: {exc}")
-        if finalization_errors:
+                finalization_errors.append(exc)
+        if finalization_errors and primary_error is None:
             return _error_result(
-                task, "; ".join(finalization_errors), attempt=attempt, trace=trace, failure_phase=failure_phase
+                task, finalization_errors[0], attempt=attempt, trace=trace, failure_phase=failure_phase
             )

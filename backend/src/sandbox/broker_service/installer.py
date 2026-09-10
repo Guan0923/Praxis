@@ -300,12 +300,13 @@ class WindowsServiceInstaller:
             if winerror is None and getattr(exc, "args", None):
                 first = exc.args[0]
                 winerror = first if isinstance(first, int) else None
-            return self._configuration_failure(
+            self._configuration_failure(
                 "configuration_read_failed",
                 step=step,
                 error_type=type(exc).__name__,
                 winerror=winerror if winerror is not None else "none",
             )
+            raise
         finally:
             if win32service is not None and service is not None:
                 try:
@@ -587,7 +588,9 @@ class WindowsServiceInstaller:
                 "缺少 Windows Broker 安装依赖，请重新安装后端依赖。",
             ) from exc
 
+        result_id = uuid.uuid4().hex
         payload = {
+            "result_id": result_id,
             "operation": operation,
             "service_name": self.service_name,
             "service_command": list(self.service_command),
@@ -646,79 +649,35 @@ class WindowsServiceInstaller:
                     pass
         if code == 0:
             return
-        from ..installation.contracts import (
-            EXIT_ACCOUNT_FAILED,
-            EXIT_ACL_FAILED,
-            EXIT_BUSY,
-            EXIT_CREDENTIAL_FAILED,
-            EXIT_DEPENDENCY_FAILED,
-            EXIT_FILESYSTEM_FAILED,
-            EXIT_INVALID,
-            EXIT_NETWORK_FAILED,
-            EXIT_RIGHTS_FAILED,
-            EXIT_SERVICE_START_FAILED,
-            EXIT_SERVICE_STOP_FAILED,
-        )
+        report = None
+        if self.program_data_path is not None:
+            from ..installation.results import read_result
 
-        if code == EXIT_BUSY:
-            raise BrokerInstallationError(
-                BrokerInstallFailureCode.BUSY,
-                "Broker maintenance is already in progress.",
-            )
-        if code == EXIT_DEPENDENCY_FAILED:
-            raise BrokerInstallationError(
-                BrokerInstallFailureCode.DEPENDENCY_MISSING,
-                "Broker service host could not be prepared.",
-            )
-        if code == EXIT_FILESYSTEM_FAILED:
-            raise BrokerInstallationError(
-                BrokerInstallFailureCode.ACL_FAILED,
-                "Broker 文件权限配置失败，请以管理员权限重试。",
-            )
-        if code == EXIT_ACL_FAILED:
-            raise BrokerInstallationError(
-                BrokerInstallFailureCode.ACL_FAILED,
-                "Broker 文件权限配置失败，请以管理员权限重试。",
-            )
-        if code == EXIT_ACCOUNT_FAILED:
-            raise BrokerInstallationError(
-                BrokerInstallFailureCode.ACCOUNT_FAILED,
-                "沙箱固定账户创建或安全纳管失败；请检查是否存在同名高权限账户。",
-            )
-        if code == EXIT_CREDENTIAL_FAILED:
-            raise BrokerInstallationError(
-                BrokerInstallFailureCode.CREDENTIAL_FAILED,
-                "沙箱账户凭据创建、验证或加密保存失败。",
-            )
-        if code == EXIT_RIGHTS_FAILED:
-            raise BrokerInstallationError(
-                BrokerInstallFailureCode.PRIVILEGE_FAILED,
-                "沙箱登录权限或 Broker 服务权限配置失败。",
-            )
-        if code == EXIT_NETWORK_FAILED:
-            raise BrokerInstallationError(
-                BrokerInstallFailureCode.NETWORK_FAILED,
-                "沙箱静态网络隔离策略配置失败。",
-            )
-        if code == EXIT_SERVICE_START_FAILED:
-            raise BrokerInstallationError(
-                BrokerInstallFailureCode.SERVICE_START_FAILED,
-                "Broker Windows 服务启动失败。",
-            )
-        if code == EXIT_SERVICE_STOP_FAILED:
-            raise BrokerInstallationError(
-                BrokerInstallFailureCode.SERVICE_STOP_FAILED,
-                "Broker Windows 服务未能停止，请稍后重试或重启 Windows。",
-            )
-        if code == EXIT_INVALID:
-            raise BrokerInstallationError(
-                BrokerInstallFailureCode.UNKNOWN,
-                "沙箱 Broker 安装失败，请查看后端日志。",
-            )
-        raise BrokerInstallationError(
-            BrokerInstallFailureCode.SERVICE_FAILED,
-            "Windows 服务创建或启动失败。",
+            try:
+                report = read_result(self.program_data_path, result_id)
+            except Exception as exc:
+                exc.add_note(f"Repair helper exited with code {code}; its exception report could not be read.")
+                raise
+        failure = BrokerInstallationError(
+            BrokerInstallFailureCode.UNKNOWN,
+            report["message"] if report else f"修复子进程退出码 {code}；未取得子进程异常详情。",
         )
+        failure.error_report = report
+        failure.broker_code = {
+            2: BrokerInstallFailureCode.UNKNOWN,
+            3: BrokerInstallFailureCode.SERVICE_FAILED,
+            4: BrokerInstallFailureCode.ACL_FAILED,
+            5: BrokerInstallFailureCode.SERVICE_START_FAILED,
+            6: BrokerInstallFailureCode.ACL_FAILED,
+            7: BrokerInstallFailureCode.SERVICE_STOP_FAILED,
+            8: BrokerInstallFailureCode.ACCOUNT_FAILED,
+            9: BrokerInstallFailureCode.CREDENTIAL_FAILED,
+            10: BrokerInstallFailureCode.PRIVILEGE_FAILED,
+            11: BrokerInstallFailureCode.NETWORK_FAILED,
+            12: BrokerInstallFailureCode.BUSY,
+            13: BrokerInstallFailureCode.DEPENDENCY_MISSING,
+        }.get(code, BrokerInstallFailureCode.UNKNOWN)
+        raise failure
 
     def _current_user_sid(self) -> str | None:
         if self.backend_sid_path is None:

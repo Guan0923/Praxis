@@ -540,10 +540,7 @@ def _validate_scope(scope: MemoryScope, project_id: str | None) -> None:
 
 def _require_timestamp(value: str, name: str) -> None:
     _require_text(value, name, max_length=100)
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an ISO-8601 timestamp.") from exc
+    parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError(f"{name} must include a time zone.")
     if parsed.utcoffset().total_seconds() != 0 or parsed.isoformat() != value:

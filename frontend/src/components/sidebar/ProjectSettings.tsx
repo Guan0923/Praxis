@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "../ErrorDisplay";
 import { SettingOutlined } from "@ant-design/icons";
 import { Button, Input, List, Modal, Popover, Typography } from "antd";
 import { useEffect, useState } from "react";
@@ -23,7 +24,7 @@ export function ProjectSettings({
   const [renameSaving, setRenameSaving] = useState(false);
   const [pathSaving, setPathSaving] = useState(false);
   const [draftName, setDraftName] = useState(project.name);
-  const [renameError, setRenameError] = useState("");
+  const [renameError, setRenameError] = useState<Error | string>("");
   const [revoking, setRevoking] = useState(false);
 
   useEffect(() => {
@@ -46,7 +47,7 @@ export function ProjectSettings({
       await onRenameProject?.(project.project_id, name);
       setRenameOpen(false);
     } catch (error) {
-      setRenameError(error instanceof Error ? error.message : "保存失败，请稍后重试。");
+      setRenameError(error instanceof Error ? error : "保存失败，请稍后重试。");
     } finally {
       setRenameSaving(false);
     }
@@ -137,7 +138,7 @@ export function ProjectSettings({
           onChange={(event) => setDraftName(event.target.value)}
           status={renameError ? "error" : undefined}
         />
-        {renameError ? <Typography.Text type="danger">{renameError}</Typography.Text> : null}
+        {renameError ? <Typography.Text type="danger"><ErrorDisplay error={renameError} /></Typography.Text> : null}
       </Modal>
     </>
   );

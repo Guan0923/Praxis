@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.configuration import ClientPaths
+from backend.configuration import ClientPaths, ConfigurationError
 from backend.domain.memory import (
     MemoryCandidate,
     MemoryCandidateStatus,
@@ -355,7 +355,8 @@ def test_memory_child_paths_reject_wrong_file_types(tmp_path: Path, bad_child: s
         target.write_text("not a directory", encoding="utf-8")
     else:
         target.mkdir()
-    with pytest.raises(MemoryStorageError):
+    expected = ConfigurationError if bad_child == "rollout_summaries" else MemoryStorageError
+    with pytest.raises(expected):
         MemoryStore(paths).ensure()
 
 
@@ -363,7 +364,7 @@ def test_memories_root_rejects_regular_file(tmp_path: Path) -> None:
     paths = ClientPaths(tmp_path / "user_file")
     paths.root.mkdir()
     paths.memories_dir.write_text("not a directory", encoding="utf-8")
-    with pytest.raises(MemoryStorageError):
+    with pytest.raises(ConfigurationError):
         MemoryStore(paths).ensure()
 
 
@@ -384,5 +385,6 @@ def test_memory_paths_reject_symbolic_links(tmp_path: Path, linked_child: str) -
         target.symlink_to(outside, target_is_directory=is_directory)
     except OSError:
         pytest.skip("Symbolic links are unavailable for this Windows test account.")
-    with pytest.raises(MemoryStorageError, match="symbolic link"):
+    expected = ConfigurationError if is_directory else MemoryStorageError
+    with pytest.raises(expected, match="symbolic link"):
         MemoryStore(paths).ensure()

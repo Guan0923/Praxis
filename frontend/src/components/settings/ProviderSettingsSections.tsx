@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "../ErrorDisplay";
 import { AutoComplete, Button, Collapse, Form, Input, Select, Slider, Space, Tag, Typography } from "antd";
 import type { UserSettingsState } from "./useUserSettingsState";
 
@@ -167,7 +168,7 @@ export function ProviderManageSection({ state }: SectionProps) {
                       type={modelFeedback.status === "error" ? "danger" : modelFeedback.status}
                       style={{ display: "block", marginTop: 4 }}
                     >
-                      {modelFeedback.message}
+                      {<ErrorDisplay error={modelFeedback.message} />}
                     </Typography.Text>
                   ) : null}
                 </Form.Item>

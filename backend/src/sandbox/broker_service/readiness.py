@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Mapping
 from pathlib import Path
 
-from ..errors import SandboxInitializationError
+from ..errors import BrokerStatusFailureCode, SandboxInitializationError
 from .credentials import BrokerCredentialPackage
 from .protocol import BROKER_VERSION, _canonical
 
@@ -56,7 +56,9 @@ def validate_ready_marker(
     if not secrets_equal(digest, hashlib.sha256(_canonical(marker)).hexdigest()):
         raise SandboxInitializationError("Broker ready marker digest is invalid")
     if expected_proxy_port is not None and marker["proxy_port"] != expected_proxy_port:
-        raise SandboxInitializationError("Broker proxy port requires repair")
+        raise SandboxInitializationError(
+            "Broker proxy port requires repair", status_code=BrokerStatusFailureCode.PROXY_CONFIGURATION_INVALID
+        )
     accounts = marker.get("accounts")
     if not isinstance(accounts, Mapping):
         raise SandboxInitializationError("Broker ready marker accounts are invalid")
@@ -70,8 +72,9 @@ def validate_ready_marker(
 def read_ready_marker(path: Path, *, expected_proxy_port: int | None = None) -> dict[str, object]:
     try:
         value = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise SandboxInitializationError("Broker ready marker is unavailable") from exc
+    except OSError as exc:
+        exc.broker_status_code = BrokerStatusFailureCode.READY_MARKER_UNAVAILABLE
+        raise
     return validate_ready_marker(value, expected_proxy_port=expected_proxy_port)
 
 

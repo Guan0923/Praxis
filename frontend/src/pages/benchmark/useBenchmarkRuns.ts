@@ -16,8 +16,8 @@ export function useBenchmarkRuns(active = true) {
   const [visible, setVisible] = useState(() => document.visibilityState !== "hidden");
   const [runs, setRuns] = useState<BenchmarkRun[]>([]);
   const [resources, setResources] = useState<BenchmarkResource[]>([]);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState<Error | string | null>(null);
+  const [actionError, setActionError] = useState<Error | string | null>(null);
   const [expired, setExpired] = useState(false);
   const [ready, setReady] = useState(false);
   const [pending, setPending] = useState<Set<string>>(new Set());
@@ -71,7 +71,7 @@ export function useBenchmarkRuns(active = true) {
         setReady(true);
       } catch (error) {
         if (!stopped && startedRevision === revision.current) {
-          setConnectionError(timedOut ? "状态查询超时，正在重新连接。" : String((error as Error).message ?? error));
+          setConnectionError(timedOut ? "状态查询超时，正在重新连接。" : error instanceof Error ? error : String(error));
         }
       } finally {
         clearTimeout(timeout);
@@ -98,7 +98,7 @@ export function useBenchmarkRuns(active = true) {
       revision.current += 1;
       setResources((previous) => [...previous.filter((item) => item.task_name !== name), resource]);
     } catch (error) {
-      if (mounted.current) setActionError(String((error as Error).message ?? error));
+      if (mounted.current) setActionError(error instanceof Error ? error : String(error));
     } finally {
       pendingRef.current.delete(key);
       if (mounted.current) setPending(new Set(pendingRef.current));
@@ -117,7 +117,7 @@ export function useBenchmarkRuns(active = true) {
       const changed = acceptInstance(run.instance_id);
       setRuns((previous) => [...(changed ? [] : previous.filter((item) => item.id !== run.id)), run]);
     } catch (error) {
-      if (mounted.current) setActionError(String((error as Error).message ?? error));
+      if (mounted.current) setActionError(error instanceof Error ? error : String(error));
     } finally {
       pendingRef.current.delete(key);
       if (mounted.current) setPending(new Set(pendingRef.current));

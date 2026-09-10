@@ -200,7 +200,9 @@ def test_timeout_terminates_tree_and_marks_failed(tmp_path) -> None:
     job.start()
     wait_until(lambda: job.info().state is JobState.FAILED)
     info = job.info()
-    assert info.error == "Command timed out after 0.5 seconds."
+    assert info.error_report["type"] == "TimeoutExpired"
+    assert "timed out after 0.5 seconds" in info.error
+    assert "communicate" in info.error_report["traceback"]
     # The grandchild pid was printed to stdout and must now be gone.
     grandchild = int(job.output.split("stdout:\n", 1)[1].strip().splitlines()[0])
     wait_until(lambda: not _pid_alive(grandchild), timeout=5.0)
@@ -210,7 +212,8 @@ def test_timeout_default_formatter_reports_original_message(tmp_path) -> None:
     job = make_job(tmp_path, argv=_sleep_cmd(300), timeout_seconds=0.3)
     job.start()
     wait_until(lambda: job.info().state is JobState.FAILED)
-    assert job.info().error == "Command timed out after 0.3 seconds."
+    assert job.info().error_report["type"] == "TimeoutExpired"
+    assert "timed out after 0.3 seconds" in job.info().error
 
 
 # ---------------------------------------------------------------------------

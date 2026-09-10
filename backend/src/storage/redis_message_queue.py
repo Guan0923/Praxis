@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from redis import Redis
-from redis.exceptions import RedisError
+from redis.exceptions import RedisError, ResponseError
 
 from backend.domain.message_queue import (
     ClaimedEnvelope,
@@ -345,9 +345,15 @@ class RedisMessageQueue:
         resolved_group = group or self.consumer_group
         try:
             self.client.xgroup_create(stream, resolved_group, id="0-0", mkstream=True)
-        except RedisError as exc:
-            if "BUSYGROUP" not in str(exc):
+        except ResponseError as exc:
+            try:
+                groups = self.client.xinfo_groups(stream)
+            except RedisError:
                 raise self._unavailable(exc) from exc
+            if not any(value.get("name") in {resolved_group, resolved_group.encode()} for value in groups):
+                raise self._unavailable(exc) from exc
+        except RedisError as exc:
+            raise self._unavailable(exc) from exc
 
     def _claim_stream(
         self,

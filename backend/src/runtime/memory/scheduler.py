@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 from backend.domain.memory import MemoryJob, MemoryJobKind, MemoryJobStatus, MemorySettings
 from backend.jobs import AdmissionPolicy, JobLane, QueueMode, ThreadJob
+from backend.providers import ModelConfigurationError, ModelTransportError
 from backend.storage.memory import MemoryConflictError, MemoryNotFoundError
 
 from .consolidation import ManualMemoryConsolidator
@@ -207,6 +208,15 @@ class MemoryAutomationService:
             self._cancel_safely(job.job_id, "conversation_changed")
         except MemoryModelUnavailable as exc:
             self._cancel_safely(job.job_id, str(exc))
+        except ModelConfigurationError:
+            self._cancel_safely(job.job_id, "provider_unavailable")
+        except ModelTransportError as exc:
+            if exc.status_code in {402, 429}:
+                self._cancel_safely(job.job_id, "quota_unavailable")
+            elif exc.status_code in {401, 403, 404}:
+                self._cancel_safely(job.job_id, "provider_unavailable")
+            else:
+                self._retry(job, exc)
         except MemoryConflictError:
             pass
         except Exception as exc:

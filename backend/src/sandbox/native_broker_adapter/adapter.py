@@ -549,11 +549,8 @@ def _close_handle(handle: Any) -> None:
         handle.Close()
         return
     except Exception:
-        try:
-            _modules()["api"].CloseHandle(handle)
-            return
-        except Exception as api_error:
-            raise SandboxInitializationError("Broker handle could not be closed") from api_error
+        _modules()["api"].CloseHandle(handle)
+        return
 
 
 __all__ = ["WindowsNativeBrokerAdapter"]

@@ -57,6 +57,8 @@ from dataclasses import replace
 from enum import StrEnum
 from typing import Protocol
 
+from backend.domain import error_report
+
 from .base import TERMINAL_STATES, Job, JobKind, JobStateError
 
 logger = logging.getLogger(__name__)
@@ -348,8 +350,8 @@ class ServiceJob(Job):
     def _probe(self, handle: object) -> bool:
         try:
             return bool(self._driver.check(handle))
-        except Exception:
-            logger.exception("service health probe failed for job %r", self._id)
+        except Exception as exc:
+            logger.error("service health probe failed for job %r: %s", self._id, error_report(exc))
             return False
 
     def _cancelled(self) -> bool:
@@ -380,5 +382,5 @@ class ServiceJob(Job):
             self._stopped_handles.add(handle)
         try:
             self._driver.stop(handle)
-        except Exception:
-            logger.exception("service stop failed for job %r handle %r", self._id, handle)
+        except Exception as exc:
+            logger.error("service stop failed for job %r: %s", self._id, error_report(exc))

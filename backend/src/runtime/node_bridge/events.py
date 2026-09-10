@@ -188,6 +188,10 @@ class _EventProjectionMixin:
                 )
             ),
         }
+        if data.get("error_report") is not None:
+            from backend.domain import normalize_error_report
+
+            result["error_report"] = normalize_error_report(data["error_report"])
         if tool:
             result["tool"] = tool
         for key in ("parallel_group_id", "parallel_index", "parallel_size", "execution_stage"):
@@ -356,6 +360,7 @@ class _EventProjectionMixin:
                 message,
                 category=self.abort_category or self._error_category(data),
                 code=str(data.get("error_type") or self.abort_code),
+                error_report=data.get("error_report"),
             )
 
     def _begin_compact_turn(self, summary: str, data: Mapping[str, Any]) -> RuntimeState:

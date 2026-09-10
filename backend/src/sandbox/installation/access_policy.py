@@ -124,11 +124,8 @@ def _sensitive_file_acl_commands(path: Path, service_name: str) -> list[list[str
 
 
 def _directory_contains(path: Path, name: str) -> bool:
-    try:
-        with os.scandir(path) as entries:
-            return any(entry.name.casefold() == name.casefold() for entry in entries)
-    except OSError as exc:
-        raise OSError("Broker ProgramData directory is unavailable") from exc
+    with os.scandir(path) as entries:
+        return any(entry.name.casefold() == name.casefold() for entry in entries)
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,10 +144,7 @@ class _SourceAclGrant:
 def _source_acl_grants(path: Path, boundary: Path, service_name: str) -> list[_SourceAclGrant]:
     if not path.is_absolute() or not boundary.is_absolute() or len(path.parts) < 3:
         raise ValueError("Broker source path is invalid")
-    try:
-        path.relative_to(boundary)
-    except ValueError as exc:
-        raise ValueError("Broker source path is outside its boundary") from exc
+    path.relative_to(boundary)
     if path == boundary:
         raise ValueError("Broker source path must be below its boundary")
     service_sid = _service_sid(service_name)
@@ -200,19 +194,13 @@ def _iter_acl_tree(root: Path) -> Iterator[tuple[Path, bool]]:
     pending = [resolved]
     while pending:
         directory = pending.pop()
-        try:
-            with os.scandir(directory) as iterator:
-                entries = sorted(iterator, key=lambda entry: entry.name.casefold(), reverse=True)
-        except OSError as exc:
-            raise OSError("Broker ACL tree could not be enumerated") from exc
+        with os.scandir(directory) as iterator:
+            entries = sorted(iterator, key=lambda entry: entry.name.casefold(), reverse=True)
         for entry in entries:
             child = Path(entry.path)
-            try:
-                if _is_reparse_point(child):
-                    continue
-                is_directory = entry.is_dir(follow_symlinks=False)
-            except OSError as exc:
-                raise OSError("Broker ACL tree entry could not be inspected") from exc
+            if _is_reparse_point(child):
+                continue
+            is_directory = entry.is_dir(follow_symlinks=False)
             yield child, is_directory
             if is_directory:
                 pending.append(child)
@@ -254,7 +242,10 @@ def _apply_acl_target(path: Path, sid_text: str, rights: str, *, inherit: bool) 
         # directory update into unrelated or linked descendants.
         _set_directory_dacl_direct(path, dacl)
     except Exception as exc:
-        raise OSError("Broker source ACL could not be configured") from exc
+        from .contracts import EXIT_FILESYSTEM_FAILED
+
+        exc.exit_code = EXIT_FILESYSTEM_FAILED
+        raise
 
 
 def _apply_source_acl_grant(grant: _SourceAclGrant) -> None:

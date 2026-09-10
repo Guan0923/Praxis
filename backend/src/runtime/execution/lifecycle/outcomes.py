@@ -8,6 +8,7 @@ from backend.domain import (
     AssistantMessage,
     RunStopReason,
     UserMessage,
+    error_report,
     redact_sensitive_text,
     safe_error_message,
 )
@@ -66,6 +67,8 @@ def fail_run(
     run.stop_reason = stop_reason
     run.final_answer = visible_message
     publish = runtime.services.publish or (lambda _event: None)
+    if isinstance(message, BaseException):
+        data["error_report"] = error_report(message)
     publish(RuntimeEvent("error", visible_message, dict(data)))
 
 

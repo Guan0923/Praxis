@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "../components/ErrorDisplay";
 import { useEffect, useState } from "react";
 import { Alert, App, Button, Card, Col, Collapse, Modal, Row, Select, Spin, Statistic, Tag, Typography } from "antd";
 import {
@@ -69,7 +70,7 @@ function ResultCard({ result, runId, taskRun }: { result: BenchmarkResult; runId
           styles={{ content: { color: scoreColor(score) } }}
         />
         <Tag color={statusColor}>评分：{statusLabel}</Tag>
-        {result.error && taskRun.status !== "cancelled" ? <Alert className="error-text" title={String(result.error)} type="error" showIcon /> : null}
+        {result.error && taskRun.status !== "cancelled" ? <Alert className="error-text" title={<ErrorDisplay error={result.error} report={result.error_report} />} type="error" showIcon /> : null}
         {failurePhase && taskRun.status !== "cancelled" ? <Typography.Text type="secondary">失败阶段：{PHASE_LABEL[failurePhase] ?? failurePhase}</Typography.Text> : null}
       </div>
       <Row className="result-metrics" gutter={[12, 12]}>
@@ -122,13 +123,13 @@ export default function BenchmarkPage({ active = true }: { active?: boolean }) {
   const [capabilityFilter, setCapabilityFilter] = useState("all");
   const planner = "llm" as const;
   const benchmark = useBenchmarkRuns(active);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<Error | string | null>(null);
 
   useEffect(() => {
     setTasksLoading(true);
     listTasks()
       .then(setTasks)
-      .catch((e) => setLoadError(String(e?.message ?? e)))
+      .catch((e) => setLoadError(e instanceof Error ? e : String(e)))
       .finally(() => setTasksLoading(false));
   }, []);
 
@@ -194,10 +195,10 @@ export default function BenchmarkPage({ active = true }: { active?: boolean }) {
         {isActive(batch.status) ? <Button icon={<StopOutlined />} danger disabled={batch.status === "stopping" || unavailable} loading={benchmark.pending.has(`stop:${batch.id}`)} onClick={() => void benchmark.stop(batch.id)}>停止整批</Button> : null}
       </div> : null}
       {benchmark.expired ? <Alert type="warning" showIcon title="后端已重启，上次运行记录已失效。" /> : null}
-      {benchmark.connectionError ? <Alert type="error" showIcon title={`连接异常：${benchmark.connectionError}`} /> : null}
-      {benchmark.actionError ? <Alert type="error" showIcon title={benchmark.actionError} /> : null}
+      {benchmark.connectionError ? <Alert type="error" showIcon title={<ErrorDisplay error={benchmark.connectionError} />} /> : null}
+      {benchmark.actionError ? <Alert type="error" showIcon title={<ErrorDisplay error={benchmark.actionError} />} /> : null}
 
-      {loadError ? <Alert className="error-text" title={loadError} type="error" showIcon /> : null}
+      {loadError ? <Alert className="error-text" title={<ErrorDisplay error={loadError} />} type="error" showIcon /> : null}
 
       {tasksLoading ? (
         <div className="benchmark-loading"><Spin description="正在加载基准任务…" /></div>
@@ -236,7 +237,7 @@ export default function BenchmarkPage({ active = true }: { active?: boolean }) {
                       资源：{RESOURCE_STATUS[resource?.status ?? "not_prepared"]}
                     </Tag>
                     {(busy || resource?.status === "error") && resource ? <span>{RESOURCE_PHASE[resource.phase] ?? "处理中"}</span> : null}
-                    {resource?.error ? <Alert type="error" showIcon title={resource.error} /> : null}
+                    {resource?.error ? <Alert type="error" showIcon title={<ErrorDisplay error={resource.error} report={resource.error_report} />} /> : null}
                   </div>
                   <Collapse
                     className="task-source"

@@ -10,7 +10,9 @@ import requests
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 
+from backend.api.error_handlers import error_response
 from backend.domain import DEFAULT_TIME_ZONE, validate_time_zone
+from backend.storage.settings.store import ActiveProviderConflict, ProviderConfigNotFound
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -149,7 +151,7 @@ def update_profile(body: ProfilePayload, request: Request) -> dict[str, str]:
     try:
         return _settings(request).update_profile(**body.model_dump())
     except ValueError as exc:
-        raise _value_error(exc) from exc
+        return error_response(exc, status_code=_value_error(exc).status_code)
 
 
 @router.put("/agent")
@@ -157,7 +159,7 @@ def update_agent(body: AgentConfigPayload, request: Request) -> dict[str, object
     try:
         return _settings(request).update_agent_config(body.model_dump())
     except ValueError as exc:
-        raise _value_error(exc) from exc
+        return error_response(exc, status_code=_value_error(exc).status_code)
 
 
 @router.put("/appearance")
@@ -170,7 +172,7 @@ def update_runtime(body: RuntimeConfigPayload, request: Request) -> dict[str, ob
     try:
         return _settings(request).update_runtime_config(body.model_dump())
     except ValueError as exc:
-        raise _value_error(exc) from exc
+        return error_response(exc, status_code=_value_error(exc).status_code)
 
 
 @router.put("/memory")
@@ -185,7 +187,7 @@ def update_memory(body: MemoryConfigPayload, request: Request) -> dict[str, obje
             request.app.state.web.memory_automation.wake()
         return result
     except ValueError as exc:
-        raise _value_error(exc) from exc
+        return error_response(exc, status_code=_value_error(exc).status_code)
 
 
 @router.put("/sandbox")
@@ -193,7 +195,7 @@ def update_sandbox(body: SandboxConfigPayload, request: Request) -> dict[str, ob
     try:
         return _settings(request).update_sandbox_config(body.model_dump())
     except ValueError as exc:
-        raise _value_error(exc) from exc
+        return error_response(exc, status_code=_value_error(exc).status_code)
 
 
 @router.put("/providers")
@@ -201,7 +203,7 @@ def update_active_provider(body: ProviderConfigPayload, request: Request) -> dic
     try:
         return _settings(request).update_provider_config(body.model_dump())
     except ValueError as exc:
-        raise _value_error(exc) from exc
+        return error_response(exc, status_code=_value_error(exc).status_code)
 
 
 @router.post("/providers", status_code=201)
@@ -209,7 +211,7 @@ def add_provider(body: ProviderConfigPayload, request: Request) -> dict[str, obj
     try:
         return _settings(request).add_provider_config(body.model_dump())
     except ValueError as exc:
-        raise _value_error(exc) from exc
+        return error_response(exc, status_code=_value_error(exc).status_code)
 
 
 @router.patch("/providers/{config_id}")
@@ -217,7 +219,9 @@ def patch_provider(config_id: str, body: ProviderConfigPatch, request: Request) 
     try:
         return _settings(request).update_provider_config_by_id(config_id, body.model_dump(exclude_none=True))
     except ValueError as exc:
-        raise _value_error(exc, not_found="not found" in str(exc)) from exc
+        return error_response(
+            exc, status_code=_value_error(exc, not_found=isinstance(exc, ProviderConfigNotFound)).status_code
+        )
 
 
 @router.put("/providers/{config_id}/active")
@@ -225,7 +229,7 @@ def activate_provider(config_id: str, request: Request) -> dict[str, object]:
     try:
         return _settings(request).activate_provider_config(config_id)
     except ValueError as exc:
-        raise _value_error(exc, not_found=True) from exc
+        return error_response(exc, status_code=_value_error(exc, not_found=True).status_code)
 
 
 @router.delete("/providers/{config_id}")
@@ -233,8 +237,8 @@ def delete_provider(config_id: str, request: Request) -> list[dict[str, object]]
     try:
         return _settings(request).delete_provider_config(config_id)
     except ValueError as exc:
-        status = 409 if "activate another" in str(exc) else 404
-        raise HTTPException(status_code=status, detail=str(exc)) from exc
+        status = 409 if isinstance(exc, ActiveProviderConflict) else 404
+        return error_response(exc, status_code=status, detail=str(exc))
 
 
 def _models_endpoint(base_url: str) -> str:
@@ -283,7 +287,7 @@ def discover_provider_models(body: ProviderModelDiscoveryPayload, request: Reque
         try:
             config = _settings(request).provider_config_for_discovery(body.config_id)
         except ValueError as exc:
-            raise HTTPException(status_code=503, detail="提供商密钥暂时不可用，请重新配置。") from exc
+            return error_response(exc, status_code=503, detail="提供商密钥暂时不可用，请重新配置。")
         if config is None:
             raise HTTPException(status_code=404, detail="provider configuration not found")
         protocol = str(config.get("protocol") or "chat_completions")
@@ -296,7 +300,7 @@ def discover_provider_models(body: ProviderModelDiscoveryPayload, request: Reque
     try:
         endpoint = _models_endpoint(base_url)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return error_response(exc, status_code=422, detail=str(exc))
     headers = {"Accept": "application/json"}
     if api_key:
         if protocol == "messages":
@@ -316,9 +320,9 @@ def discover_provider_models(body: ProviderModelDiscoveryPayload, request: Reque
     except HTTPException:
         raise
     except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail="获取模型列表失败，请检查 Base URL 和 API Key") from exc
+        return error_response(exc, status_code=502, detail="获取模型列表失败，请检查 Base URL 和 API Key")
     except ValueError as exc:
-        raise HTTPException(status_code=502, detail="模型服务返回的不是有效 JSON") from exc
+        return error_response(exc, status_code=502, detail="模型服务返回的不是有效 JSON")
     values = payload.get("data") if isinstance(payload, dict) else payload
     if not isinstance(values, list):
         values = payload.get("models") if isinstance(payload, dict) else []

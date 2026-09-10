@@ -116,6 +116,7 @@ class TaskResult:
     metrics: RunMetrics
     verdicts: list[CheckerVerdict]
     error: str | None = None
+    error_report: dict | None = None
     run_id: str | None = None
     passed: bool = False
     attempt: int = 1
@@ -135,6 +136,7 @@ class TaskResult:
                 for verdict in self.verdicts
             ],
             "error": self.error,
+            "error_report": self.error_report,
             "run_id": self.run_id,
             "passed": self.passed,
             "attempt": self.attempt,

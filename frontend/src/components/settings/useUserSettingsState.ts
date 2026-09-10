@@ -44,7 +44,7 @@ export function useUserSettingsState({
   const [saved, setSaved] = useState<UserSettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<Error | string>("");
   const [locationError, setLocationError] = useState("");
   const [providerAddDraft, setProviderAddDraft] = useState<ProviderDraft>(defaultProviderDraft);
   const [savedProviderAddDraft, setSavedProviderAddDraft] = useState<ProviderDraft>(defaultProviderDraft);
@@ -111,7 +111,7 @@ export function useUserSettingsState({
         setManagedModelQueries({});
         setManagedModelOpen({});
         setManagedModelFeedback({});
-        setError(cause instanceof Error ? cause.message : "设置加载失败。");
+        setError(cause instanceof Error ? cause : "设置加载失败。");
       })
       .finally(() => {
         if (mounted) setLoading(false);
@@ -231,7 +231,7 @@ export function useUserSettingsState({
       }
       message.success("保存成功");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "保存失败，请稍后重试。");
+      setError(cause instanceof Error ? cause : "保存失败，请稍后重试。");
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -300,10 +300,10 @@ export function useUserSettingsState({
         if (!settingsOpenRef.current) return;
         setManagedModelFeedback((current) => ({
           ...current,
-          [id]: { status: "error", message: cause instanceof Error ? cause.message : "获取模型列表失败。" },
+          [id]: { status: "error", message: cause instanceof Error ? cause : "获取模型列表失败。" },
         }));
       } else {
-        setError(cause instanceof Error ? cause.message : "获取模型列表失败。");
+        setError(cause instanceof Error ? cause : "获取模型列表失败。");
       }
     } finally {
       if (!managed || settingsOpenRef.current) setModelsLoading((current) => ({ ...current, [id]: false }));
@@ -350,7 +350,7 @@ export function useUserSettingsState({
       if (updated.is_active) onProviderConfigUpdate?.(updated);
       message.success("保存成功");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "保存提供商失败。");
+      setError(cause instanceof Error ? cause : "保存提供商失败。");
     } finally {
       setSaving(false);
     }
@@ -387,7 +387,7 @@ export function useUserSettingsState({
       setSaved((current) => current ? { ...current, provider_configs: providers, provider_config: active } : current);
       onProviderConfigUpdate?.(active);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "切换当前提供商失败。");
+      setError(cause instanceof Error ? cause : "切换当前提供商失败。");
     } finally {
       setSaving(false);
     }

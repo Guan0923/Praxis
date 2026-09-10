@@ -323,7 +323,7 @@ describe("useAgentThreadView", () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole("button", { name: "select child A" }));
 
-    await waitFor(() => expect(latestView?.streamError).toBe("Turn delta revision is not consecutive"));
+    await waitFor(() => expect(latestView?.streamError).toMatchObject({ message: "Turn delta revision is not consecutive" }));
     await waitFor(() => expect(api.streamAgentThread).toHaveBeenCalledTimes(2), { timeout: 2_000 });
     await waitFor(() => expect(latestView?.streamError).toBeNull());
     expect(screen.getByTestId("view-messages")).toHaveTextContent("child answer");

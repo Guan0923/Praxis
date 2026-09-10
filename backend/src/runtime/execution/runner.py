@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from time import perf_counter
 
 from backend.domain import (
@@ -11,9 +12,9 @@ from backend.domain import (
     SkillSnapshot,
     ToolSpec,
     UserMessage,
+    error_report,
     new_run_id,
     new_session_id,
-    safe_error_message,
 )
 from backend.jobs import JobRegistry, JobScope, JobScopeKind
 from backend.planning.base import ContextCompactor, TitleGenerator
@@ -25,7 +26,6 @@ from ..core.contracts import WorkflowModeChanged
 from ..core.events import RuntimeEvent
 from ..core.hooks import (
     HookErrorInfo,
-    HookExecutionError,
     HookOutcome,
     HookRejected,
     RunHookContext,
@@ -290,13 +290,16 @@ class AgentRunner:
                 else:
                     self._dispatch(runtime)
             except Exception as error:
-                after_run_hook_manager.execute(
-                    RunHookContext(
-                        info,
-                        HookOutcome(status="failed", error=HookErrorInfo.from_exception(error)),
-                    ),
-                    publish,
-                )
+                try:
+                    after_run_hook_manager.execute(
+                        RunHookContext(
+                            info,
+                            HookOutcome(status="failed", error=HookErrorInfo.from_exception(error)),
+                        ),
+                        publish,
+                    )
+                except Exception as cleanup_error:
+                    logging.getLogger(__name__).error("After-run hook also failed: %s", error_report(cleanup_error))
                 raise
             outcome = HookOutcome(
                 status=(
@@ -311,14 +314,16 @@ class AgentRunner:
             after_run_hook_manager.execute(RunHookContext(info, outcome), publish)
         except HookRejected as exc:
             cancel_run(runtime, message=exc.reason)
-        except HookExecutionError as exc:
+        except Exception as exc:
+            if not getattr(exc, "hook", None):
+                raise
             fail_run(
                 runtime,
-                safe_error_message(exc),
-                hook=exc.hook,
-                lifecycle=exc.lifecycle,
-                phase=exc.phase,
-                error_type=exc.error_type,
+                exc,
+                hook=getattr(exc, "hook", ""),
+                lifecycle=getattr(exc, "lifecycle", ""),
+                phase=getattr(exc, "phase", ""),
+                error_type=type(exc).__name__,
             )
         return self._finish(runtime, started_at=started_at)
 

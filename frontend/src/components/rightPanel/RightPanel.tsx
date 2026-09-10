@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "../ErrorDisplay";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { App, Button, Dropdown, Empty, Input, Space, Tabs, Tooltip, Typography, type TabsProps } from "antd";
 import { CloseOutlined, CommentOutlined, FileOutlined, PlusOutlined, ProductOutlined } from "@ant-design/icons";
@@ -222,12 +223,12 @@ export default function RightPanel({
   const [titleDraft, setTitleDraft] = useState("");
   const payload = controller.payload;
   const run = (kind: "side_chat" | "terminal" | "files") => void controller.createWindow(kind).catch((error) => {
-    void message.error(String((error as Error).message ?? error));
+    void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
   });
   const saveTitle = (window: RightPanelWindow) => {
     setEditingId(null);
     void controller.renameWindow(window, titleDraft).catch((error) => {
-      void message.error(String((error as Error).message ?? error));
+      void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
     });
   };
   const tabs = (payload?.windows ?? []).map((window) => ({
@@ -307,7 +308,7 @@ export default function RightPanel({
         if (window) void (async () => {
           if (window.kind === "files" && !await allowFilePanelClose(window.id)) return;
           await controller.closeWindow(window);
-        })().catch((error) => void message.error(String((error as Error).message ?? error)));
+        })().catch((error) => void message.error({ content: <ErrorDisplay error={error} />, duration: 0 }));
       }}
     />
   );

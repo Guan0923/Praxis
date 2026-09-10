@@ -285,6 +285,7 @@ export function updateSandboxConfig(config: SandboxConfig): Promise<SandboxConfi
 }
 
 export interface SandboxBrokerStatus {
+  error_report?: import("./errorReport").ErrorReport | null;
   installed: boolean;
   healthy: boolean;
   code?: string | null;

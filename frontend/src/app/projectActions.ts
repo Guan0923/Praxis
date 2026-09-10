@@ -22,7 +22,7 @@ interface ProjectActionsContext {
   setConversations: Dispatch<SetStateAction<Conversation[]>>;
   setCurrentId: Dispatch<SetStateAction<string | null>>;
   setPage: Dispatch<SetStateAction<Page>>;
-  setActionError: Dispatch<SetStateAction<string | null>>;
+  setActionError: Dispatch<SetStateAction<Error | string | null>>;
   refreshSessions: () => Promise<void>;
 }
 
@@ -63,7 +63,7 @@ export function createProjectActions(context: ProjectActionsContext) {
       setCurrentId(conversation.id);
       setPage("chat");
     } catch (error) {
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
     } finally {
       newProjectPending = false;
       setProjectLoading(false);
@@ -99,7 +99,7 @@ export function createProjectActions(context: ProjectActionsContext) {
       setCurrentId(conversation.id);
       setPage("chat");
     } catch (error) {
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
     } finally {
       projectConversationPending.delete(projectId);
     }
@@ -112,7 +112,7 @@ export function createProjectActions(context: ProjectActionsContext) {
       setProjects((previous) => previous.filter((item) => item.project_id !== projectId));
       setRemovedProjects(await listProjects("removed").catch(() => []));
     } catch (error) {
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
     }
   }
 
@@ -122,7 +122,7 @@ export function createProjectActions(context: ProjectActionsContext) {
       const updated = await renameProject(projectId, name);
       setProjects((previous) => previous.map((item) => item.project_id === projectId ? updated : item));
     } catch (error) {
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
       throw error;
     }
   }
@@ -134,7 +134,7 @@ export function createProjectActions(context: ProjectActionsContext) {
       if (!updated) return;
       setProjects((previous) => previous.map((item) => item.project_id === projectId ? updated : item));
     } catch (error) {
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
       throw error;
     }
   }
@@ -144,7 +144,7 @@ export function createProjectActions(context: ProjectActionsContext) {
     try {
       await revokeProjectSkillTrust(projectId);
     } catch (error) {
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
       throw error;
     }
   }
@@ -157,7 +157,7 @@ export function createProjectActions(context: ProjectActionsContext) {
       setRemovedProjects((previous) => previous.filter((item) => item.project_id !== projectId));
       await refreshSessions();
     } catch (error) {
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
     }
   }
 

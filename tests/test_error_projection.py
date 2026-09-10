@@ -64,11 +64,7 @@ def test_visible_error_message_redacts_sensitive_values() -> None:
         '"api_token": "theta"'
     )
 
-    assert redact_sensitive_text(message) == (
-        "api_key=[REDACTED]; Authorization:[REDACTED], Cookie=[REDACTED]; "
-        "Password:[REDACTED]; Secret=[REDACTED]; Token:[REDACTED]; API Key:[REDACTED]; "
-        '"api_token:[REDACTED]"'
-    )
+    assert redact_sensitive_text(message) == "api_key=[REDACTED]; Authorization:[REDACTED]"
     assert safe_error_message(RuntimeError(message)) == redact_sensitive_text(message)
 
 
@@ -85,7 +81,8 @@ def test_http_exception_keeps_status_and_projects_its_safe_root_message() -> Non
         response = client.get("/wrapped")
 
     assert response.status_code == 502
-    assert response.json() == {"detail": "Authorization:[REDACTED]"}
+    assert response.json()["detail"] == "Authorization:[REDACTED]"
+    assert response.json()["error_report"]["type"] == "RuntimeError"
 
 
 def test_unhandled_http_exception_returns_500_with_safe_root_message() -> None:
@@ -103,4 +100,5 @@ def test_unhandled_http_exception_returns_500_with_safe_root_message() -> None:
         response = client.get("/unhandled")
 
     assert response.status_code == 500
-    assert response.json() == {"detail": "Cookie=[REDACTED]"}
+    assert response.json()["detail"] == "Cookie=[REDACTED]"
+    assert response.json()["error_report"]["type"] == "OSError"

@@ -1,3 +1,4 @@
+import { apiErrorFrom } from "../transport/request";
 import type {
   AgentThreadMessageResponse,
   AgentThreadStreamEvent,
@@ -8,7 +9,7 @@ import type {
   RuntimeConfigModel,
 } from "../../types";
 import { apiUrl } from "../transport/base";
-import { ApiError, errorFrom, requestJson } from "../transport/request";
+import { ApiError, requestJson } from "../transport/request";
 
 export async function listAgentThreadChildren(
   sessionId: string,
@@ -71,7 +72,7 @@ export async function streamAgentThread(
     if ((error as Error).name === "AbortError" || signal.aborted) return "aborted";
     throw error;
   }
-  if (!response.ok || !response.body) throw new ApiError(response.status, await errorFrom(response));
+  if (!response.ok || !response.body) throw await apiErrorFrom(response);
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

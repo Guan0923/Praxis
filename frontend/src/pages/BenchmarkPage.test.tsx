@@ -231,7 +231,7 @@ describe("BenchmarkPage layout and runs", () => {
     render(<BenchmarkPage />);
     await screen.findByText("评分：未通过");
     mocks.listBenchmarkRuns.mockRejectedValueOnce(new Error("offline"));
-    expect(await screen.findByText("连接异常：offline", {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(await screen.findByText("offline", {}, { timeout: 3000 })).toBeInTheDocument();
     expect(screen.getByText("评分：未通过")).toBeInTheDocument();
     snapshot = { instance_id: "backend-two", runs: [] };
     expect(await screen.findByText("后端已重启，上次运行记录已失效。", {}, { timeout: 3000 })).toBeInTheDocument();
@@ -271,7 +271,7 @@ describe("BenchmarkPage layout and runs", () => {
     }));
     render(<BenchmarkPage />);
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
-    expect(screen.getByText("连接异常：状态查询超时，正在重新连接。")).toBeInTheDocument();
+    expect(screen.getByText("状态查询超时，正在重新连接。")).toBeInTheDocument();
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(mocks.listBenchmarkRuns).toHaveBeenCalledTimes(2);
     expect(mocks.runBenchmark).not.toHaveBeenCalled();

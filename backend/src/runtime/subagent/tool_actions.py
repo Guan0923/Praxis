@@ -15,7 +15,6 @@ from backend.domain import (
     RuntimeThread,
     ThreadContext,
     ThreadNode,
-    safe_error_message,
 )
 from backend.domain.file_paths import ScopedPaths
 from backend.domain.runtime_state import (
@@ -166,8 +165,8 @@ class _SubagentToolActionsMixin:
                 runtime.state.session_id,
                 AgentThreadCreate(runtime_thread, node, context, turn, source_id),
             )
-        except Exception as exc:
-            raise ToolError(safe_error_message(exc)) from exc
+        except Exception:
+            raise
 
         channel = runtime.services.interrupt
         if channel is not None:
@@ -284,8 +283,8 @@ class _SubagentToolActionsMixin:
                 raise ToolError("Every reference requires a non-empty file path.")
             try:
                 resolved = paths.resolve(raw_path)
-            except ValueError as exc:
-                raise ToolError(str(exc)) from exc
+            except ValueError:
+                raise
             if not resolved.is_file():
                 raise ToolError(f"Referenced path is not a file: {paths.format(resolved)}")
             references.append({"path": paths.format(resolved)})

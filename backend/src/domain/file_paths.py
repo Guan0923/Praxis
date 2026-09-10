@@ -51,8 +51,8 @@ class ScopedPaths:
                 info = current.lstat()
             except FileNotFoundError:
                 continue
-            except OSError as exc:
-                raise ValueError("Unable to inspect file path.") from exc
+            except OSError:
+                raise
             if stat.S_ISLNK(info.st_mode) or int(getattr(info, "st_file_attributes", 0)) & 0x400:
                 raise ValueError("Symbolic links and reparse points are not supported.")
 
@@ -92,8 +92,8 @@ class ScopedPaths:
             self.reject_links(lexical, root)
             try:
                 resolved = lexical.resolve()
-            except (OSError, RuntimeError) as exc:
-                raise ValueError("Unable to resolve file path.") from exc
+            except (OSError, RuntimeError):
+                raise
             if not resolved.is_relative_to(root.resolve()):
                 continue
             if resolved == root.resolve() and not allow_root:

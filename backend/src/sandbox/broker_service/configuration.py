@@ -33,7 +33,7 @@ class BrokerConfiguration:
         if installation_id is None:
             try:
                 persisted_id = (resolved_program_data / "installation.id").read_text(encoding="ascii").strip()
-            except OSError:
+            except FileNotFoundError:
                 persisted_id = ""
             installation_id = persisted_id or f"install-{uuid.uuid4().hex}"
         return cls(
@@ -75,7 +75,7 @@ class BrokerConfiguration:
         self.program_data.mkdir(parents=True, exist_ok=True)
         try:
             existing = self.installation_id_path.read_text(encoding="ascii").strip()
-        except OSError:
+        except FileNotFoundError:
             existing = ""
         if existing:
             if existing != self.installation_id:

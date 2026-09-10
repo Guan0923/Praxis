@@ -63,7 +63,7 @@ function isToolApproval(item: TurnItem): boolean {
 }
 
 function isHiddenChatError(item: TurnItem): boolean {
-  return item.type === "error"
+  return item.type === "error" && !item.error_report
     && (item.code === "ModelTransportError" || item.message === LEGACY_UNKNOWN_ERROR);
 }
 

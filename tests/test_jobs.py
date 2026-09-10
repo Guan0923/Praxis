@@ -375,7 +375,7 @@ class TestErrorSafety:
         job._mark_failed(OSError("boom"))
         assert isinstance(job.info().error, str)
 
-    def test_injected_formatter_output_is_written_to_job_info(self) -> None:
+    def test_report_keeps_original_error_instead_of_formatter_replacement(self) -> None:
         class RecordingFormatter:
             def __init__(self) -> None:
                 self.calls: list[BaseException] = []
@@ -389,9 +389,10 @@ class TestErrorSafety:
         job.start()
         job._mark_failed(RuntimeError("sensitive detail"))
         info = job.info()
-        assert info.error == "redacted:RuntimeError"
-        assert len(formatter.calls) == 1
-        assert isinstance(formatter.calls[0], RuntimeError)
+        assert info.error == "sensitive detail"
+        assert info.error_report["type"] == "RuntimeError"
+        assert info.error_report["message"] == "sensitive detail"
+        assert not formatter.calls
 
     def test_cancel_reason_never_enters_job_info_error(self) -> None:
         job = make_job()

@@ -11,6 +11,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
 
+from backend.api.error_handlers import error_response
 from backend.configuration import LocalConfigStore
 from backend.skills.trust import ProjectSkillTrustStore
 from backend.storage.projects import Project, ProjectStore
@@ -99,7 +100,7 @@ def list_projects(
         store = _project_store(request)
         return [_project_payload(item, store) for item in store.list(state)]
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return error_response(exc, status_code=400, detail=str(exc))
 
 
 @router.post("/projects", response_model=None)
@@ -107,9 +108,9 @@ def create_project(request: Request) -> Response | dict[str, object]:
     try:
         selected = _pick_directory(request)
     except DirectoryPickerBusyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return error_response(exc, status_code=409, detail=str(exc))
     except OSError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return error_response(exc, status_code=503, detail=str(exc))
     if selected is None:
         return Response(status_code=204)
     store = _project_store(request)
@@ -140,11 +141,11 @@ def create_project(request: Request) -> Response | dict[str, object]:
         payload["project_id"] = project.project_id
         return {"project": _project_payload(project, store), "session": payload}
     except RuntimeError as exc:
-        raise _mutation_error(exc) from exc
+        return error_response(exc, status_code=_mutation_error(exc).status_code)
     except (OSError, ValueError) as exc:
-        raise _mutation_error(exc) from exc
+        return error_response(exc, status_code=_mutation_error(exc).status_code)
     except Exception as exc:
-        raise _mutation_error(exc) from exc
+        return error_response(exc, status_code=_mutation_error(exc).status_code)
 
 
 @router.post("/projects/{project_id}/sessions")
@@ -182,11 +183,11 @@ def create_project_session(
         payload["project_id"] = project.project_id
         return {"project": _project_payload(project, projects), "session": payload}
     except RuntimeError as exc:
-        raise _mutation_error(exc) from exc
+        return error_response(exc, status_code=_mutation_error(exc).status_code)
     except (OSError, ValueError) as exc:
-        raise _mutation_error(exc) from exc
+        return error_response(exc, status_code=_mutation_error(exc).status_code)
     except Exception as exc:
-        raise _mutation_error(exc) from exc
+        return error_response(exc, status_code=_mutation_error(exc).status_code)
 
 
 @router.post("/projects/{project_id}/remove")
@@ -202,7 +203,7 @@ def remove_project(
     try:
         return _project_payload(projects.remove(project_id), projects)
     except Exception as exc:
-        raise _mutation_error(exc) from exc
+        return error_response(exc, status_code=_mutation_error(exc).status_code)
 
 
 @router.patch("/projects/{project_id}")
@@ -215,9 +216,9 @@ def rename_project(
         project = _project_store(request).rename(project_id, body.name)
         return _project_payload(project, _project_store(request))
     except ValueError as exc:
-        raise _mutation_error(exc) from exc
+        return error_response(exc, status_code=_mutation_error(exc).status_code)
     except Exception as exc:
-        raise _mutation_error(exc) from exc
+        return error_response(exc, status_code=_mutation_error(exc).status_code)
 
 
 @router.post("/projects/{project_id}/path", response_model=None)
@@ -233,9 +234,9 @@ def change_project_path(
     try:
         selected = _pick_directory(request)
     except DirectoryPickerBusyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return error_response(exc, status_code=409, detail=str(exc))
     except OSError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return error_response(exc, status_code=503, detail=str(exc))
     if selected is None:
         return Response(status_code=204)
     _ensure_project_idle(request, project_id)
@@ -243,9 +244,9 @@ def change_project_path(
         updated = store.update_cwd(project_id, selected)
         return _project_payload(updated, store)
     except ValueError as exc:
-        raise _mutation_error(exc) from exc
+        return error_response(exc, status_code=_mutation_error(exc).status_code)
     except Exception as exc:
-        raise _mutation_error(exc) from exc
+        return error_response(exc, status_code=_mutation_error(exc).status_code)
 
 
 @router.post("/projects/{project_id}/restore")
@@ -257,7 +258,7 @@ def restore_project(
         store = _project_store(request)
         return _project_payload(store.restore(project_id), store)
     except Exception as exc:
-        raise _mutation_error(exc) from exc
+        return error_response(exc, status_code=_mutation_error(exc).status_code)
 
 
 def _workspace_sha256(cwd: str) -> str:

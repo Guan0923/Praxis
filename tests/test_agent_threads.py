@@ -1451,7 +1451,8 @@ def test_agent_thread_message_returns_503_when_redis_is_unavailable(tmp_path: Pa
                 json={"session_id": sidebar["session_id"], "content": "must fail closed"},
             )
             assert response.status_code == 503
-            assert response.json() == {"detail": "redis unavailable"}
+            assert response.json()["detail"] == "redis unavailable"
+            assert response.json()["error_report"]["type"] == "MessageQueueUnavailable"
     finally:
         state.close()
 
@@ -2524,7 +2525,8 @@ def test_send_agent_message_reference_boundaries_and_symlink_escape(tmp_path: Pa
             ({"path": str(outside_file)}, "approved workspace"),
         )
         for reference, message in invalid_references:
-            with pytest.raises(ToolError, match=message):
+            expected = ToolError if message == "not a file" else ValueError
+            with pytest.raises(expected, match=message):
                 coordinator.invoke(
                     runtime,
                     "send_agent_message",
@@ -2541,7 +2543,7 @@ def test_send_agent_message_reference_boundaries_and_symlink_escape(tmp_path: Pa
         except OSError:
             link = None
         if link is not None:
-            with pytest.raises(ToolError, match="Symbolic links"):
+            with pytest.raises(ValueError, match="Symbolic links"):
                 coordinator.invoke(
                     runtime,
                     "send_agent_message",

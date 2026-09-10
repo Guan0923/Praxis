@@ -17,7 +17,13 @@ def _terminal_sse(payload: dict[str, object]) -> str:
     terminal_id = html.escape(str(payload.get("terminal_id") or "unknown"), quote=True)
     terminal_type = html.escape(str(payload.get("terminal_type") or "failed"), quote=True)
     message = html.escape(str(payload.get("message") or ""), quote=False)
-    return f'data: <SSE id="{terminal_id}" type="{terminal_type}">{message}</SSE>\n\n'
+    report = payload.get("error_report")
+    prefix = (
+        "data: " + json.dumps({"type": "turn.error", "error_report": report}, ensure_ascii=False) + "\n\n"
+        if report
+        else ""
+    )
+    return prefix + f'data: <SSE id="{terminal_id}" type="{terminal_type}">{message}</SSE>\n\n'
 
 
 @dataclass
@@ -123,13 +129,20 @@ class ActiveTurnStream:
                 )
                 subscription.events.put(self._frame_projector(local_frame, current))
 
-    def publish_terminal(self, terminal_type: str, terminal_id: str, message: str = "") -> None:
+    def publish_terminal(
+        self, terminal_type: str, terminal_id: str, message: str = "", error_report: object = None
+    ) -> None:
         terminal = {
             "type": "terminal",
             "terminal_type": terminal_type,
             "terminal_id": terminal_id,
             "message": message,
         }
+        from backend.domain import normalize_error_report
+
+        report = normalize_error_report(error_report)
+        if report is not None:
+            terminal["error_report"] = report
         with self._lock:
             if self._terminal is not None:
                 return

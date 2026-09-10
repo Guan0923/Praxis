@@ -10,6 +10,7 @@ atomically so a failed batch never leaves partial files behind.
 
 from __future__ import annotations
 
+import logging
 import mimetypes
 import os
 import re
@@ -24,6 +25,7 @@ from uuid import uuid4
 from send2trash import send2trash
 
 from backend.configuration import ClientPaths, ConfigurationError
+from backend.domain import error_report
 from backend.domain.file_paths import FILE_SOURCES, ScopedPaths
 
 MAX_FILES_PER_BATCH = 20
@@ -53,6 +55,10 @@ _TRAILING_DOTS_SPACES = re.compile(r"[. ]+$")
 
 class SessionFileError(ValueError):
     """A session file operation was rejected or failed."""
+
+
+class SessionFileNotFound(SessionFileError):
+    """The file reference is missing or invalid."""
 
 
 class SessionFileConflict(SessionFileError):
@@ -87,7 +93,8 @@ class SessionFileStore:
         try:
             self._paths.ensure_session(self._session_id)
         except ConfigurationError as exc:
-            raise SessionFileError("上传目录不可用。") from exc
+            exc.api_status_code = 400
+            raise
         return self._paths.session_uploads(self._session_id)
 
     def project_root(self) -> Path | None:
@@ -185,7 +192,7 @@ class SessionFileStore:
         if resolved != root.resolve() and root.resolve() not in resolved.parents:
             raise SessionFileError("文件路径超出允许范围。")
         if not resolved.exists():
-            raise SessionFileError("文件或目录不存在。")
+            raise SessionFileNotFound("文件或目录不存在。")
         return resolved
 
     @staticmethod
@@ -199,7 +206,7 @@ class SessionFileStore:
             raise SessionFileError("名称不能为空。")
         value = name.strip()
         if value in {".", ".."} or _WINDOWS_RESERVED.search(value) or _TRAILING_DOTS_SPACES.search(value):
-            raise SessionFileError("名称包含无效字符。")
+            raise SessionFileNotFound("名称包含无效字符。")
         if len(value) > 200:
             raise SessionFileError("名称不能超过 200 个字符。")
         return value
@@ -374,14 +381,17 @@ class SessionFileStore:
             os.chmod(temporary, mode)
             os.replace(temporary, resolved)
         except OSError as exc:
-            temporary.unlink(missing_ok=True)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                logging.getLogger(__name__).warning("File rollback failed: %s", error_report(cleanup_error))
             raise SessionFileError("文件保存失败。") from exc
         return self.read_editor_file(source, self._scoped(resolved, source), canonical)
 
     def create_entry(self, source: str, parent_path: str, name: str, kind: str) -> dict[str, object]:
         parent = self._resolve_entry(source, parent_path, allow_root=True)
         if not parent.is_dir():
-            raise SessionFileError("目标父目录无效。")
+            raise SessionFileNotFound("目标父目录无效。")
         target = parent / self._validate_entry_name(name)
         if target.exists() or target.is_symlink():
             raise SessionFileError("同名文件或目录已存在。")
@@ -457,11 +467,17 @@ class SessionFileStore:
                 try:
                     shutil.rmtree(current) if current.is_dir() else current.unlink()
                 except OSError:
-                    shutil.rmtree(target) if target.is_dir() else target.unlink(missing_ok=True)
+                    try:
+                        shutil.rmtree(target) if target.is_dir() else target.unlink(missing_ok=True)
+                    except OSError as cleanup_error:
+                        logging.getLogger(__name__).warning("Move rollback failed: %s", error_report(cleanup_error))
                     raise
         except (OSError, shutil.Error) as exc:
-            if temporary is not None and temporary.exists():
-                shutil.rmtree(temporary) if temporary.is_dir() else temporary.unlink(missing_ok=True)
+            try:
+                if temporary is not None and temporary.exists():
+                    shutil.rmtree(temporary) if temporary.is_dir() else temporary.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                logging.getLogger(__name__).warning("Move staging cleanup failed: %s", error_report(cleanup_error))
             raise SessionFileError("移动失败。") from exc
         return {
             "source": target_source,
@@ -522,12 +538,14 @@ class SessionFileStore:
                 renamed.append(target)
             return [self.metadata(path, "upload") for path in renamed]
         except Exception:
+            cleanup_paths = {path for path, _filename in staged} | set(renamed)
             if current_temporary is not None:
-                current_temporary.unlink(missing_ok=True)
-            for temporary, _filename in staged:
-                temporary.unlink(missing_ok=True)
-            for path in renamed:
-                path.unlink(missing_ok=True)
+                cleanup_paths.add(current_temporary)
+            for path in cleanup_paths:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    logging.getLogger(__name__).warning("Upload rollback failed: %s", error_report(cleanup_error))
             raise
 
     def search(self, q: str, limit: int = 20) -> list[dict[str, object]]:
@@ -620,7 +638,7 @@ class SessionFileStore:
         if resolved != root and root not in resolved.parents:
             raise SessionFileError("文件路径超出允许范围。")
         if not resolved.is_file():
-            raise SessionFileError("引用的文件不存在。")
+            raise SessionFileNotFound("引用的文件不存在。")
         return resolved
 
     def normalize_references(self, values: Sequence[Mapping[str, object]]) -> list[dict[str, str]]:
@@ -632,7 +650,7 @@ class SessionFileStore:
             source = value.get("source")
             path = value.get("path")
             if source not in FILE_SOURCES or not isinstance(path, str) or not path:
-                raise SessionFileError("无效的文件引用。")
+                raise SessionFileNotFound("无效的文件引用。")
             resolved = self.resolve(str(source), path)
             canonical_source = (
                 "upload" if resolved.is_relative_to(self._paths.session_uploads(self._session_id)) else str(source)

@@ -43,6 +43,7 @@ export interface BenchmarkResult {
   metrics?: Record<string, unknown>;
   verdicts?: Array<Record<string, unknown>>;
   error?: string | null;
+  error_report?: import("../api/errorReport").ErrorReport | null;
   run_id?: string | null;
   passed?: boolean;
   attempt?: number;

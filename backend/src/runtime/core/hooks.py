@@ -29,24 +29,6 @@ from .hook_contracts import (
 )
 
 
-class HookExecutionError(RuntimeError):
-    """Stable error raised when one registered operation fails."""
-
-    def __init__(
-        self,
-        lifecycle: HookLifecycle,
-        phase: HookPhase,
-        operation: str,
-        error: Exception,
-    ) -> None:
-        super().__init__(safe_error_message(error))
-        self.lifecycle = lifecycle
-        self.phase = phase
-        self.operation = operation
-        self.hook = operation
-        self.error_type = error.__class__.__name__
-
-
 class HookRejected(RuntimeError):
     """Raised by a lifecycle boundary when its before manager rejects."""
 
@@ -117,7 +99,10 @@ class SequentialHookManager(HookManager):
                         },
                     )
                 )
-                raise HookExecutionError(self.lifecycle, self.phase, name, error) from error
+                error.hook = name
+                error.lifecycle = self.lifecycle
+                error.phase = self.phase
+                raise
             accumulated.update(result.data)
             emit(
                 RuntimeEvent(
@@ -158,7 +143,6 @@ before_tool_hook_manager.register(sandbox_operation)
 
 __all__ = [
     "HookErrorInfo",
-    "HookExecutionError",
     "HookManager",
     "HookOperation",
     "HookOperationResult",

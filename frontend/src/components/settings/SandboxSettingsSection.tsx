@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ErrorDisplay } from "../ErrorDisplay";
 import { Alert, Button, Col, Form, Input, InputNumber, Popconfirm, Row, Select, Space, Tag, Typography } from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import type { SandboxLimits, SandboxNetworkRule } from "../../api";
@@ -130,10 +131,10 @@ export function SandboxSettingsSection({ state }: SectionProps) {
         <Alert
           type="error"
           showIcon
-          title={brokerErrorTitle(state.sandboxHealth.code, state.sandboxHealth.installed)}
+          title={state.sandboxHealth.error_report ? undefined : brokerErrorTitle(state.sandboxHealth.code, state.sandboxHealth.installed)}
           description={(
             <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-              {state.sandboxHealth.detail}
+              <ErrorDisplay error={state.sandboxHealth.detail} report={state.sandboxHealth.error_report} />
             </div>
           )}
           style={{ marginBottom: 16 }}

@@ -13,9 +13,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend.domain import safe_error_message
-
-from ..error_handlers import install_error_handlers
+from ..error_handlers import error_response, install_error_handlers
 from ..jsonl import jsonl_download
 from ..state import WebAppState
 
@@ -53,17 +51,17 @@ def _start(request: Request, tasks: Sequence[BenchmarkTask], planner: str) -> di
     try:
         service.resources.ensure_ready(tasks)
     except ResourceConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return error_response(exc, status_code=409)
     try:
         model_config = request.app.state.web.model_config()
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"模型未配置：{safe_error_message(exc)}") from exc
+        return error_response(exc, status_code=422)
     try:
         return service.start(tasks, planner, model_config)
     except (BenchmarkConflict, ResourceConflict) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return error_response(exc, status_code=409)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return error_response(exc, status_code=422)
 
 
 # Mounted at /benchmark by the main app, so the router carries no prefix.
@@ -88,7 +86,7 @@ def _resource_operation(name: str, action: str, request: Request) -> dict:
     try:
         return _service(request).resource_operation(task, action)
     except (ResourceConflict, BenchmarkConflict) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return error_response(exc, status_code=409)
 
 
 @router.post("/tasks/{name}/resources", status_code=202)

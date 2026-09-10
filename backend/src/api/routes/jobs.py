@@ -80,6 +80,7 @@ def _public(info: Any) -> dict[str, object]:
         "queued_at": _iso(info.queued_at),
         "admitted_at": _iso(info.admitted_at),
         "error": job.error,
+        "error_report": job.error_report,
         "exit_code": job.exit_code,
         "cancel_requested": job.cancel_requested_at is not None,
         "cancellable": cancellable,

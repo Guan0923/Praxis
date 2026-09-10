@@ -16,7 +16,7 @@ from itertools import islice
 from pathlib import Path
 from uuid import uuid4
 
-from backend.configuration import ClientPaths, ConfigurationError
+from backend.configuration import ClientPaths
 from backend.domain.memory import (
     EpisodicMemoryRecord,
     MemoryCandidate,
@@ -997,10 +997,7 @@ class MemoryStore:
                 connection.close()
 
     def _ensure_schema(self) -> None:
-        try:
-            self.paths.ensure_memories()
-        except ConfigurationError as exc:
-            raise MemoryStorageError(str(exc)) from exc
+        self.paths.ensure_memories()
         self._validate_existing_paths()
         if self._schema_ready and self.paths.memory_db.is_file():
             return
@@ -1376,10 +1373,7 @@ def _fts_query(value: str) -> str:
 def _parse_or_now(value: str | None) -> datetime:
     if value is None:
         return datetime.now(UTC)
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError as exc:
-        raise ValueError("now must be an ISO-8601 timestamp.") from exc
+    parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
         raise ValueError("now must include a time zone.")
     return parsed.astimezone(UTC)

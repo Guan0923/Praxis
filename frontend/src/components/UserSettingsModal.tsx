@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "./ErrorDisplay";
 import { Button, Menu, Modal, Space, Spin, Typography } from "antd";
 import {
   AgentSettingsSection,
@@ -54,7 +55,7 @@ export default function UserSettingsModal(props: UserSettingsModalProps) {
         {state.section === "memory" ? <MemorySettingsSection /> : null}
         {state.section === "provider_add" ? <ProviderAddSection state={state} /> : null}
         {state.section === "provider_manage" ? <ProviderManageSection state={state} /> : null}
-        {state.error ? <Typography.Text type="danger">{state.error}</Typography.Text> : null}
+        {state.error ? <ErrorDisplay error={state.error} /> : null}
       </section>
     </div>
   );

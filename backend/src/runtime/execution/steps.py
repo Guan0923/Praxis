@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from threading import RLock
 from time import perf_counter
 
-from backend.domain import safe_error_message
+from backend.domain import error_report, safe_error_message
 from backend.sandbox import SandboxExecutionDecision
 from backend.tools import ToolError, ToolInvocationContext
 
@@ -23,6 +23,11 @@ from ..core.hooks import (
     after_tool_hook_manager,
     before_tool_hook_manager,
 )
+
+
+class ToolQueueTimeout(ToolError):
+    """A tool did not receive an execution slot before its deadline."""
+
 
 USER_DENIED_FAILURE_CODE = "user_denied"
 USER_DENIED_BATCH_FAILURE_CODE = "user_denied_batch"
@@ -93,7 +98,7 @@ class ToolStepExecutor:
             if callable(validate):
                 validate(tool, tool_message.arguments)
         except ToolError as exc:
-            return self._failure(runtime, message, index, tool, safe_error_message(exc), commit_lock=lock)
+            return self._failure(runtime, message, index, tool, exc, commit_lock=lock)
 
         context = ToolHookContext(
             run=RunHookInfo(runtime.state.session_id, run.run_id, run.task, run.mode),
@@ -161,14 +166,13 @@ class ToolStepExecutor:
                     cancel_requested=cancel_requested or runtime.operation_interrupted,
                 )
         except ToolError as exc:
-            error = safe_error_message(exc)
-            failure_code = "tool_queue_timeout" if "queue timed out" in error.casefold() else "tool_batch_interrupted"
+            failure_code = "tool_queue_timeout" if isinstance(exc, ToolQueueTimeout) else "tool_batch_interrupted"
             result = self._failure(
                 runtime,
                 message,
                 index,
                 tool,
-                error,
+                exc,
                 retryable=False,
                 failure_code=failure_code,
                 commit_lock=lock,
@@ -271,7 +275,7 @@ class ToolStepExecutor:
                 message,
                 index,
                 tool,
-                safe_error_message(exc),
+                exc,
                 retryable=False if cancel_requested() else retryable,
                 duration_ms=round((perf_counter() - started_at) * 1000, 3),
                 commit_lock=commit_lock,
@@ -284,7 +288,7 @@ class ToolStepExecutor:
                 message,
                 index,
                 tool,
-                safe_error_message(exc),
+                exc,
                 retryable=retryable,
                 duration_ms=round((perf_counter() - started_at) * 1000, 3),
                 commit_lock=commit_lock,
@@ -342,13 +346,15 @@ class ToolStepExecutor:
         message,
         index: int | None,
         tool: str,
-        error: str,
+        error: str | BaseException,
         *,
         retryable: bool | None = None,
         duration_ms: float | None = None,
         failure_code: str | None = None,
         commit_lock: RLock | None = None,
     ) -> ToolStepResult:
+        report = error_report(error) if isinstance(error, BaseException) else None
+        error = safe_error_message(error) if isinstance(error, BaseException) else error
         call_id = ""
         lock = commit_lock or RLock()
         with lock:
@@ -362,6 +368,8 @@ class ToolStepExecutor:
                 current.failure_code = failure_code
                 current.execution_stage = "failed"
             data: dict[str, object] = {"call_id": call_id, "error": error}
+            if report is not None:
+                data["error_report"] = report
             if current is not None:
                 data = ToolStepExecutor._event_data(current, data)
             if duration_ms is not None:

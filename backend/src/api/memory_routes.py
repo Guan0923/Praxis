@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from backend.api.error_handlers import error_response
 from backend.domain.memory import MemoryItem, MemoryJob, MemoryJobStatus, MemorySettings
 from backend.runtime.memory import MemoryContextSelector
 from backend.storage.memory import MemoryConflictError, MemoryNotFoundError, MemoryStorageError
@@ -47,7 +48,7 @@ def list_items(
                 project_id=project_id, include_deleted=include_deleted, limit=limit
             )
     except (MemoryStorageError, ValueError) as exc:
-        raise _memory_error(exc) from exc
+        return error_response(exc, status_code=_memory_error(exc).status_code)
     return {"items": [_item_payload(item) for item in items]}
 
 
@@ -69,7 +70,7 @@ def dry_run(query: str, request: Request, project_id: str | None = None) -> dict
             query, project_id=project_id
         )
     except (MemoryStorageError, ValueError) as exc:
-        raise _memory_error(exc) from exc
+        return error_response(exc, status_code=_memory_error(exc).status_code)
     return {
         "enabled": settings.enabled,
         "would_inject": settings.enabled and bool(result.context),
@@ -102,7 +103,7 @@ def extract(body: ExtractRequest, request: Request) -> dict[str, object]:
     try:
         return {"job": _job_payload(request.app.state.web.memory_automation.enqueue_extract(body.thread_id))}
     except (MemoryStorageError, ValueError) as exc:
-        raise _memory_error(exc) from exc
+        return error_response(exc, status_code=_memory_error(exc).status_code)
 
 
 @router.post("/consolidate", status_code=202)
@@ -112,7 +113,7 @@ def consolidate(body: ConsolidateRequest, request: Request) -> dict[str, object]
         job = request.app.state.web.memory_automation.enqueue_consolidate(project_id=body.project_id)
         return {"job": _job_payload(job)}
     except (MemoryStorageError, ValueError) as exc:
-        raise _memory_error(exc) from exc
+        return error_response(exc, status_code=_memory_error(exc).status_code)
 
 
 @router.post("/jobs/{job_id}/cancel")
@@ -120,7 +121,7 @@ def cancel_job(job_id: str, request: Request) -> dict[str, object]:
     try:
         return {"job": _job_payload(request.app.state.web.memory_automation.cancel(job_id))}
     except (MemoryStorageError, ValueError) as exc:
-        raise _memory_error(exc) from exc
+        return error_response(exc, status_code=_memory_error(exc).status_code)
 
 
 @router.patch("/items/{memory_id}")

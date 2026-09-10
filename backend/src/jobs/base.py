@@ -18,6 +18,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
+from backend.domain import error_report, normalize_error_report
+
 from .safety import ClassNameErrorFormatter, ErrorFormatter
 
 logger = logging.getLogger(__name__)
@@ -70,6 +72,7 @@ class JobInfo:
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error: str | None = None
+    error_report: dict[str, Any] | None = None
     pids: tuple[int, ...] = ()
     exit_code: int | None = None
     cancel_requested_at: datetime | None = None
@@ -130,12 +133,20 @@ class Job(ABC):
         self._started_at: datetime | None = None
         self._finished_at: datetime | None = None
         self._error: str | None = None
+        self._error_report: dict[str, Any] | None = None
+        self._failure_exception: BaseException | None = None
         self._pids: tuple[int, ...] = ()
         self._exit_code: int | None = None
         self._cancel_requested_at: datetime | None = None
         self._sandbox: dict[str, Any] | None = None
 
     # -- public API ---------------------------------------------------------
+
+    @property
+    def failure_exception(self) -> BaseException | None:
+        """Keep the original failure within this process; never serialize the object."""
+        with self._lock:
+            return self._failure_exception
 
     def start(self) -> None:
         """Move the job from ``pending`` to ``running``.
@@ -200,6 +211,7 @@ class Job(ABC):
                 started_at=self._started_at,
                 finished_at=self._finished_at,
                 error=self._error,
+                error_report=normalize_error_report(self._error_report),
                 pids=self._pids,
                 exit_code=self._exit_code,
                 cancel_requested_at=self._cancel_requested_at,
@@ -249,7 +261,9 @@ class Job(ABC):
         with self._lock:
             self._require(JobState.RUNNING, JobState.FAILED)
             self._state = JobState.FAILED
-            self._error = self._error_formatter.format_error(exception)
+            self._failure_exception = exception
+            self._error_report = error_report(exception)
+            self._error = self._error_report["message"]
             self._exit_code = exit_code
             self._pids = tuple(pids)
             self._finished_at = self._clock()
@@ -319,5 +333,5 @@ class Job(ABC):
         for listener in listeners:
             try:
                 listener.on_job_state_change(change)
-            except Exception:
-                logger.exception("job state listener failed for job %r", self._id)
+            except Exception as exc:
+                logger.error("job state listener failed for job %r: %s", self._id, error_report(exc))

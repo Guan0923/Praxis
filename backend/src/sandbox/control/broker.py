@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from backend.domain import redact_sensitive_text, safe_error_message
+from backend.domain import error_report, normalize_error_report, redact_sensitive_text, safe_error_message
 
 from ..errors import (
     BrokerInstallationError,
@@ -34,36 +34,6 @@ from ..errors import (
 _PROCESS_BACKEND_INSTANCE_ID = f"backend-{uuid.uuid4().hex}"
 
 
-def _broker_status_failure_code(detail: str) -> BrokerStatusFailureCode:
-    exact_codes = {
-        "Windows Broker is unavailable": BrokerStatusFailureCode.UNAVAILABLE,
-        "Windows Broker is not installed": BrokerStatusFailureCode.NOT_INSTALLED,
-        "Broker service configuration requires repair": BrokerStatusFailureCode.SERVICE_CONFIGURATION_INVALID,
-        "Broker ready marker is unavailable": BrokerStatusFailureCode.READY_MARKER_UNAVAILABLE,
-        "Broker proxy port requires repair": BrokerStatusFailureCode.PROXY_CONFIGURATION_INVALID,
-        "Broker installation key is missing": BrokerStatusFailureCode.INSTALLATION_KEY_MISSING,
-        "Broker installation key is unavailable": BrokerStatusFailureCode.INSTALLATION_KEY_MISSING,
-        "Windows Broker pipe is unavailable": BrokerStatusFailureCode.PIPE_UNAVAILABLE,
-        "Broker protocol version requires repair": BrokerStatusFailureCode.PROTOCOL_INCOMPATIBLE,
-        "Broker token model requires repair": BrokerStatusFailureCode.TOKEN_MODEL_INCOMPATIBLE,
-        "Broker generation requires repair": BrokerStatusFailureCode.GENERATION_MISMATCH,
-    }
-    if code := exact_codes.get(detail):
-        return code
-    if detail.startswith("Broker ready marker ") or detail == "Broker credential generation is invalid":
-        return BrokerStatusFailureCode.READY_MARKER_INVALID
-    if detail in {
-        "Windows Broker returned invalid data",
-        "Windows Broker response replay detected",
-        "Windows Broker returned an invalid error",
-        "Windows Broker returned an unknown error",
-    }:
-        return BrokerStatusFailureCode.RESPONSE_INVALID
-    if detail == "Windows Broker response authentication failed":
-        return BrokerStatusFailureCode.RESPONSE_AUTHENTICATION_FAILED
-    return BrokerStatusFailureCode.STATUS_FAILED
-
-
 @dataclass(frozen=True, slots=True)
 class BrokerStatus:
     installed: bool
@@ -75,6 +45,7 @@ class BrokerStatus:
     generation: str | None = None
     proxy_port: int | None = None
     token_model: str | None = None
+    error_report: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -87,6 +58,7 @@ class BrokerStatus:
             "generation": self.generation,
             "proxy_port": self.proxy_port,
             "token_model": self.token_model,
+            "error_report": self.error_report,
         }
 
 
@@ -109,6 +81,7 @@ class WindowsBrokerClient:
         expected_proxy_port: int = 17831,
     ) -> None:
         self.pipe_name = pipe_name
+        self._initialization_error: Exception | None = None
         self._key = installation_key
         self._transport = transport
         self._is_windows = os.name == "nt" if is_windows is None else is_windows
@@ -143,8 +116,10 @@ class WindowsBrokerClient:
         try:
             from ..broker_service import BrokerConfiguration, DpapiKeyStore, WindowsServiceInstaller
             from ..broker_service.installer import _absolute_windows_path
-        except Exception:
-            return cls(is_windows=True)
+        except Exception as exc:
+            client = cls(is_windows=True)
+            client._initialization_error = exc
+            return client
         configuration = BrokerConfiguration.create()
         key_store = DpapiKeyStore(configuration.installation_key_path)
         source_root = Path(_absolute_windows_path(Path(__file__).resolve().parents[2]))
@@ -161,11 +136,13 @@ class WindowsBrokerClient:
             service_runtime_paths=(runtime_prefix, runtime_base_prefix),
             proxy_port=expected_proxy_port,
         )
+        initialization_error = None
         try:
             key = key_store.load()
-        except Exception:
+        except Exception as exc:
+            initialization_error = exc
             key = None
-        return cls(
+        client = cls(
             pipe_name=configuration.pipe_name,
             installation_key=key,
             is_windows=True,
@@ -174,6 +151,8 @@ class WindowsBrokerClient:
             ready_path=configuration.ready_path,
             expected_proxy_port=expected_proxy_port,
         )
+        client._initialization_error = initialization_error
+        return client
 
     @property
     def available(self) -> bool:
@@ -188,6 +167,7 @@ class WindowsBrokerClient:
                 detail="Windows Broker is unavailable",
             )
         installed = True
+        failure_code = BrokerStatusFailureCode.STATUS_FAILED
         try:
             service_installed = getattr(self._installer, "service_installed", None)
             if callable(service_installed):
@@ -199,20 +179,34 @@ class WindowsBrokerClient:
                         code=BrokerStatusFailureCode.NOT_INSTALLED,
                         detail="Windows Broker is not installed",
                     )
+            if self._initialization_error is not None:
+                return BrokerStatus(
+                    True,
+                    False,
+                    code=BrokerStatusFailureCode.INSTALLATION_KEY_MISSING,
+                    detail=safe_error_message(self._initialization_error),
+                    error_report=error_report(self._initialization_error),
+                )
+            failure_code = BrokerStatusFailureCode.SERVICE_CONFIGURATION_INVALID
             configuration_healthy = getattr(self._installer, "configuration_healthy", None)
             if callable(configuration_healthy) and not configuration_healthy():
                 raise SandboxInitializationError("Broker service configuration requires repair")
+            failure_code = BrokerStatusFailureCode.READY_MARKER_INVALID
             if self._ready_path is not None:
                 from ..broker_service import read_ready_marker
 
                 marker = read_ready_marker(self._ready_path, expected_proxy_port=self._expected_proxy_port)
             else:
                 marker = {}
+            failure_code = BrokerStatusFailureCode.STATUS_FAILED
             payload = self.request("status", {})
+            failure_code = BrokerStatusFailureCode.PROTOCOL_INCOMPATIBLE
             if payload.get("version") != "3":
                 raise SandboxInitializationError("Broker protocol version requires repair")
+            failure_code = BrokerStatusFailureCode.TOKEN_MODEL_INCOMPATIBLE
             if payload.get("token_model") != "capability_sid_v3":
                 raise SandboxInitializationError("Broker token model requires repair")
+            failure_code = BrokerStatusFailureCode.GENERATION_MISMATCH
             if marker and payload.get("generation") != marker.get("generation"):
                 raise SandboxInitializationError("Broker generation requires repair")
             healthy = bool(payload.get("healthy"))
@@ -235,7 +229,13 @@ class WindowsBrokerClient:
             return BrokerStatus(
                 installed,
                 False,
-                code=_broker_status_failure_code(str(exc)),
+                code=getattr(exc, "broker_status_code", None)
+                or (
+                    BrokerStatusFailureCode.PIPE_UNAVAILABLE
+                    if failure_code == BrokerStatusFailureCode.STATUS_FAILED and isinstance(exc, OSError)
+                    else failure_code
+                ),
+                error_report=error_report(exc),
                 detail=detail,
             )
 
@@ -255,10 +255,10 @@ class WindowsBrokerClient:
     def _status_command(self, operation: str) -> BrokerStatus:
         if self._installer is not None:
             getattr(self._installer, operation)()
+            self._initialization_error = None
             if self._key_store is not None:
                 self._key = None
             deadline = time.monotonic() + 10.0
-            last_error: Exception | None = None
             while True:
                 try:
                     if self._key is None and self._key_store is not None:
@@ -266,14 +266,14 @@ class WindowsBrokerClient:
                     status = self.status()
                     if status.healthy:
                         return status
-                    raise SandboxInitializationError(status.detail or "Broker is not healthy")
+                    failure = SandboxInitializationError(status.detail or "Broker is not healthy")
+                    failure.error_report = status.error_report
+                    raise failure
                 except Exception as exc:
-                    last_error = exc
                     if time.monotonic() >= deadline:
-                        raise BrokerInstallationError(
-                            BrokerInstallFailureCode.NOT_READY,
-                            "Broker 服务已安装但未能在限定时间内就绪。",
-                        ) from last_error
+                        failure = BrokerInstallationError(BrokerInstallFailureCode.NOT_READY, safe_error_message(exc))
+                        failure.error_report = error_report(exc)
+                        raise failure from None
                     time.sleep(0.1)
         payload = self.request(operation, {})
         healthy = bool(payload.get("healthy", True))
@@ -396,15 +396,21 @@ class WindowsBrokerClient:
         response_bytes = self._send(_canonical(envelope))
         try:
             response = json.loads(response_bytes.decode("utf-8"))
-        except (TypeError, ValueError) as exc:
-            raise SandboxInitializationError("Windows Broker returned invalid data") from exc
+        except (ValueError, UnicodeError) as exc:
+            exc.broker_status_code = BrokerStatusFailureCode.RESPONSE_INVALID
+            raise
         if not isinstance(response, dict) or response.get("nonce") != nonce:
-            raise SandboxInitializationError("Windows Broker response replay detected")
+            raise SandboxInitializationError(
+                "Windows Broker response replay detected", status_code=BrokerStatusFailureCode.RESPONSE_INVALID
+            )
         response_hmac = response.pop("hmac", None)
         if not isinstance(response_hmac, str) or not hmac.compare_digest(
             response_hmac, self._sign(_canonical(response))
         ):
-            raise SandboxInitializationError("Windows Broker response authentication failed")
+            raise SandboxInitializationError(
+                "Windows Broker response authentication failed",
+                status_code=BrokerStatusFailureCode.RESPONSE_AUTHENTICATION_FAILED,
+            )
         error = response.get("error")
         if error is not None:
             self._raise_remote_error(error)
@@ -415,10 +421,7 @@ class WindowsBrokerClient:
         if not isinstance(value, Mapping):
             raise SandboxInitializationError("Windows Broker returned an invalid error")
         raw_code = value.get("code")
-        try:
-            code = SandboxFailureCode(str(raw_code))
-        except ValueError as exc:
-            raise SandboxInitializationError("Windows Broker returned an unknown error") from exc
+        code = SandboxFailureCode(str(raw_code))
         message = redact_sensitive_text(str(value.get("message") or "Windows Broker operation failed"))
         errors: dict[SandboxFailureCode, type[SandboxError]] = {
             SandboxFailureCode.INIT_FAILED: SandboxInitializationError,
@@ -428,24 +431,27 @@ class WindowsBrokerClient:
         }
         error_type = errors.get(code)
         if error_type is not None:
-            raise error_type(message)
-        raise SandboxError(message, code)
+            failure = error_type(message)
+            failure.error_report = normalize_error_report(value.get("error_report"))
+            raise failure
+        failure = SandboxError(message, code)
+        failure.error_report = normalize_error_report(value.get("error_report"))
+        raise failure
 
     def _send(self, payload: bytes) -> bytes:
         if self._transport is not None:
             return self._transport(payload)
         if not self._is_windows:
             raise SandboxInitializationError("Windows Broker is unavailable")
-        try:
-            with open(self.pipe_name, "r+b", buffering=0) as pipe:
-                pipe.write(payload)
-                return pipe.read(1024 * 1024)
-        except OSError as exc:
-            raise SandboxInitializationError("Windows Broker pipe is unavailable") from exc
+        with open(self.pipe_name, "r+b", buffering=0) as pipe:
+            pipe.write(payload)
+            return pipe.read(1024 * 1024)
 
     def _sign(self, payload: bytes) -> str:
         if self._key is None:
-            raise SandboxInitializationError("Broker installation key is missing")
+            raise SandboxInitializationError(
+                "Broker installation key is missing", status_code=BrokerStatusFailureCode.INSTALLATION_KEY_MISSING
+            )
         return hmac.new(self._key, payload, hashlib.sha256).hexdigest()
 
 

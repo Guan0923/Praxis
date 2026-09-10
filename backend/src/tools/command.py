@@ -10,14 +10,9 @@ from typing import Any
 from backend.domain.terminal import DEFAULT_TERMINAL_TYPE, TERMINAL_LABELS, TerminalType, normalize_terminal_type
 from backend.jobs import (
     AdmissionPolicy,
-    JobAdmissionRejected,
-    JobAdmissionTimeout,
     JobLane,
-    JobQueueFull,
-    JobRegistrationError,
     JobRegistry,
     JobScope,
-    JobScopeClosed,
     JobScopeKind,
     JobState,
     MessageErrorFormatter,
@@ -118,8 +113,8 @@ class WorkspaceCommand:
             if isinstance(decision, SandboxExecutionDecision):
                 try:
                     command_lease = decision.launcher.command_lease()
-                except SandboxMaintenanceBusy as exc:
-                    raise ToolError("Sandbox Broker maintenance is in progress.") from exc
+                except SandboxMaintenanceBusy:
+                    raise
                 if self._terminal_type == "wsl":
                     raise ToolError("WSL is disabled for sandboxed run_command execution.")
                 policy = decision.command_policy(job_id, TerminalKind(self._terminal_type))
@@ -150,15 +145,6 @@ class WorkspaceCommand:
             )
             self._wait_for_job(job, context)
             return self._result(job, max_output_chars=max_output_chars)
-        except FileNotFoundError as exc:
-            shell = TERMINAL_LABELS.get(self._terminal_type, "Bash") if self._is_windows else "Bash"
-            raise ToolError(f"{shell} is not available on this system.") from exc
-        except OSError as exc:
-            raise ToolError(f"Unable to start command: {exc}") from exc
-        except (JobAdmissionRejected, JobAdmissionTimeout, JobQueueFull) as exc:
-            raise ToolError("Command could not be admitted by the process manager.") from exc
-        except (JobRegistrationError, JobScopeClosed, ValueError) as exc:
-            raise ToolError("Command could not be registered with the process manager.") from exc
         finally:
             if command_lease is not None:
                 command_lease.close()
@@ -190,6 +176,9 @@ class WorkspaceCommand:
             return cls._truncate_stdout(job.stdout, max_chars=max_output_chars)
         if info.state is JobState.CANCELLED:
             raise ToolError(cls._failure_output("Command was cancelled.", job, max_chars=max_output_chars))
+        failure = job.failure_exception
+        if failure is not None:
+            raise failure
         raise ToolError(cls._failure_output(info.error or "Command failed.", job, max_chars=max_output_chars))
 
     @staticmethod
@@ -240,8 +229,8 @@ class WorkspaceCommand:
             return [executable, "-lc", command]
         try:
             linux_workspace = windows_workspace_to_wsl(self._workspace)
-        except ValueError as exc:
-            raise ToolError(str(exc)) from exc
+        except ValueError:
+            raise
         return [executable, "--cd", linux_workspace, "--", "sh", "-lc", command]
 
     def _validate(self, command: Any, timeout_seconds: Any) -> None:

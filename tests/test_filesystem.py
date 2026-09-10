@@ -235,7 +235,7 @@ def test_write_file_keeps_created_parents_when_file_creation_fails(tmp_path: Pat
         raise OSError("simulated file creation failure")
 
     monkeypatch.setattr(files, "_exclusive_create", fail_create)
-    with pytest.raises(ToolError, match="simulated file creation failure"):
+    with pytest.raises(OSError, match="simulated file creation failure"):
         registry.invoke(
             "write_file",
             {"path": str(tmp_path / "created" / "before" / "failure.txt"), "content": "content"},

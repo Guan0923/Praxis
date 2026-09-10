@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, StrictBool
 
+from backend.api.error_handlers import error_response
 from backend.skills import SkillCatalog, SkillConfigurationError
 
 from ..directory_picker import DirectoryPickerBusyError, pick_directory
@@ -47,7 +48,7 @@ def _payload(request: Request) -> dict[str, object]:
     try:
         definitions = SkillCatalog.discover(global_root=state.paths.skills_dir).definitions()
     except SkillConfigurationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return error_response(exc, status_code=422, detail=str(exc))
     return {
         "enabled": bool(capabilities["skills"]),
         "skills": [
@@ -76,7 +77,7 @@ def update_skills_enabled(body: EnabledPayload, request: Request) -> dict[str, o
         _state(request).settings.update_capability_config({"skills": body.enabled})
         return _payload(request)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return error_response(exc, status_code=422, detail=str(exc))
 
 
 @router.put("/{directory}/enabled")
@@ -87,7 +88,7 @@ def update_skill_enabled(directory: str, body: EnabledPayload, request: Request)
         state.settings.update_skill_enabled(directory, body.enabled)
         return _payload(request)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return error_response(exc, status_code=422)
 
 
 @router.post("/import", status_code=201, response_model=None)
@@ -95,9 +96,9 @@ def import_skill(request: Request) -> Response | dict[str, str]:
     try:
         source = pick_directory(request, title="选择要导入的 Skill 文件夹")
     except DirectoryPickerBusyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return error_response(exc, status_code=409, detail=str(exc))
     except OSError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return error_response(exc, status_code=503, detail=str(exc))
     if source is None:
         return Response(status_code=204)
     source = Path(source)
@@ -110,7 +111,7 @@ def import_skill(request: Request) -> Response | dict[str, str]:
     try:
         shutil.copytree(source, target)
     except OSError as exc:
-        raise HTTPException(status_code=422, detail=f"导入 Skill 失败：{type(exc).__name__}") from exc
+        return error_response(exc, status_code=422, detail=f"导入 Skill 失败：{type(exc).__name__}")
     return {"directory": target.name}
 
 
@@ -122,5 +123,5 @@ def delete_skill(directory: str, request: Request) -> Response:
         shutil.rmtree(target)
         state.settings.update_skill_enabled(directory, True)
     except OSError as exc:
-        raise HTTPException(status_code=422, detail=f"删除 Skill 失败：{type(exc).__name__}") from exc
+        return error_response(exc, status_code=422, detail=f"删除 Skill 失败：{type(exc).__name__}")
     return Response(status_code=204)

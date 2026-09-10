@@ -1,3 +1,4 @@
+import type { ErrorReport } from "./errorReport";
 import type { BenchmarkRun, BenchmarkRuns, SkillInfo, TaskInfo, ToolInfo } from "../types";
 import { jsonBody, requestJson } from "./transport/request";
 
@@ -40,6 +41,7 @@ export interface BenchmarkResource {
   status: "not_prepared" | "preparing" | "ready" | "deleting" | "error";
   phase: string;
   error: string | null;
+  error_report?: ErrorReport;
   has_resources: boolean;
   in_use: boolean;
 }

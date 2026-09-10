@@ -628,11 +628,11 @@ def test_launcher_holds_maintenance_lease_during_admission(tmp_path: Path) -> No
         maintenance_gate=gate,
     )
 
-    with pytest.raises(SandboxInitializationError, match="sandbox process launch failed") as exc_info:
+    with pytest.raises(RuntimeError, match="rejected") as exc_info:
         launcher.launch(["cmd.exe", "/c", "echo ok"], SandboxPolicy((tmp_path,), "session", "job"))
 
-    assert isinstance(exc_info.value.__cause__, RuntimeError)
-    assert str(exc_info.value.__cause__) == "rejected"
+    assert exc_info.value.__cause__ is None
+    assert str(exc_info.value) == "rejected"
     assert gate.active_commands == 0
 
 

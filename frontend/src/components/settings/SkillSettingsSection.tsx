@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "../ErrorDisplay";
 import { DeleteOutlined, ImportOutlined } from "@ant-design/icons";
 import { Alert, App, Button, Descriptions, List, Space, Spin, Switch, Tag, Typography } from "antd";
 import { useEffect, useState } from "react";
@@ -10,8 +11,8 @@ import {
   type SkillSettingsResponse,
 } from "../../api";
 
-function errorMessage(cause: unknown, fallback: string): string {
-  return cause instanceof Error ? cause.message : fallback;
+function errorMessage(cause: unknown, fallback: string): Error | string {
+  return cause instanceof Error ? cause : fallback;
 }
 
 export function SkillSettingsSection() {
@@ -21,7 +22,7 @@ export function SkillSettingsSection() {
   const [globalSaving, setGlobalSaving] = useState(false);
   const [rowSaving, setRowSaving] = useState<Record<string, boolean>>({});
   const [importing, setImporting] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<Error | string>("");
 
   async function load() {
     setLoading(true);
@@ -140,7 +141,7 @@ export function SkillSettingsSection() {
           导入 Skill
         </Button>
       </Space>
-      {error ? <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} /> : null}
+      {error ? <Alert type="error" showIcon title={<ErrorDisplay error={error} />} style={{ marginBottom: 16 }} /> : null}
       <List
         loading={loading}
         dataSource={data?.skills ?? []}

@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
+from backend.api.error_handlers import error_response
 from backend.mcp.client import start_external_tools
 from backend.mcp.config import (
     McpServerConfig,
@@ -21,7 +22,7 @@ from backend.mcp.config import (
     valid_server_name,
     validate_headers,
 )
-from backend.mcp.settings import McpSettingsStore
+from backend.mcp.settings import McpServerConflict, McpServerNotFound, McpSettingsStore
 from backend.tools import ToolError
 
 
@@ -162,7 +163,7 @@ def _payload(request: Request) -> dict[str, object]:
     try:
         servers = _store(request).servers()
     except ToolError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return error_response(exc, status_code=422, detail=str(exc))
     return {
         "enabled": bool(state.settings.capability_config()["mcp"]),
         "servers": [McpSettingsStore.public_server(item) for item in servers],
@@ -197,7 +198,7 @@ def update_mcp_enabled(body: EnabledPayload, request: Request) -> dict[str, obje
         _state(request).settings.update_capability_config({"mcp": body.enabled})
         return _payload(request)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return error_response(exc, status_code=422, detail=str(exc))
 
 
 @router.post("/servers", status_code=201)
@@ -208,7 +209,7 @@ def create_mcp_server(body: McpServerCreatePayload, request: Request) -> dict[st
         created = _store(request).create(name=body.name, **_server_values(body))
         return McpSettingsStore.public_server(created)
     except (ToolError, ValueError) as exc:
-        raise HTTPException(status_code=409 if "already exists" in str(exc) else 422, detail=str(exc)) from exc
+        return error_response(exc, status_code=409 if isinstance(exc, McpServerConflict) else 422, detail=str(exc))
 
 
 @router.put("/servers/{name}")
@@ -224,7 +225,7 @@ def update_mcp_server(name: str, body: McpServerFields, request: Request) -> dic
         )
         return McpSettingsStore.public_server(updated)
     except (ToolError, ValueError) as exc:
-        raise HTTPException(status_code=404 if "not found" in str(exc) else 422, detail=str(exc)) from exc
+        return error_response(exc, status_code=404 if isinstance(exc, McpServerNotFound) else 422, detail=str(exc))
 
 
 @router.put("/servers/{name}/enabled")
@@ -233,7 +234,7 @@ def update_mcp_server_enabled(name: str, body: EnabledPayload, request: Request)
         updated = _store(request).set_enabled(name, body.enabled)
         return McpSettingsStore.public_server(updated)
     except (ToolError, ValueError) as exc:
-        raise HTTPException(status_code=404 if "not found" in str(exc) else 422, detail=str(exc)) from exc
+        return error_response(exc, status_code=404 if isinstance(exc, McpServerNotFound) else 422, detail=str(exc))
 
 
 @router.delete("/servers/{name}", status_code=204)
@@ -241,7 +242,7 @@ def delete_mcp_server(name: str, request: Request) -> Response:
     try:
         _store(request).delete(name)
     except (ToolError, ValueError) as exc:
-        raise HTTPException(status_code=404 if "not found" in str(exc) else 422, detail=str(exc)) from exc
+        return error_response(exc, status_code=404 if isinstance(exc, McpServerNotFound) else 422, detail=str(exc))
     return Response(status_code=204)
 
 
@@ -253,12 +254,15 @@ def test_mcp_server(name: str, request: Request) -> dict[str, object]:
         server = replace(saved, enabled=True)
         resources = start_external_tools((server,), McpSettings.from_config(state.settings.config_store.read()))
         try:
+            failure = resources.manager.failed_servers.get(name)
+            if failure is not None:
+                raise failure
             tools = sorted(f"mcp_{name}_{item.name}" for item in resources.manager.definitions[name])
             details = resources.manager.describe(name)
         finally:
             resources.close()
         return {"tools": tools, "count": details["counts"]["tools"], **details}
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ToolError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except McpServerNotFound as exc:
+        return error_response(exc, status_code=404, detail=str(exc))
+    except Exception as exc:
+        return error_response(exc, status_code=422)

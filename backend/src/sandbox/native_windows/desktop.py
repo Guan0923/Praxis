@@ -61,10 +61,10 @@ class WindowsPrivateDesktop:
                 if not station_name:
                     raise OSError("window station name is unavailable")
                 handle = service.CreateDesktop(name, 0, desktop_all, attributes)
-            except Exception as exc:  # pragma: no cover - requires service desktop
+            except Exception:  # pragma: no cover - requires service desktop
                 if station_ace_added:
                     _revoke_station_access(current, logon_sid, station_participant)
-                raise SandboxInitializationError("Broker private desktop creation failed") from exc
+                raise
         return cls(current, station_name, logon_sid, station_ace_added, station_participant, handle, name)
 
     def close(self) -> None:

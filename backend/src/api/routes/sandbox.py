@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from backend.domain import safe_error_message
+from backend.domain import error_report, safe_error_message
 from backend.sandbox import (
     BrokerConfiguration,
     SandboxMaintenanceBusy,
@@ -48,8 +48,15 @@ def repair(request: Request) -> dict[str, object] | JSONResponse:
             if _manifest_has_records(manifest_path):
                 try:
                     broker.reclaim_stale()
-                except Exception:
-                    return _jobs_active_response("无法确认沙箱任务已全部清理，请停止运行中的 Turn 后重试。")
+                except Exception as exc:
+                    return JSONResponse(
+                        status_code=409,
+                        content={
+                            "code": "broker_jobs_active",
+                            "detail": safe_error_message(exc),
+                            "error_report": error_report(exc),
+                        },
+                    )
                 if _manifest_has_records(manifest_path):
                     return _jobs_active_response("仍有沙箱命令资源正在使用，无法修复 Broker。")
             current = _broker_payload(broker.status())
@@ -66,13 +73,21 @@ def repair(request: Request) -> dict[str, object] | JSONResponse:
         logger.warning("sandbox broker repair failed code=%s", exc.broker_code.value, exc_info=False)
         return JSONResponse(
             status_code=503,
-            content={"detail": safe_error_message(exc), "code": exc.broker_code.value},
+            content={
+                "detail": safe_error_message(exc),
+                "code": exc.broker_code.value,
+                "error_report": error_report(exc),
+            },
         )
     except Exception as exc:
         logger.warning("sandbox broker repair failed code=%s", type(exc).__name__, exc_info=False)
         return JSONResponse(
             status_code=503,
-            content={"detail": safe_error_message(exc), "code": "broker_install_failed"},
+            content={
+                "detail": safe_error_message(exc),
+                "code": "broker_install_failed",
+                "error_report": error_report(exc),
+            },
         )
 
 

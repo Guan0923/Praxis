@@ -6,12 +6,12 @@ from pathlib import Path
 import pytest
 
 from backend.domain import AssistantMessage, ToolMessage, UserMessage
+from backend.jobs import CommandError
 from backend.planning.model_requests import ModelRequestExecutor
 from backend.runtime import AgentRunner
 from backend.runtime.core.context import PreparedResponse
 from backend.runtime.core.contracts import InterruptDecision
 from backend.runtime.core.hooks import (
-    HookExecutionError,
     HookManager,
     HookOperationResult,
     RunHookContext,
@@ -31,7 +31,7 @@ from backend.sandbox import (
     SandboxExecutionDecision,
 )
 from backend.sandbox.control.operation import sandbox_operation
-from backend.tools import Tool, ToolError, ToolInvocationContext, ToolRegistry, WorkspaceCommand
+from backend.tools import Tool, ToolInvocationContext, ToolRegistry, WorkspaceCommand
 from tests.testing_sandbox import DirectTestSandboxLauncher
 
 
@@ -79,7 +79,7 @@ def test_sequential_manager_converts_operation_error_and_short_circuits() -> Non
     manager.register(broken)
     manager.register(lambda _context: calls.append("late") or HookOperationResult.continue_execution())
 
-    with pytest.raises(HookExecutionError) as exc_info:
+    with pytest.raises(ValueError) as exc_info:
         manager.execute(object(), events.append)
 
     assert calls == ["broken"]
@@ -592,7 +592,7 @@ def test_real_sandbox_command_timeout_cleans_process_resources(tmp_path: Path) -
     command = WorkspaceCommand(tmp_path)
     slow_command = "powershell -NoProfile -Command Start-Sleep -Seconds 5" if os.name == "nt" else "sleep 5"
 
-    with pytest.raises(ToolError, match="timed out"):
+    with pytest.raises(CommandError, match="timed out"):
         command.run_with_context(
             ToolInvocationContext(session_id="session-timeout", sandbox_decision=decision),
             slow_command,

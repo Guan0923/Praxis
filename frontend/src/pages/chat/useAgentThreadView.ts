@@ -1,3 +1,4 @@
+import { reportFromError } from "../../api/errorReport";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getSessionNodes, sendAgentThreadMessage, streamAgentThread } from "../../api";
 import { withLoadedTurns } from "../../app/conversationProjection";
@@ -29,7 +30,7 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
   const [selectedByRootThread, setSelectedByRootThread] = useState<Record<string, string>>({});
   const [pendingByThread, setPendingByThread] = useState<Record<string, ChatMessage[]>>({});
   const [treeInvalidation, setTreeInvalidation] = useState(0);
-  const [streamError, setStreamError] = useState<string | null>(null);
+  const [streamError, setStreamError] = useState<Error | string | null>(null);
   const updateRef = useRef(onUpdate);
   const rootTreeStateByThread = useRef<Record<string, string>>({});
   updateRef.current = onUpdate;
@@ -149,7 +150,7 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
           throw new Error("Agent Thread SSE ended unexpectedly.");
         } catch (error) {
           if (controller.signal.aborted) return;
-          setStreamError(String((error as Error).message ?? error));
+          setStreamError(error instanceof Error ? error : String(error));
           await new Promise<void>((resolve) => globalThis.setTimeout(resolve, retryMs));
           retryMs = Math.min(5_000, retryMs * 2);
         }
@@ -201,7 +202,7 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
       setPendingByThread((current) => ({
         ...current,
         [pendingKey]: (current[pendingKey] ?? []).map((item) => item.id === message.id
-          ? { ...item, pending: false, error: String((error as Error).message ?? error) } : item),
+          ? { ...item, pending: false, error: String((error as Error).message ?? error), error_report: reportFromError(error) } : item),
       }));
       throw error;
     }

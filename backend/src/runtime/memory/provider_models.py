@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import replace
 
-from backend.domain import SystemMessage, UserMessage
-from backend.providers import LLMClient, ModelConfig, ModelConfigurationError, ModelTransportError
+from backend.domain import SystemMessage, UserMessage, error_report
+from backend.providers import LLMClient, ModelConfig
 from backend.runtime.core.context import AgentRuntime, RuntimeServices, RuntimeState
 
 from .consolidation import MemoryConsolidationRequest
@@ -100,6 +101,7 @@ class ProviderMemoryModel:
         if not config.api_key:
             raise MemoryModelUnavailable("provider_unavailable")
         client: LLMClient | None = None
+        failed = False
         try:
             client = LLMClient(config)
             state = RuntimeState(
@@ -138,25 +140,23 @@ class ProviderMemoryModel:
             if not isinstance(decoded, dict):
                 raise ValueError("Memory model output must be a JSON object.")
             return decoded
-        except MemoryModelUnavailable:
-            raise
-        except ModelConfigurationError as exc:
-            raise MemoryModelUnavailable("provider_unavailable") from exc
-        except ModelTransportError as exc:
-            if exc.status_code in {402, 429}:
-                raise MemoryQuotaUnavailable("quota_unavailable") from exc
-            if exc.status_code in {401, 403, 404}:
-                raise MemoryModelUnavailable("provider_unavailable") from exc
+        except BaseException:
+            failed = True
             raise
         finally:
             if client is not None:
-                close = getattr(client.transport, "close", None)
-                if callable(close):
-                    close()
-                else:
-                    session_close = getattr(getattr(client.transport, "session", None), "close", None)
-                    if callable(session_close):
-                        session_close()
+                try:
+                    close = getattr(client.transport, "close", None)
+                    if callable(close):
+                        close()
+                    else:
+                        session_close = getattr(getattr(client.transport, "session", None), "close", None)
+                        if callable(session_close):
+                            session_close()
+                except Exception as exc:
+                    if not failed:
+                        raise
+                    logging.getLogger(__name__).warning("Memory transport cleanup failed: %s", error_report(exc))
 
 
 __all__ = [

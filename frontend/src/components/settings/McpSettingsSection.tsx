@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "../ErrorDisplay";
 import { DeleteOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { Alert, App, Button, Collapse, Form, Input, Segmented, Space, Spin, Switch, Tag, Typography } from "antd";
 import { useEffect, useState } from "react";
@@ -29,8 +30,8 @@ type ServerFormValues = {
   secrets: SecretRow[];
 };
 
-function errorMessage(cause: unknown, fallback: string): string {
-  return cause instanceof Error ? cause.message : fallback;
+function errorMessage(cause: unknown, fallback: string): Error | string {
+  return cause instanceof Error ? cause : fallback;
 }
 
 function formValues(server?: McpServerSettings): ServerFormValues {
@@ -284,8 +285,8 @@ export function McpSettingsSection() {
   const [globalSaving, setGlobalSaving] = useState(false);
   const [rowSaving, setRowSaving] = useState<Record<string, boolean>>({});
   const [testing, setTesting] = useState<Record<string, boolean>>({});
-  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
-  const [error, setError] = useState("");
+  const [rowErrors, setRowErrors] = useState<Record<string, Error | string>>({});
+  const [error, setError] = useState<Error | string>("");
 
   async function load() {
     setLoading(true);
@@ -303,7 +304,7 @@ export function McpSettingsSection() {
     void load();
   }, []);
 
-  function setRowError(name: string, value: string) {
+  function setRowError(name: string, value: Error | string) {
     setRowErrors((current) => ({ ...current, [name]: value }));
   }
 
@@ -431,7 +432,7 @@ export function McpSettingsSection() {
       label: "新增 MCP Server",
       children: (
         <>
-          {rowErrors.new ? <Alert type="error" showIcon title={rowErrors.new} style={{ marginBottom: 16 }} /> : null}
+          {rowErrors.new ? <Alert type="error" showIcon title={<ErrorDisplay error={rowErrors.new} />} style={{ marginBottom: 16 }} /> : null}
           <ServerEditor saving={rowSaving.new ?? false} onSave={createServer} />
         </>
       ),
@@ -450,7 +451,7 @@ export function McpSettingsSection() {
       ),
       children: (
         <>
-          {rowErrors[server.name] ? <Alert type="error" showIcon title={rowErrors[server.name]} style={{ marginBottom: 16 }} /> : null}
+          {rowErrors[server.name] ? <Alert type="error" showIcon title={<ErrorDisplay error={rowErrors[server.name]} />} style={{ marginBottom: 16 }} /> : null}
           <ServerEditor
             server={server}
             saving={rowSaving[server.name] ?? false}
@@ -482,7 +483,7 @@ export function McpSettingsSection() {
         />
         <Typography.Text>启用 MCP</Typography.Text>
       </Space>
-      {error ? <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} /> : null}
+      {error ? <Alert type="error" showIcon title={<ErrorDisplay error={error} />} style={{ marginBottom: 16 }} /> : null}
       <Collapse items={items} />
     </div>
   );

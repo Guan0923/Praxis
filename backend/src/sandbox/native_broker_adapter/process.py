@@ -76,29 +76,20 @@ class _NativeWindowsProcess:
         process_handle = None
         thread_handle = None
         try:
-            try:
-                process_handle, thread_handle, pid, _ = process.CreateProcessAsUser(
-                    token,
-                    None,
-                    _windows_command_line(argv),
-                    process_attributes,
-                    thread_attributes,
-                    True,
-                    flags,
-                    dict(environment),
-                    cwd,
-                    startup,
-                )
-            except Exception as exc:  # pragma: no cover - requires service token
-                raise SandboxInitializationError("Broker restricted process creation failed") from exc
-            try:
-                job.assign(process_handle)
-            except Exception as exc:  # pragma: no cover - requires Job Object
-                raise SandboxInitializationError("Broker restricted process Job assignment failed") from exc
-            try:
-                process.ResumeThread(thread_handle)
-            except Exception as exc:  # pragma: no cover - requires service token
-                raise SandboxInitializationError("Broker restricted process resume failed") from exc
+            process_handle, thread_handle, pid, _ = process.CreateProcessAsUser(
+                token,
+                None,
+                _windows_command_line(argv),
+                process_attributes,
+                thread_attributes,
+                True,
+                flags,
+                dict(environment),
+                cwd,
+                startup,
+            )
+            job.assign(process_handle)
+            process.ResumeThread(thread_handle)
         except Exception:
             job.terminate()
             job.close()

@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from ..errors import SandboxError
 from .access_policy import _service_sid
 from .contracts import (
     EXIT_ACCOUNT_FAILED,
@@ -168,6 +169,9 @@ def provision_fixed_accounts(
     try:
         configure_network(accounts["offline"][0], accounts["online"][0], proxy_port)
     except Exception as exc:
+        if isinstance(exc, (SandboxError, TransactionFailure)):
+            exc.exit_code = EXIT_NETWORK_FAILED
+            raise
         raise TransactionFailure(EXIT_NETWORK_FAILED, "Broker network policy could not be configured") from exc
     return package, build_ready_marker(package, proxy_port)
 

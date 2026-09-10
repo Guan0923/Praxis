@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.providers import ModelConfig, ModelConfigurationError
@@ -67,9 +66,8 @@ def _model_config_snapshot(
             return state.model_config(provider_name)
         return state.model_config()
     except SecretDecryptionError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="当前提供商密钥无法解密，请在用户设置中重新填写 API Key。",
-        ) from exc
+        exc.api_status_code = 409
+        raise
     except ModelConfigurationError as exc:
-        raise HTTPException(status_code=422, detail=f"模型未配置：{exc}") from exc
+        exc.api_status_code = 422
+        raise

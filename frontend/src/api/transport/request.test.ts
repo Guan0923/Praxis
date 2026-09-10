@@ -1,11 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, requestVoid } from "./request";
+import { ApiError, apiErrorFrom, requestVoid } from "./request";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe("requestVoid", () => {
+  it("keeps the report even when detail is structured", async () => {
+    const report = { type: "OSError", message: "denied", traceback: "server.py:9", winerror: 5 };
+    const error = await apiErrorFrom(new Response(JSON.stringify({
+      detail: { message: "generic" }, code: "broker_pipe_unavailable", error_report: report,
+    }), { status: 503 }));
+    expect(error.message).toBe("OSError: denied");
+    expect(error.status).toBe(503);
+    expect(error.code).toBe("broker_pipe_unavailable");
+    expect(error.error_report).toEqual(report);
+  });
+
   it("accepts a successful 204 response without parsing JSON", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);

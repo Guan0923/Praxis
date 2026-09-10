@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from backend.domain import (
     ClaimedEnvelope,
     MessageQueueUnavailable,
+    error_report,
     safe_error_message,
     terminal_error_text,
 )
@@ -286,6 +287,8 @@ def _stream(
         nonlocal pending_terminal
         pending_terminal = (terminal_type, terminal_id, message)
 
+    terminal_report = None
+
     def publish_terminal(terminal_type: str, terminal_id: str, message: str) -> None:
         bridge = bridge_ref["bridge"]
         current = bridge._current() if bridge is not None else None
@@ -294,7 +297,7 @@ def _stream(
                 state.message_queue.release_turn(current.id)
             except MessageQueueUnavailable:
                 logger.warning("Could not release pending messages for finished Turn %s", current.id)
-        active_stream.publish_terminal(terminal_type, terminal_id, message)
+        active_stream.publish_terminal(terminal_type, terminal_id, message, terminal_report)
         if current is not None:
             record_sidebar_activity(current.thread_id)
         publish_runtime_terminal(
@@ -304,6 +307,7 @@ def _stream(
             turn_id=terminal_id,
             terminal_type=terminal_type,
             message=message,
+            error_report=terminal_report,
         )
 
     approval_store = ApprovalStore(_store(state))
@@ -316,6 +320,7 @@ def _stream(
     effective_reasoning = request_model.reasoning_effort if request_model is not None else reasoning_effort
 
     def worker() -> None:
+        nonlocal terminal_report
         app = None
         conversation = None
         try:
@@ -331,8 +336,8 @@ def _stream(
             if provider_name:
                 try:
                     selected_model_config = state.model_config(provider_name)
-                except (SecretDecryptionError, ModelConfigurationError) as exc:
-                    raise ModelConfigurationError(safe_error_message(exc)) from exc
+                except (SecretDecryptionError, ModelConfigurationError):
+                    raise
             app = application_builder(
                 state,
                 session_id=session_id,
@@ -513,6 +518,7 @@ def _stream(
             else:
                 enqueue_terminal("failed", turn_id or "unknown", "Turn persistence is unavailable.")
         except MessageQueueUnavailable as exc:
+            terminal_report = error_report(exc)
             bridge = bridge_ref["bridge"]
             error_message = safe_error_message(exc)
             if bridge is not None:
@@ -521,20 +527,29 @@ def _stream(
                     error_message,
                     category="server",
                     code="message_queue_unavailable",
+                    error_report=error_report(exc),
                 )
                 terminal_id = final_node.id if final_node is not None else turn_id or "unknown"
                 enqueue_terminal("failed", terminal_id, error_message)
             else:
                 enqueue_terminal("failed", turn_id or "unknown", error_message)
-        except ModelConfigurationError as exc:
+        except (SecretDecryptionError, ModelConfigurationError) as exc:
+            terminal_report = error_report(exc)
             if bridge_ref["bridge"] is not None:
                 error_message = safe_error_message(exc)
-                bridge_ref["bridge"].finish("failed", error_message, category="agent", code="model_configuration_error")
+                bridge_ref["bridge"].finish(
+                    "failed",
+                    error_message,
+                    category="agent",
+                    code="model_configuration_error",
+                    error_report=error_report(exc),
+                )
                 rendered_error = terminal_error_text(bridge_ref["bridge"].terminal_error or {})
                 enqueue_terminal("failed", turn_id or bridge_ref["bridge"].turn_id or "unknown", rendered_error)
             else:
                 enqueue_terminal("failed", turn_id or "unknown", safe_error_message(exc))
         except Exception as exc:
+            terminal_report = error_report(exc)
             bridge = bridge_ref["bridge"]
             if bridge is not None:
                 if pause_controller.is_requested():

@@ -27,34 +27,26 @@ class WindowsDpapiProvider:
     def __init__(self) -> None:
         if os.name != "nt":
             raise SandboxInitializationError("DPAPI is available only on Windows")
-        try:
-            import win32crypt  # type: ignore[import-not-found]
-        except ImportError as exc:
-            raise SandboxInitializationError("pywin32 is required for Broker DPAPI") from exc
+        import win32crypt  # type: ignore[import-not-found]
+
         self._win32crypt = win32crypt
 
     def protect(self, value: bytes) -> bytes:
-        try:
-            result = self._win32crypt.CryptProtectData(
-                value,
-                "Praxis Sandbox Broker",
-                None,
-                None,
-                None,
-                0x4,
-            )
-            blob = result[1] if isinstance(result, tuple) else result
-            return bytes(blob)
-        except Exception as exc:  # pragma: no cover - Windows-only adapter
-            raise SandboxInitializationError("DPAPI could not protect the Broker key") from exc
+        result = self._win32crypt.CryptProtectData(
+            value,
+            "Praxis Sandbox Broker",
+            None,
+            None,
+            None,
+            0x4,
+        )
+        blob = result[1] if isinstance(result, tuple) else result
+        return bytes(blob)
 
     def unprotect(self, value: bytes) -> bytes:
-        try:
-            result = self._win32crypt.CryptUnprotectData(value, None, None, None, 0)
-            blob = result[1] if isinstance(result, tuple) else result
-            return bytes(blob)
-        except Exception as exc:  # pragma: no cover - Windows-only adapter
-            raise SandboxInitializationError("DPAPI could not unprotect the Broker key") from exc
+        result = self._win32crypt.CryptUnprotectData(value, None, None, None, 0)
+        blob = result[1] if isinstance(result, tuple) else result
+        return bytes(blob)
 
 
 class DpapiKeyStore:
@@ -67,10 +59,7 @@ class DpapiKeyStore:
 
     def load(self) -> bytes:
         with self._lock:
-            try:
-                blob = self.path.read_bytes()
-            except OSError as exc:
-                raise SandboxInitializationError("Broker installation key is unavailable") from exc
+            blob = self.path.read_bytes()
         if not blob:
             raise SandboxInitializationError("Broker installation key is empty")
         provider = self._provider()
@@ -82,11 +71,8 @@ class DpapiKeyStore:
     def ensure(self) -> bytes:
         with self._lock:
             if self.path.exists():
-                try:
-                    if self.path.stat().st_size > 0:
-                        return self.load()
-                except OSError as exc:
-                    raise SandboxInitializationError("Broker installation key is unavailable") from exc
+                if self.path.stat().st_size > 0:
+                    return self.load()
             key = secrets.token_bytes(32)
             protected = self._provider().protect(key)
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,10 +118,7 @@ class BrokerCredentialPackage:
     def from_dict(cls, raw: object) -> BrokerCredentialPackage:
         if not isinstance(raw, dict) or raw.get("schema") != 1:
             raise SandboxInitializationError("Broker credential package schema is invalid")
-        try:
-            package = cls(**{name: raw[name] for name in cls.__dataclass_fields__})
-        except (KeyError, TypeError) as exc:
-            raise SandboxInitializationError("Broker credential package is invalid") from exc
+        package = cls(**{name: raw[name] for name in cls.__dataclass_fields__})
         if any(
             not isinstance(getattr(package, name), str) or not getattr(package, name)
             for name in cls.__dataclass_fields__
@@ -154,14 +137,8 @@ class DpapiCredentialStore:
 
     def load(self) -> BrokerCredentialPackage:
         with self._lock:
-            try:
-                protected = self.path.read_bytes()
-            except OSError as exc:
-                raise SandboxInitializationError("Broker credential package is unavailable") from exc
-            try:
-                raw = json.loads(self._provider().unprotect(protected).decode("utf-8"))
-            except (UnicodeError, ValueError) as exc:
-                raise SandboxInitializationError("Broker credential package is invalid") from exc
+            protected = self.path.read_bytes()
+            raw = json.loads(self._provider().unprotect(protected).decode("utf-8"))
         return BrokerCredentialPackage.from_dict(raw)
 
     def save(self, package: BrokerCredentialPackage) -> None:

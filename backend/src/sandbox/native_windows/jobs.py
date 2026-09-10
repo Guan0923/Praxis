@@ -5,7 +5,6 @@ from __future__ import annotations
 import ctypes
 from typing import Any
 
-from ..errors import SandboxInitializationError
 from ..policy import ResourceLimits
 from .api import _modules
 
@@ -45,25 +44,19 @@ class WindowsJobObject:
                 self._job.JobObjectExtendedLimitInformation,
                 info,
             )
-        except Exception as exc:  # pragma: no cover - Windows kernel adapter
+        except Exception:  # pragma: no cover - Windows kernel adapter
             if self.handle is not None:
                 self._api.CloseHandle(self.handle)
                 self.handle = None
-            raise SandboxInitializationError("sandbox Job Object could not be configured") from exc
+            raise
 
     def assign(self, process_handle: Any) -> None:
-        try:
-            self._job.AssignProcessToJobObject(self.handle, process_handle)
-        except Exception as exc:  # pragma: no cover - Windows kernel adapter
-            raise SandboxInitializationError("sandbox process could not enter its Job Object") from exc
+        self._job.AssignProcessToJobObject(self.handle, process_handle)
 
     def terminate(self, exit_code: int = 1) -> None:
         if self.handle is None:
             return
-        try:
-            self._job.TerminateJobObject(self.handle, exit_code)
-        except Exception as exc:
-            raise SandboxInitializationError("sandbox Job Object could not be terminated") from exc
+        self._job.TerminateJobObject(self.handle, exit_code)
 
     def usage(self) -> dict[str, int | float]:
         """Return cumulative Job Object accounting without exposing PIDs."""
@@ -112,8 +105,5 @@ class WindowsJobObject:
     def close(self) -> None:
         if self.handle is None:
             return
-        try:
-            self._api.CloseHandle(self.handle)
-        except Exception as exc:
-            raise SandboxInitializationError("sandbox Job Object handle could not be closed") from exc
+        self._api.CloseHandle(self.handle)
         self.handle = None

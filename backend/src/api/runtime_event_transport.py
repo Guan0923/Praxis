@@ -129,6 +129,7 @@ def publish_terminal(
     turn_id: str,
     terminal_type: str,
     message: str = "",
+    error_report: object = None,
 ) -> None:
     _node, sequence = _store(state).runtime_stream_snapshot(session_id, turn_id)
     state.runtime_event_stream.publish(
@@ -146,6 +147,7 @@ def publish_terminal(
             "turn_id": turn_id,
             "terminal_type": terminal_type,
             "message": message,
+            "error_report": error_report,
         },
     )
 
@@ -188,11 +190,17 @@ def _terminal_envelope(
     message: str = "",
     *,
     event_id: str = "0-0",
+    error_report: object = None,
 ) -> str:
     safe_id = html.escape(turn_id, quote=True)
     safe_type = html.escape(terminal_type, quote=True)
     safe_message = html.escape(message, quote=False)
-    return f'id: {event_id}\ndata: <SSE id="{safe_id}" type="{safe_type}">{safe_message}</SSE>\n\n'
+    prefix = (
+        "data: " + json.dumps({"type": "turn.error", "error_report": error_report}, ensure_ascii=False) + "\n\n"
+        if error_report
+        else ""
+    )
+    return prefix + f'id: {event_id}\ndata: <SSE id="{safe_id}" type="{safe_type}">{safe_message}</SSE>\n\n'
 
 
 def _terminal_for_node(node: RuntimeState) -> tuple[str, str] | None:
@@ -282,7 +290,12 @@ async def turn_sse(
             )
             if terminal is not None:
                 terminal_cursor = await asyncio.to_thread(stream.latest_thread_id, thread_id)
-                yield _terminal_envelope(turn_id, *terminal, event_id=_cursor_id(state, terminal_cursor))
+                yield _terminal_envelope(
+                    turn_id,
+                    *terminal,
+                    event_id=_cursor_id(state, terminal_cursor),
+                    error_report=latest_turn_event.payload.get("error_report"),
+                )
                 return
         entries = await asyncio.to_thread(stream.read_thread, thread_id, cursor, block_ms=50)
         for entry in entries:
@@ -298,6 +311,7 @@ async def turn_sse(
                     turn_id,
                     *terminal,
                     event_id=_cursor_id(state, cursor),
+                    error_report=entry.payload.get("error_report"),
                 )
                 return
         if monotonic() >= heartbeat_at:
@@ -347,6 +361,7 @@ async def turn_sse(
                     str(payload.get("terminal_type") or "failed"),
                     str(payload.get("message") or ""),
                     event_id=_cursor_id(state, cursor),
+                    error_report=payload.get("error_report"),
                 )
                 return
             payload_turn_id = ""

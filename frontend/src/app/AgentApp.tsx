@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "../components/ErrorDisplay";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { App as AntApp } from "antd";
 import {
@@ -58,7 +59,7 @@ function AgentApp() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [archiveReadState, setArchiveReadState] = useState<ArchiveReadState>(() => loadArchiveReadState());
   const [currentId, setCurrentId] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<Error | string | null>(null);
   const [modeBySession, setModeBySession] = useState<Record<string, ChatMode>>(() => loadSessionModes(localStorage));
   const [draftMode, setDraftMode] = useState<ChatMode>("agent");
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -93,7 +94,7 @@ function AgentApp() {
 
   useEffect(() => {
     if (!actionError) return;
-    void message.error({ content: actionError, key: ACTION_ERROR_MESSAGE_KEY });
+    void message.error({ content: <ErrorDisplay error={actionError} />, duration: 0, key: ACTION_ERROR_MESSAGE_KEY });
     setActionError(null);
   }, [actionError, message]);
 
@@ -201,7 +202,7 @@ function AgentApp() {
           updateConversation(current.id, (conversation) => withLoadedTurns(conversation, nodes));
         })
         .catch((error) => {
-          if (!disposed) setActionError(String((error as Error).message ?? error));
+          if (!disposed) setActionError(error instanceof Error ? error : String(error));
         });
       return () => {
         disposed = true;
@@ -410,7 +411,7 @@ function AgentApp() {
     if (newConversationPromiseRef.current) return newConversationPromiseRef.current;
     const pending = createNewConversation(title)
       .catch(async (error) => {
-        setActionError(String((error as Error).message ?? error));
+        setActionError(error instanceof Error ? error : String(error));
         await refreshSessions().catch(() => undefined);
         throw error;
       })
@@ -449,7 +450,7 @@ function AgentApp() {
       applySidebarOrder(projectId, result.ordered_thread_ids);
     } catch (error) {
       applySidebarOrder(projectId, previousOrder);
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
       await refreshSessions().catch(() => undefined);
     }
   }
@@ -461,7 +462,7 @@ function AgentApp() {
       const result = await updateSidebarThreadOrder(projectId, { sortBy });
       applySidebarOrder(projectId, result.ordered_thread_ids);
     } catch (error) {
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
       await refreshSessions().catch(() => undefined);
     }
   }

@@ -17,7 +17,7 @@ from ..conversation.steering import SteeringUpdate, collect_steering
 from ..core.context import AgentRuntime
 from ..core.contracts import WorkflowModeChanged
 from ..core.events import RuntimeEvent
-from .steps import ToolStepExecutor, ToolStepResult
+from .steps import ToolQueueTimeout, ToolStepExecutor, ToolStepResult
 
 _QUEUE_TIMEOUT_SECONDS = 90.0
 _SERIAL_TOOLS = frozenset(
@@ -71,7 +71,7 @@ class _FairGate:
                 if remaining <= 0:
                     self._waiting.remove(token)
                     self._condition.notify_all()
-                    raise ToolError("Tool execution queue timed out after 90 seconds.")
+                    raise ToolQueueTimeout("Tool execution queue timed out after 90 seconds.")
                 self._condition.wait(timeout=min(remaining, 0.05))
         try:
             yield

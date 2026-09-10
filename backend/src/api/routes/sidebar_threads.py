@@ -8,6 +8,8 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.api.error_handlers import error_response
+from backend.configuration import ConfigurationError
 from backend.domain import (
     MessageQueueUnavailable,
     QueuedMessage,
@@ -69,8 +71,9 @@ def _queue_references(
 ) -> tuple[dict[str, str], ...]:
     try:
         return tuple(session_file_store(state, session_id).normalize_references(values))
-    except SessionFileError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        exc.api_status_code = 422
+        raise
 
 
 def _validate_queue_content(content: str, references: tuple[dict[str, str], ...]) -> str:
@@ -157,7 +160,7 @@ def list_queued_messages(thread_id: str, request: Request) -> list[dict[str, obj
     try:
         return [item.to_dict() for item in request.app.state.web.message_queue.list(thread_id)]
     except Exception as exc:
-        raise _queue_error(exc) from exc
+        return error_response(exc, status_code=_queue_error(exc).status_code)
 
 
 @router.post("/{thread_id}/queued-messages", status_code=201)
@@ -171,7 +174,7 @@ def create_queued_message(
     try:
         stored, created = request.app.state.web.message_queue.create(item)
     except Exception as exc:
-        raise _queue_error(exc) from exc
+        return error_response(exc, status_code=_queue_error(exc).status_code)
     response.status_code = 201 if created else 200
     return stored.to_dict()
 
@@ -191,7 +194,7 @@ def update_queued_message(
             references=references,
         )
     except Exception as exc:
-        raise _queue_error(exc) from exc
+        return error_response(exc, status_code=_queue_error(exc).status_code)
     return item.to_dict()
 
 
@@ -201,7 +204,7 @@ def delete_queued_message(thread_id: str, message_id: str, request: Request) -> 
     try:
         request.app.state.web.message_queue.delete(thread_id, message_id)
     except Exception as exc:
-        raise _queue_error(exc) from exc
+        return error_response(exc, status_code=_queue_error(exc).status_code)
     return Response(status_code=204)
 
 

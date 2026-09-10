@@ -80,8 +80,9 @@ class SandboxPolicyError(SandboxError):
 
 
 class SandboxInitializationError(SandboxError):
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, status_code: BrokerStatusFailureCode | None = None) -> None:
         super().__init__(message, SandboxFailureCode.INIT_FAILED)
+        self.broker_status_code = status_code
 
 
 class SandboxPathError(SandboxInitializationError):

@@ -95,10 +95,10 @@ class ResourceSubscriptions:
             if not ready.done():
                 ready.cancel()
             raise
-        except Exception:
+        except Exception as exc:
             self.states[uri] = "lost" if ready.done() else "rejected"
             if not ready.done():
-                ready.set_exception(ToolError("MCP resource subscription was rejected or disconnected."))
+                ready.set_exception(exc)
 
     async def unsubscribe(self, client: Client, uri: str) -> dict[str, Any]:
         task = self.tasks.pop(uri, None)

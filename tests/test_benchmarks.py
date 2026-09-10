@@ -151,7 +151,7 @@ def test_runner_returns_empty_trace_and_redacted_error_before_turn_creation() ->
     assert result.status == "error"
     assert result.failure_phase == "workspace"
     assert result.trace == []
-    assert "RuntimeError" in result.error
+    assert result.error_report["type"] == "RuntimeError"
     assert "secret-value" not in encoded
     assert "Traceback" not in encoded
 

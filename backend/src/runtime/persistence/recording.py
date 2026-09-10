@@ -7,7 +7,14 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from backend.domain import ToolSpec, message_to_dict, redact_sensitive_text, safe_error_message
+from backend.domain import (
+    ToolSpec,
+    error_report,
+    message_to_dict,
+    normalize_error_report,
+    redact_sensitive_text,
+    safe_error_message,
+)
 
 from ..core.context import PreparedResponse, RuntimeExchange, RuntimeState
 from ..core.events import RuntimeEvent
@@ -141,6 +148,7 @@ def model_error_data(state: RuntimeState, exchange: RuntimeExchange, error: Exce
         "operation": exchange.operation,
         "error_type": error.__class__.__name__,
         "error": safe_error_message(error),
+        "error_report": error_report(error),
         "diagnostics": dict(diagnostics) if isinstance(diagnostics, dict) else {},
     }
     if exchange.wire_request is not None:
@@ -215,6 +223,8 @@ def turn_trace_audit_value(value: Any) -> Any:
 
 
 def _persistent_value(value: Any, include_full_messages: bool, key: str | None = None) -> Any:
+    if key == "error_report":
+        return normalize_error_report(value)
     if key is not None and _SENSITIVE_KEY.search(key):
         return "[REDACTED]"
     if isinstance(value, Mapping):

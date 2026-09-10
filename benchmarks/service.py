@@ -11,7 +11,6 @@ from threading import RLock
 from time import monotonic
 from uuid import uuid4
 
-from backend.domain import safe_error_message
 from backend.jobs import (
     TERMINAL_STATES,
     AdmissionPolicy,
@@ -129,7 +128,7 @@ class BenchmarkService:
                     admission=AdmissionPolicy(queue_mode=QueueMode.REJECT, slot_mode=SlotMode.UNMETERED),
                 )
             except Exception as exc:
-                item.result = _error_result(item.task, safe_error_message(exc), failure_phase="application")
+                item.result = _error_result(item.task, exc, failure_phase="application")
                 self._finish(item, "failed")
 
     def _worker(self, item: TaskRun, *, is_cancelled: Callable[[], bool]) -> None:
@@ -162,7 +161,7 @@ class BenchmarkService:
                     item.result = result
         except Exception as exc:
             with self._lock:
-                item.result = _error_result(item.task, safe_error_message(exc), failure_phase=item.phase)
+                item.result = _error_result(item.task, exc, failure_phase=item.phase)
         finally:
             with self._lock:
                 item.model_config = None

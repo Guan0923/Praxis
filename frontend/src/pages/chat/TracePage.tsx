@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "../../components/ErrorDisplay";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Alert, Button, Collapse, Empty, Spin, Tag, type CollapseProps } from "antd";
 import { DownloadOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
@@ -173,7 +174,7 @@ function TurnTraceContent({ turn, dataIdx, active }: {
 }) {
   const [trace, setTrace] = useState<TurnTraceResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Error | string | null>(null);
 
   useEffect(() => {
     if (!active) {
@@ -213,7 +214,7 @@ function TurnTraceContent({ turn, dataIdx, active }: {
         schedule();
       } catch (reason) {
         if (!stopped && !activeController.signal.aborted) {
-          setError(String((reason as Error).message ?? reason));
+          setError(reason instanceof Error ? reason : String(reason));
           schedule();
         }
       } finally {
@@ -236,7 +237,7 @@ function TurnTraceContent({ turn, dataIdx, active }: {
 
   return (
     <div className="trace-turn-content">
-      {error ? <Alert type="error" showIcon title={error} /> : null}
+      {error ? <Alert type="error" showIcon title={<ErrorDisplay error={error} />} /> : null}
       {loading && !response ? <div className="trace-loading"><Spin /></div> : null}
       {response && innerItems.length > 0
         ? <Collapse

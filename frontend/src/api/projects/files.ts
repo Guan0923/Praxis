@@ -1,3 +1,4 @@
+import { apiErrorFrom } from "../transport/request";
 import type {
   FileEditorDocument,
   FileReference,
@@ -8,7 +9,7 @@ import type {
   SessionFileInfo,
 } from "../../types";
 import { apiUrl } from "../transport/base";
-import { ApiError, errorFrom, jsonBody, requestJson, requestRaw, requestVoid } from "../transport/request";
+import { ApiError, jsonBody, requestJson, requestRaw, requestVoid } from "../transport/request";
 import { windowOperationControl } from "../transport/operationControl";
 
 /** Upload a batch of files; resolves to the stored file metadata. */
@@ -27,7 +28,7 @@ export async function uploadSessionFiles(
     (targetUrl, init) => fetchWithProgress(apiUrl(targetUrl), init, onProgress),
   );
   if (!response.ok) {
-    throw new ApiError(response.status, await errorFrom(response));
+    throw await apiErrorFrom(response);
   }
   return response.json() as Promise<SessionFileInfo[]>;
 }
@@ -77,7 +78,7 @@ export async function searchSessionFiles(
     { cache: "no-store" },
   );
   if (!response.ok) {
-    throw new ApiError(response.status, await errorFrom(response));
+    throw await apiErrorFrom(response);
   }
   return response.json() as Promise<SessionFileInfo[]>;
 }
@@ -106,7 +107,7 @@ export async function deleteSessionFile(
     { method: "DELETE", cache: "no-store", operation: { sessionId } },
   );
   if (!response.ok) {
-    throw new ApiError(response.status, await errorFrom(response));
+    throw await apiErrorFrom(response);
   }
 }
 

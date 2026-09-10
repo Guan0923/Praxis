@@ -21,7 +21,7 @@ interface ConversationActionsContext {
   setConversations: Dispatch<SetStateAction<Conversation[]>>;
   setCurrentId: Dispatch<SetStateAction<string | null>>;
   setPage: Dispatch<SetStateAction<Page>>;
-  setActionError: Dispatch<SetStateAction<string | null>>;
+  setActionError: Dispatch<SetStateAction<Error | string | null>>;
 }
 
 export function createConversationActions(context: ConversationActionsContext) {
@@ -45,7 +45,7 @@ export function createConversationActions(context: ConversationActionsContext) {
       const summary = await renameSession(conversation?.threadId ?? sessionId, title, sessionId);
       updateConversation(id, (current) => summaryToConversation(summary, current));
     } catch (error) {
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
       throw error;
     }
   }
@@ -59,7 +59,7 @@ export function createConversationActions(context: ConversationActionsContext) {
       updateConversation(id, (current) => summaryToConversation(summary, current));
       if (currentId === id) setCurrentId(activeConversations.find((item) => item.id !== id)?.id ?? null);
     } catch (error) {
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
     }
   }
 
@@ -72,7 +72,7 @@ export function createConversationActions(context: ConversationActionsContext) {
       setConversations((previous) => previous.filter((item) => item.id !== id));
       if (currentId === id) setCurrentId(null);
     } catch (error) {
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
     }
   }
 
@@ -86,7 +86,7 @@ export function createConversationActions(context: ConversationActionsContext) {
       updateConversation(id, (current) => summaryToConversation(summary, current));
       if (!currentId) setCurrentId(conversation.id);
     } catch (error) {
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
     }
   }
 
@@ -118,7 +118,7 @@ export function createConversationActions(context: ConversationActionsContext) {
       setCurrentId(branch.id);
       setPage("chat");
     } catch (error) {
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
     }
   }
 
@@ -141,7 +141,7 @@ export function createConversationActions(context: ConversationActionsContext) {
         rewindTurnId: turnId,
       };
     } catch (error) {
-      setActionError(String((error as Error).message ?? error));
+      setActionError(error instanceof Error ? error : String(error));
       return undefined;
     }
   }

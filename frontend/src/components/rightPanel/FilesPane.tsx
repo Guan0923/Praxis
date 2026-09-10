@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "../ErrorDisplay";
 import {
   DeleteOutlined,
   DownloadOutlined,
@@ -311,7 +312,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
     setDirty(false);
     setSaveState("idle");
     setTreeActiveKey(null);
-    void refreshRoots().catch((error) => void message.error(String((error as Error).message ?? error)));
+    void refreshRoots().catch((error) => void message.error({ content: <ErrorDisplay error={error} />, duration: 0 }));
   }, [message, refreshRoots]);
 
   useEffect(() => {
@@ -426,7 +427,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
       dirtyRef.current = false;
       setSaveState("idle");
     } catch (error) {
-      if (generation === generationRef.current) void message.error(String((error as Error).message ?? error));
+      if (generation === generationRef.current) void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
     } finally {
       if (generation === generationRef.current) setLoadingFile(false);
     }
@@ -478,7 +479,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
       await refreshCurrent();
       if (notify) void message.success("已刷新");
     } catch (error) {
-      if (notify) void message.error(String((error as Error).message ?? error));
+      if (notify) void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
     }
   }, [message, refreshCurrent, refreshLoadedDirectories]);
 
@@ -541,7 +542,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
       setActionValue("");
       await refreshAll(false);
     } catch (error) {
-      void message.error(String((error as Error).message ?? error));
+      void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
     }
   };
 
@@ -560,7 +561,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
       setMoveTarget(null);
       await refreshAll(false);
     } catch (error) {
-      void message.error(String((error as Error).message ?? error));
+      void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
     }
   };
 
@@ -597,12 +598,12 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
           void saveQueueRef.current.then(() => recycleFileEntry(sessionId, node.source!, node.path!)).then(() => {
             clearSelectionIfAffected(node.source!, node.path!);
             return refreshAll(false);
-          }).catch(() => {
+          }).catch((error) => {
             if (wasDirty) {
               dirtyRef.current = true;
               setDirty(true);
             }
-            void message.error("删除失败");
+            void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
           });
           return;
         }

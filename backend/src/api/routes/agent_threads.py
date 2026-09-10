@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from backend.api.error_handlers import error_response
 from backend.domain import MessageQueueUnavailable
 from backend.tools import ToolError
 
@@ -54,7 +55,7 @@ def list_agent_thread_children(thread_id: str, session_id: str, request: Request
     try:
         return _coordinator(request.app.state.web).list_children(session_id, thread_id)
     except ToolError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return error_response(exc, status_code=404, detail=str(exc))
 
 
 @router.post("/{target_thread_id}/messages", status_code=202)
@@ -84,13 +85,13 @@ def send_agent_thread_message(
             runtime_config={key: value for key, value in runtime_config.items() if value is not None},
         )
     except SessionFileError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return error_response(exc, status_code=422, detail=str(exc))
     except MessageQueueUnavailable as exc:
-        raise HTTPException(status_code=503, detail="message_queue_unavailable") from exc
+        return error_response(exc, status_code=503, detail="message_queue_unavailable")
     except ToolError as exc:
         detail = str(exc)
         status = 404 if "tree" in detail.lower() else 422
-        raise HTTPException(status_code=status, detail=detail) from exc
+        return error_response(exc, status_code=status, detail=detail)
 
 
 @router.get("/{thread_id}/stream")

@@ -40,6 +40,14 @@ CREATE TABLE IF NOT EXISTS provider_settings (
 """
 
 
+class ProviderConfigNotFound(ValueError):
+    """The requested provider configuration does not exist."""
+
+
+class ActiveProviderConflict(ValueError):
+    """The active provider cannot be deleted."""
+
+
 class LocalSettingsStore:
     """Own settings for the one local Praxis installation."""
 
@@ -322,7 +330,7 @@ class LocalSettingsStore:
             records = self._provider_records(connection)
             current = next((item for item in records if str(item.get("id")) == config_id), None)
             if current is None:
-                raise ValueError("provider configuration not found")
+                raise ProviderConfigNotFound("provider configuration not found")
             normalized = normalize_provider_config(current, {**current, **values})
             ciphertext = str(current.get("api_key_ciphertext") or "")
             if isinstance(values.get("api_key"), str) and str(values["api_key"]).strip():
@@ -338,7 +346,7 @@ class LocalSettingsStore:
         with self._connection(immediate=True) as connection:
             records = self._provider_records(connection)
             if not any(str(item.get("id")) == config_id for item in records):
-                raise ValueError("provider configuration not found")
+                raise ProviderConfigNotFound("provider configuration not found")
             records = [{**item, "is_active": str(item.get("id")) == config_id} for item in records]
             self._write_provider_records(records, connection)
         return self._public_provider(next(item for item in records if item.get("is_active")))
@@ -348,9 +356,9 @@ class LocalSettingsStore:
             records = self._provider_records(connection)
             target = next((item for item in records if str(item.get("id")) == config_id), None)
             if target is None:
-                raise ValueError("provider configuration not found")
+                raise ProviderConfigNotFound("provider configuration not found")
             if target.get("is_active") and len(records) > 1:
-                raise ValueError("activate another provider before deleting the current provider")
+                raise ActiveProviderConflict("activate another provider before deleting the current provider")
             records = [item for item in records if str(item.get("id")) != config_id]
             self._write_provider_records(records, connection)
         return [self._public_provider(item) for item in records]

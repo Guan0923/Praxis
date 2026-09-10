@@ -1,3 +1,4 @@
+import { reportFromError } from "../api/errorReport";
 import { pauseTurn, SseExecutionError, SseProtocolError, streamAttachedTurn, streamChat, streamResume, streamRewind } from "../api";
 import type { ChatMessage, RuntimeStateNode, StreamMessage } from "../types";
 import type { ActiveRun, ChatRunRequest } from "./types";
@@ -227,7 +228,7 @@ export function createRunController(callbacks: RunControllerCallbacks) {
             integrateRuntimeNodeUpdates(conversation, [stopped], stopped.id, true));
         }
         callbacks.updateLastMessage(request.conversationId, (item) => ({
-          ...item, error: error.message, status: "failed", running: false, decision: undefined,
+          ...item, error: error.message, error_report: reportFromError(error), status: "failed", running: false, decision: undefined,
           items: item.items?.map((entry) => entry.status === "running" ? { ...entry, status: "failed" } : entry),
         }));
         return;
@@ -251,6 +252,7 @@ export function createRunController(callbacks: RunControllerCallbacks) {
         callbacks.updateLastMessage(request.conversationId, (item) => ({
           ...item,
           error: String((error as Error).message ?? error),
+          error_report: reportFromError(error),
           running: protocolError ? false : finalTurn?.status === "running",
           decision: undefined,
         }));

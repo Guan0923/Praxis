@@ -288,7 +288,7 @@ class SandboxLauncher:
                 raise SandboxPathError(SandboxPathFailure.CLEANUP_FAILED, temp_dir) from exc
             if isinstance(exc, SandboxError):
                 raise
-            raise SandboxInitializationError("sandbox process launch failed") from exc
+            raise
 
         pid = getattr(process, "pid", None)
         if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:

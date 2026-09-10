@@ -19,7 +19,6 @@ from backend.api.routes.sandbox import repair as repair_broker
 from backend.api.routes.sandbox import status as status_broker
 from backend.sandbox import (
     BrokerStatusFailureCode,
-    SandboxInitializationError,
     SandboxMaintenanceBusy,
     SandboxMaintenanceGate,
     WindowsBrokerClient,
@@ -323,8 +322,10 @@ def test_configuration_read_failure_logs_step_error_type_and_winerror_once(
     installer = WindowsServiceInstaller(("pythonservice.exe",), is_windows=True)
     caplog.set_level(logging.WARNING, logger="backend.sandbox.broker_service.installer")
 
-    assert installer.configuration_healthy() is False
-    assert installer.configuration_healthy() is False
+    with pytest.raises(ServiceReadError):
+        installer.configuration_healthy()
+    with pytest.raises(ServiceReadError):
+        installer.configuration_healthy()
 
     messages = [record.getMessage() for record in caplog.records]
     assert len(messages) == 1
@@ -457,7 +458,7 @@ def test_broker_status_classifies_protocol_and_health_failures(
 @pytest.mark.parametrize(
     ("failure", "expected_code"),
     [
-        (SandboxInitializationError("Windows Broker pipe is unavailable"), BrokerStatusFailureCode.PIPE_UNAVAILABLE),
+        (OSError(22, "Invalid argument"), BrokerStatusFailureCode.PIPE_UNAVAILABLE),
         (RuntimeError("  exact raw status failure\n"), BrokerStatusFailureCode.STATUS_FAILED),
     ],
 )
@@ -888,7 +889,11 @@ def test_install_route_returns_safe_category_and_code() -> None:
     response = install_broker(request)
 
     assert response.status_code == 503
-    assert json.loads(response.body) == {
+    payload = json.loads(response.body)
+    report = payload.pop("error_report")
+    assert report["type"] == "BrokerInstallationError"
+    assert report["traceback"]
+    assert payload == {
         "detail": "需要管理员权限才能安装沙箱 Broker。",
         "code": "broker_admin_required",
     }
@@ -929,7 +934,11 @@ def test_repair_route_returns_safe_stop_category_and_code() -> None:
     response = repair_broker(request)
 
     assert response.status_code == 503
-    assert json.loads(response.body) == {
+    payload = json.loads(response.body)
+    report = payload.pop("error_report")
+    assert report["type"] == "BrokerInstallationError"
+    assert report["traceback"]
+    assert payload == {
         "detail": message,
         "code": "broker_service_stop_failed",
     }
@@ -973,7 +982,11 @@ def test_repair_route_preserves_every_failure_code_and_complete_detail(
     response = repair_broker(request)
 
     assert response.status_code == 503
-    assert json.loads(response.body) == {"detail": message, "code": failure_code.value}
+    payload = json.loads(response.body)
+    report = payload.pop("error_report")
+    assert report["type"] == "BrokerInstallationError"
+    assert report["traceback"]
+    assert payload == {"detail": message, "code": failure_code.value}
 
 
 def test_repair_route_installs_when_broker_is_missing() -> None:

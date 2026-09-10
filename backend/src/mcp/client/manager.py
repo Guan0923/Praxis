@@ -75,7 +75,7 @@ class ExternalMcpManager:
         self.capabilities: dict[str, types.ServerCapabilities] = {}
         self.protocol_versions: dict[str, str] = {}
         self._subscriptions: dict[str, ResourceSubscriptions] = {}
-        self.failed_servers: dict[str, str] = {}
+        self.failed_servers: dict[str, BaseException] = {}
         self.server_health: dict[str, str] = {}
         self.service_jobs: dict[str, ServiceJob] = {}
         self._job_registry = job_registry
@@ -132,8 +132,8 @@ class ExternalMcpManager:
                 self.server_health[server.name] = "healthy"
             except Exception as exc:
                 # One server must not prevent independent servers from
-                # starting.  Keep only the exception class in diagnostics.
-                self.failed_servers[server.name] = type(exc).__name__
+                # starting. Keep the original failure for later callers.
+                self.failed_servers[server.name] = exc
                 self.server_health[server.name] = "failed"
         return definitions
 
@@ -176,8 +176,9 @@ class ExternalMcpManager:
                 ready.cancel()
             raise
         except Exception as exc:
+            self.failed_servers[server.name] = exc
             if not ready.done():
-                ready.set_exception(ToolError(f"MCP connection failed ({type(exc).__name__})."))
+                ready.set_exception(exc)
             self.server_health[server.name] = "down"
         finally:
             self._sessions.pop(server.name, None)
@@ -215,8 +216,10 @@ class ExternalMcpManager:
         except FutureTimeoutError as exc:
             raise ToolError(safe_error_message(exc)) from exc
         except Exception as exc:
-            self.failed_servers[server_name] = type(exc).__name__
+            self.failed_servers[server_name] = exc
             self.server_health[server_name] = "failed"
+            if isinstance(exc, ToolError):
+                raise
             raise ToolError(safe_error_message(exc)) from exc
 
     def _stop_server(self, server_name: str) -> None:
@@ -236,6 +239,9 @@ class ExternalMcpManager:
         context: ToolInvocationContext | None = None,
     ) -> str:
         if server_name not in self._sessions:
+            failure = self.failed_servers.get(server_name)
+            if failure is not None:
+                raise failure
             raise ToolError(f"MCP server {server_name} is unavailable.")
         try:
             result = self._submit(
@@ -250,6 +256,8 @@ class ExternalMcpManager:
                 job.report_failure()
             raise ToolError(safe_error_message(exc)) from exc
         except Exception as exc:
+            if isinstance(exc, ToolError):
+                raise
             if context is not None and context.cancel_requested and context.cancel_requested():
                 raise ToolError("MCP tool invocation cancelled.") from None
             getattr(self, "server_health", {})[server_name] = "degraded"
@@ -274,7 +282,7 @@ class ExternalMcpManager:
         except Exception as exc:
             if isinstance(exc, ToolError):
                 raise
-            raise ToolError(f"MCP {method} failed ({type(exc).__name__}).") from None
+            raise ToolError(safe_error_message(exc)) from exc
 
     async def _request(self, server: str, method: str, arguments: dict[str, Any]) -> str:
         client = self._sessions.get(server)

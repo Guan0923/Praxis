@@ -137,10 +137,7 @@ def normalize_sandbox_config(
     if isinstance(values, Mapping):
         result.update(values)
     network_mode = str(result.get("network_mode") or NetworkMode.NO_NETWORK.value)
-    try:
-        network = NetworkMode(network_mode)
-    except ValueError as exc:
-        raise ValueError("network_mode must be no_network, restricted_network, or full_network") from exc
+    network = NetworkMode(network_mode)
     raw_allowlist = result.get("network_allowlist") or []
     if not isinstance(raw_allowlist, (list, tuple)):
         raise ValueError("network_allowlist must be an array")

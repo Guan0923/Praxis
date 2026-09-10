@@ -18,6 +18,8 @@ import subprocess
 import threading
 from collections.abc import Mapping, Sequence
 
+from backend.domain import error_report
+
 from ..base import Job, JobKind, JobStateError
 from ..output import CommandError, format_command_output
 from .group import ProcessFactory, ProcessGroup, TreeTerminator
@@ -126,6 +128,15 @@ class SubprocessJob(Job):
         """The decoded (untrucated) captured standard error."""
         return self._stderr
 
+    def _mark_failed(self, exception: BaseException, *, exit_code: int | None = None, pids=()) -> None:
+        if self._output:
+            exception.add_note(
+                format_command_output(
+                    self._stdout, self._stderr, max_chars=max(0, self._max_output_chars - len(str(exception)) - 1)
+                )
+            )
+        super()._mark_failed(exception, exit_code=exit_code, pids=pids)
+
     def start(self) -> None:
         """Launch the child and begin monitoring it.
 
@@ -181,7 +192,7 @@ class SubprocessJob(Job):
         try:
             try:
                 stdout, stderr = self._group.communicate(timeout=self._timeout_seconds)
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as timeout_error:
                 self._group.terminate()
                 stdout, stderr = self._group.communicate(timeout=30.0)
                 exit_code = self._group.poll()
@@ -189,11 +200,9 @@ class SubprocessJob(Job):
                 if self.info().cancel_requested_at is not None:
                     outcome = ("cancelled", exit_code, None)
                 else:
-                    outcome = (
-                        "failed",
-                        exit_code,
-                        CommandError(f"Command timed out after {self._timeout_seconds} seconds."),
-                    )
+                    failure = CommandError(f"Command timed out after {self._timeout_seconds} seconds.")
+                    failure.__cause__ = timeout_error
+                    outcome = ("failed", exit_code, failure)
             else:
                 exit_code = self._group.poll()
                 self._capture(stdout, stderr)
@@ -212,15 +221,29 @@ class SubprocessJob(Job):
             self._mark_sandbox_failure(getattr(exc, "code", "init_failed"))
             outcome = ("failed", self._group.poll(), exc)
         finally:
+            cleanup_errors: list[Exception] = []
             if self.resource_monitor is not None:
-                self.resource_monitor.stop()
+                try:
+                    self.resource_monitor.stop()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
             if self.sandbox_launcher is not None:
                 process = getattr(self._group, "_process", None)
-                if not self.sandbox_launcher.cleanup(process):
-                    current = self.info().sandbox or {}
-                    current.update({"cleanup_pending": True, "failure_code": "sandbox_cleanup_failed"})
-                    self._set_sandbox_info(current)
-                    outcome = ("failed", self._group.poll(), CommandError("Sandbox cleanup failed."))
+                try:
+                    if not self.sandbox_launcher.cleanup(process):
+                        cleanup_errors.append(CommandError("Sandbox cleanup failed."))
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+            if cleanup_errors:
+                current = self.info().sandbox or {}
+                current.update({"cleanup_pending": True, "failure_code": "sandbox_cleanup_failed"})
+                self._set_sandbox_info(current)
+                original = outcome[2]
+                if original is None:
+                    original = cleanup_errors.pop(0)
+                    outcome = ("failed", outcome[1], original)
+                for cleanup_error in cleanup_errors:
+                    original.add_note("Cleanup also failed:\n" + error_report(cleanup_error)["traceback"])
 
         kind, exit_code, error = outcome
         try:

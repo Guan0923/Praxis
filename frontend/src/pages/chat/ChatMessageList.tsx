@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "../../components/ErrorDisplay";
 import { LeftOutlined, ReloadOutlined, RightOutlined } from "@ant-design/icons";
 import { Button, Input } from "antd";
 import type { TextAreaRef } from "antd/es/input/TextArea";
@@ -32,6 +33,7 @@ interface ChatMessageListProps {
   onDecision: (request: DecisionRequest, choice: string, options?: { supplement?: string; answers?: Record<string, string[]> }) => Promise<void>;
   onFork?: (messageId: string) => void;
   sandboxFailure?: string | null;
+  sandboxErrorReport?: unknown;
   onRetrySend?: (message: ChatMessage) => void;
 }
 
@@ -59,6 +61,7 @@ export function ChatMessageList({
   onDecision,
   onFork,
   sandboxFailure,
+  sandboxErrorReport,
   onRetrySend,
 }: ChatMessageListProps) {
   return (
@@ -120,7 +123,7 @@ export function ChatMessageList({
                     {message.pending ? <span className="agent-message-pending" role="status">发送中…</span> : null}
                     {message.error ? (
                       <span role="alert">
-                        {message.error}
+                        <ErrorDisplay error={message.error} report={message.error_report} />
                         <Button type="text" size="small" icon={<ReloadOutlined />} title="重试发送" aria-label="重试发送" disabled={interactionBusy} onClick={(event) => { event.stopPropagation(); onRetrySend?.(message); }} />
                       </span>
                     ) : null}
@@ -152,7 +155,7 @@ export function ChatMessageList({
             <div className="message assistant sandbox-health-failure" role="status" aria-live="polite">
               <div className="message-content">
                 <div className="bubble assistant-bubble">
-                  <MarkdownContent text={`沙箱 Broker 不可用：${sandboxFailure}`} />
+                  <ErrorDisplay error={sandboxFailure} report={sandboxErrorReport} />
                 </div>
               </div>
             </div>

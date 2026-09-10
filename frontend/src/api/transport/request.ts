@@ -1,11 +1,12 @@
 /** Shared browser request helpers used by all API domains. */
 
+import { errorSummary, readErrorReport, type ErrorReport } from "../errorReport";
 import { apiUrl } from "./base";
 import { type OperationTarget, windowOperationControl } from "./operationControl";
 
 export class ApiError extends Error {
-  constructor(public readonly status: number, message: string, public readonly code?: string) {
-    super(message);
+  constructor(public readonly status: number, message: string, public readonly code?: string, public readonly error_report?: ErrorReport) {
+    super(error_report ? errorSummary({ error_report }) : message);
     this.name = "ApiError";
   }
 }
@@ -13,14 +14,17 @@ export class ApiError extends Error {
 export interface ApiErrorDetails {
   message: string;
   code?: string;
+  error_report?: ErrorReport;
 }
 
 export async function errorDetailsFrom(res: Response): Promise<ApiErrorDetails> {
   try {
     const body = await res.json();
-    if (body && typeof body.detail === "string") {
+    const report = readErrorReport(body?.error_report);
+    if (report || (body && typeof body.detail === "string")) {
       return {
-        message: body.detail,
+        message: typeof body.detail === "string" ? body.detail : report!.message,
+        error_report: report,
         code: typeof body.code === "string" ? body.code : undefined,
       };
     }
@@ -30,8 +34,9 @@ export async function errorDetailsFrom(res: Response): Promise<ApiErrorDetails> 
   return { message: `HTTP ${res.status}` };
 }
 
-export async function errorFrom(res: Response): Promise<string> {
-  return (await errorDetailsFrom(res)).message;
+export async function apiErrorFrom(res: Response): Promise<ApiError> {
+  const details = await errorDetailsFrom(res);
+  return new ApiError(res.status, details.message, details.code, details.error_report);
 }
 
 export interface OperationRequestInit extends RequestInit {
@@ -47,7 +52,7 @@ export async function requestRaw(url: string, init: OperationRequestInit = {}): 
     : await windowOperationControl.request(url, resolved, operation ?? {});
   if (!res.ok) {
     const details = await errorDetailsFrom(res);
-    throw new ApiError(res.status, details.message, details.code);
+    throw new ApiError(res.status, details.message, details.code, details.error_report);
   }
   return res;
 }

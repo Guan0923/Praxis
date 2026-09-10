@@ -343,6 +343,7 @@ def terminal_error_payload(
     *,
     retryable: bool,
     code: str = "",
+    error_report: object = None,
 ) -> dict[str, Any]:
     payload = {
         "type": "error",
@@ -351,6 +352,11 @@ def terminal_error_payload(
         "retryable": retryable,
         "status": "failed",
     }
+    from ..errors import normalize_error_report
+
+    report = normalize_error_report(error_report)
+    if report is not None:
+        payload["error_report"] = report
     if code:
         payload["code"] = str(code)
     return normalize_content(payload)[0]

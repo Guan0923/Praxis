@@ -1101,7 +1101,7 @@ describe("ChatPage queued message flushing", () => {
       />,
     );
 
-    expect(document.querySelector(".sandbox-health-failure")).toHaveTextContent("沙箱 Broker 不可用：Broker service stopped");
+    expect(document.querySelector(".sandbox-health-failure")).toHaveTextContent("Broker service stopped");
     expect(screen.getByLabelText("聊天输入")).toHaveAttribute("contenteditable", "false");
     expect(screen.getByRole("combobox", { name: "运行模式" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "发送第 1 条待发送消息" })).toBeDisabled();

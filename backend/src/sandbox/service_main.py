@@ -46,10 +46,7 @@ def _server() -> WindowsNamedPipeServer:
     configuration = _configuration()
     service = WindowsBrokerService(configuration)
     service.initialize()
-    try:
-        backend_sid = configuration.backend_sid_path.read_text(encoding="ascii").strip()
-    except OSError as exc:
-        raise SandboxInitializationError("Broker backend SID is unavailable") from exc
+    backend_sid = configuration.backend_sid_path.read_text(encoding="ascii").strip()
     service_sid = windows_service_sid("PraxisSandboxBroker")
     return WindowsNamedPipeServer(
         service,

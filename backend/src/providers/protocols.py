@@ -20,7 +20,7 @@ from backend.runtime.core.context import AgentRuntime, PreparedResponse
 
 from .chat_completions import ChatCompletions
 from .config import ModelConfig
-from .errors import ModelRequestError, ModelResponseError, ModelTransportError, ProviderOutputError
+from .errors import ModelResponseError, ProviderOutputError
 
 
 class ChatCompletionsAdapter(ChatCompletions):
@@ -61,14 +61,14 @@ def _parse_tool_call(name: Any, call_id: Any, arguments: Any, *, incomplete: boo
     except (TypeError, ValueError) as exc:
         if incomplete:
             return None
-        raise ModelRequestError(safe_error_message(exc)) from exc
+        raise ProviderOutputError(safe_error_message(exc)) from exc
     return ToolMessage(name=name, call_id=call_id, arguments=dict(parsed), status="pending")
 
 
 def _message_block_index(event: Mapping[str, Any]) -> int:
     index = event.get("index")
     if isinstance(index, bool) or not isinstance(index, int) or index < 0:
-        raise ModelRequestError("Messages content block requires a non-negative integer index.")
+        raise ProviderOutputError("Messages content block requires a non-negative integer index.")
     return index
 
 
@@ -164,12 +164,7 @@ class ResponsesAdapter:
 
     def prepare_response(self, runtime: AgentRuntime) -> PreparedResponse:
         raw = runtime.exchange.raw_response
-        try:
-            parsed = self._parse_stream(runtime, raw) if not isinstance(raw, Mapping) else self._parse_json(raw)
-        except (ModelTransportError, ModelResponseError):
-            raise
-        except ModelRequestError as exc:
-            raise ProviderOutputError(safe_error_message(exc), operation=runtime.exchange.operation) from exc
+        parsed = self._parse_stream(runtime, raw) if not isinstance(raw, Mapping) else self._parse_json(raw)
         runtime.exchange.prepared_response = parsed
         runtime.state.turn_usage = parsed.usage
         return parsed
@@ -193,7 +188,7 @@ class ResponsesAdapter:
             )
         output = data.get("output")
         if not isinstance(output, list):
-            raise ModelRequestError("Responses output must be an array.")
+            raise ProviderOutputError("Responses output must be an array.")
         content = ""
         reasoning = ""
         tools: list[ToolMessage] = []
@@ -366,12 +361,7 @@ class MessagesAdapter:
 
     def prepare_response(self, runtime: AgentRuntime) -> PreparedResponse:
         raw = runtime.exchange.raw_response
-        try:
-            parsed = self._parse_stream(runtime, raw) if not isinstance(raw, Mapping) else self._parse_json(raw)
-        except (ModelTransportError, ModelResponseError):
-            raise
-        except ModelRequestError as exc:
-            raise ProviderOutputError(safe_error_message(exc), operation=runtime.exchange.operation) from exc
+        parsed = self._parse_stream(runtime, raw) if not isinstance(raw, Mapping) else self._parse_json(raw)
         runtime.exchange.prepared_response = parsed
         runtime.state.turn_usage = parsed.usage
         return parsed
@@ -388,7 +378,7 @@ class MessagesAdapter:
             )
         blocks = data.get("content")
         if not isinstance(blocks, list):
-            raise ModelRequestError("Messages response content must be an array.")
+            raise ProviderOutputError("Messages response content must be an array.")
         text: list[str] = []
         reasoning: list[str] = []
         tools: list[ToolMessage] = []
@@ -460,7 +450,7 @@ class MessagesAdapter:
                     if isinstance(delta.get("partial_json"), str):
                         index = _message_block_index(event)
                         if index not in calls:
-                            raise ModelRequestError("Messages tool delta has no matching content block.")
+                            raise ProviderOutputError("Messages tool delta has no matching content block.")
                         calls[index]["fragments"].append(delta["partial_json"])
             elif kind == "content_block_stop":
                 stopped_blocks.add(_message_block_index(event))
@@ -496,7 +486,7 @@ class MessagesAdapter:
             if index not in stopped_blocks:
                 if stop_reason == "max_tokens":
                     continue
-                raise ModelRequestError("Messages tool block ended without content_block_stop.")
+                raise ProviderOutputError("Messages tool block ended without content_block_stop.")
             fragments = value.pop("fragments")
             blocks.append({**value, "input": "".join(fragments) if fragments else value.get("input")})
         return self._parse_json({**header, "content": blocks, "usage": usage or None, "stop_reason": stop_reason})

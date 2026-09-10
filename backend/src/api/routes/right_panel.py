@@ -8,6 +8,7 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.api.error_handlers import error_response
 from backend.domain import MessageQueueUnavailable, RightPanelWindow
 from backend.domain.runtime_state import RuntimeRootState, RuntimeState, new_thread_id
 from backend.domain.state import utc_now
@@ -151,7 +152,7 @@ def create_side_chat(
         store.create_side_chat_window(window, anchor)
         store.save_right_panel_state(session_id, collapsed=False, active_window_id=window.id)
     except (RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return error_response(exc, status_code=409, detail=str(exc))
     return {"window": window.to_dict(), "anchor": anchor.to_dict()}
 
 
@@ -171,9 +172,9 @@ def create_terminal(
     try:
         terminal = state.terminal_manager.create(terminal_type, source.cwd)
     except MessageQueueUnavailable as exc:
-        raise HTTPException(status_code=503, detail="message_queue_unavailable") from exc
+        return error_response(exc, status_code=503, detail="message_queue_unavailable")
     except (RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return error_response(exc, status_code=409, detail=str(exc))
     all_windows = store.list_right_panel_windows(session_id, include_deleted=True)
     number = sum(item.kind == "terminal" and item.terminal_type == terminal.terminal_type for item in all_windows) + 1
     now = utc_now()
@@ -194,7 +195,7 @@ def create_terminal(
         store.save_right_panel_state(session_id, collapsed=False, active_window_id=window.id)
     except (RuntimeError, ValueError) as exc:
         state.terminal_manager.close(terminal.id)
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return error_response(exc, status_code=409, detail=str(exc))
     return {"window": window.to_dict(), "terminal": terminal.payload()}
 
 
@@ -235,7 +236,7 @@ def rename_window(
     try:
         return store.update_right_panel_window(session_id, window_id, title=body.title).to_dict()
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return error_response(exc, status_code=422, detail=str(exc))
 
 
 @router.delete("/{session_id}/windows/{window_id}", status_code=204)

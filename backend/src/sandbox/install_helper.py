@@ -71,7 +71,11 @@ def _run(
     except OSError as exc:
         raise _TransactionFailure(EXIT_FILESYSTEM_FAILED, "Broker service command could not start") from exc
     if result.returncode not in accepted_returncodes:
-        raise _TransactionFailure(failure_code, "Broker service command failed")
+        raise _TransactionFailure(
+            failure_code,
+            f"Command exited with code {result.returncode}: "
+            + (getattr(result, "stderr", b"") or b"").decode(errors="replace"),
+        )
 
 
 def _query_service_state(service_name: str) -> int:
@@ -88,8 +92,8 @@ def _query_service_state(service_name: str) -> int:
         service = win32service.OpenService(manager, service_name, win32service.SERVICE_QUERY_STATUS)
         status = win32service.QueryServiceStatusEx(service)
         return int(status["CurrentState"])
-    except Exception as exc:
-        raise OSError("Broker service state is unavailable") from exc
+    except Exception:
+        raise
     finally:
         if win32service is not None and service is not None:
             try:
@@ -166,35 +170,29 @@ def _persist_sid(path: Path | None, value: str | None) -> None:
     if path is None or value is None:
         return
     _icacls_sid(value)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Replace the file instead of writing in place.  Older installations
+    # may have an empty/protected DACL on backend.sid, which can deny an
+    # administrator an in-place write.  The parent directory is already
+    # controlled by the elevated transaction and permits replacement.
+    fd, temporary = tempfile.mkstemp(prefix=".backend.sid.", dir=path.parent)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Replace the file instead of writing in place.  Older installations
-        # may have an empty/protected DACL on backend.sid, which can deny an
-        # administrator an in-place write.  The parent directory is already
-        # controlled by the elevated transaction and permits replacement.
-        fd, temporary = tempfile.mkstemp(prefix=".backend.sid.", dir=path.parent)
+        with os.fdopen(fd, "w", encoding="ascii") as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
         try:
-            with os.fdopen(fd, "w", encoding="ascii") as stream:
-                stream.write(value)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-        finally:
-            try:
-                os.unlink(temporary)
-            except FileNotFoundError:
-                pass
-    except OSError as exc:
-        raise OSError("Broker backend SID could not be persisted") from exc
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 
 def _secure_program_data(path: Path | None, sid_path: Path | None, service_name: str) -> None:
     if path is None or sid_path is None:
         return
-    try:
-        backend_sid = sid_path.read_text(encoding="ascii").strip()
-    except OSError as exc:
-        raise OSError("Broker backend SID is unavailable") from exc
+    backend_sid = sid_path.read_text(encoding="ascii").strip()
     for command in _program_data_acl_commands(path, sid_path, backend_sid, service_name):
         _run(command, failure_code=EXIT_ACL_FAILED)
     for name in (
@@ -258,7 +256,8 @@ def _prepare_service_host(service_command: tuple[str, ...], service_class: str |
     try:
         installer._prepare_service_host()
     except BrokerInstallationError as exc:
-        raise _TransactionFailure(EXIT_DEPENDENCY_FAILED, "Broker service host could not be prepared") from exc
+        exc.exit_code = EXIT_DEPENDENCY_FAILED
+        raise
     return installer.service_command
 
 
@@ -366,14 +365,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) != 1:
         return EXIT_INVALID
+    payload = None
     try:
-        return run_transaction(_decode_payload(args[0]))
-    except (ValueError, TypeError, json.JSONDecodeError, UnicodeError):
-        return EXIT_INVALID
-    except OSError:
-        return EXIT_FILESYSTEM_FAILED
-    except _TransactionFailure as exc:
-        return exc.exit_code
+        payload = _decode_payload(args[0])
+        return run_transaction(payload)
+    except Exception as exc:
+        if payload is not None and payload.get("result_id") and payload.get("program_data_path"):
+            try:
+                from .installation.results import write_result
+
+                _validate_payload(payload)
+                write_result(Path(payload["program_data_path"]), payload["result_id"], exc, payload.get("backend_sid"))
+            except Exception:
+                pass  # Missing diagnostics must not replace the original transaction failure.
+        if isinstance(getattr(exc, "exit_code", None), int):
+            return exc.exit_code
+        return EXIT_FILESYSTEM_FAILED if isinstance(exc, OSError) else EXIT_INVALID
 
 
 if __name__ == "__main__":

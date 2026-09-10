@@ -143,7 +143,7 @@ describe("Memory settings management", () => {
     mocks.discoverProviderModels.mockRejectedValueOnce(new Error("Service unavailable"));
     const user = userEvent.setup();
     render(<MemorySettingsSection />);
-    expect(await screen.findByText("获取模型列表失败：Service unavailable")).toBeInTheDocument();
+    expect(await screen.findByText("Service unavailable")).toBeInTheDocument();
     expect(screen.getByText("saved-model")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "启用记忆" })).toBeEnabled();
     expect(mocks.updateMemoryConfig).not.toHaveBeenCalled();

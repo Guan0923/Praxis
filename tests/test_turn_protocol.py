@@ -1827,7 +1827,13 @@ def test_http_sse_surfaces_sandbox_failure_before_turn_baseline(tmp_path: Path, 
 
     assert response.status_code == 200
     payloads = [line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: ")]
-    assert payloads == [f'<SSE id="{turn_id}" type="failed">Windows Sandbox Broker 已安装，但健康检查未通过。</SSE>']
+    assert payloads[1:] == [
+        f'<SSE id="{turn_id}" type="failed">Windows Sandbox Broker 已安装，但健康检查未通过。</SSE>'
+    ]
+    diagnostic = json.loads(payloads[0])
+    assert diagnostic["type"] == "turn.error"
+    assert diagnostic["error_report"]["type"] == "SandboxInitializationError"
+    assert "test_turn_protocol.py" in diagnostic["error_report"]["traceback"]
 
 
 def test_failed_terminal_without_error_is_empty_and_warns(caplog) -> None:

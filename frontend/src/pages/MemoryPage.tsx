@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "../components/ErrorDisplay";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -58,13 +59,13 @@ const STATUS_COLOR: Record<string, string> = {
 export default function MemorySettingsSection() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Error | string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [config, setConfig] = useState<MemoryConfig | null>(null);
   const [provider, setProvider] = useState<ProviderConfig | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [modelsError, setModelsError] = useState<Error | string | null>(null);
   const [items, setItems] = useState<MemoryItem[]>([]);
   const [jobs, setJobs] = useState<MemoryJob[]>([]);
   const [threads, setThreads] = useState<SidebarThread[]>([]);
@@ -105,7 +106,7 @@ export default function MemorySettingsSection() {
       setThreads(sessionItems.filter((value) => !value.archived_at && !value.deleted_at));
       setInjections(records);
     } catch (value) {
-      if (generation === refreshGeneration.current) setError(value instanceof Error ? value.message : String(value));
+      if (generation === refreshGeneration.current) setError(value instanceof Error ? value : String(value));
     } finally {
       if (generation === refreshGeneration.current) setLoading(false);
     }
@@ -132,7 +133,7 @@ export default function MemorySettingsSection() {
     }).then((result) => {
       if (!cancelled) setModels(result.models);
     }).catch((value: unknown) => {
-      if (!cancelled) setModelsError(value instanceof Error ? value.message : String(value));
+      if (!cancelled) setModelsError(value instanceof Error ? value : String(value));
     }).finally(() => {
       if (!cancelled) setModelsLoading(false);
     });
@@ -168,7 +169,7 @@ export default function MemorySettingsSection() {
       setConfig(await updateMemoryConfig(next));
       setNotice("Memory 设置已保存。");
     } catch (value) {
-      setError(value instanceof Error ? value.message : String(value));
+      setError(value instanceof Error ? value : String(value));
     } finally {
       setSaving(false);
     }
@@ -182,7 +183,7 @@ export default function MemorySettingsSection() {
       setNotice(success);
       await refresh();
     } catch (value) {
-      setError(value instanceof Error ? value.message : String(value));
+      setError(value instanceof Error ? value : String(value));
     } finally {
       setSaving(false);
     }
@@ -194,7 +195,7 @@ export default function MemorySettingsSection() {
       setEvidence(await listMemoryEvidence(item.memory_id));
       setEvidenceItem(item);
     } catch (value) {
-      setError(value instanceof Error ? value.message : String(value));
+      setError(value instanceof Error ? value : String(value));
     }
   }
 
@@ -209,7 +210,7 @@ export default function MemorySettingsSection() {
           </div>
           <Button icon={<ReloadOutlined />} onClick={() => void refresh(true)} loading={loading}>刷新</Button>
         </div>
-        {error ? <Alert type="error" showIcon title={error} closable onClose={() => setError(null)} /> : null}
+        {error ? <Alert type="error" showIcon title={<ErrorDisplay error={error} />} closable onClose={() => setError(null)} /> : null}
         {notice ? <Alert type="success" showIcon title={notice} closable onClose={() => setNotice(null)} /> : null}
 
         <Card title="记忆系统">
@@ -219,7 +220,7 @@ export default function MemorySettingsSection() {
                 <Switch aria-label="启用记忆" checked={config.enabled} loading={saving} onChange={(checked) => void saveConfig({ ...config, enabled: checked })} />
                 <Typography.Text strong>启用记忆</Typography.Text>
               </Space>
-              {modelsError ? <Alert type="warning" showIcon title={`获取模型列表失败：${modelsError}`} /> : null}
+              {modelsError ? <Alert type="warning" showIcon title={<ErrorDisplay error={modelsError} />} /> : null}
               <label htmlFor="memory-extraction-model">提取模型</label>
               <Select
                 id="memory-extraction-model"

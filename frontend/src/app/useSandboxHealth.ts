@@ -14,6 +14,7 @@ export interface SandboxHealthState {
   installed: boolean;
   code: string | null;
   detail: string | null;
+  error_report?: import("../api/errorReport").ErrorReport | null;
   checking: boolean;
   autoRecoveryPhase: SandboxAutoRecoveryPhase;
   nextRetryAt: number | null;
@@ -33,6 +34,7 @@ function failedStatus(cause: unknown): SandboxBrokerStatus {
     installed: false,
     healthy: false,
     code: cause instanceof ApiError ? cause.code ?? "broker_status_failed" : "broker_status_failed",
+    error_report: cause instanceof ApiError ? cause.error_report : undefined,
     detail: cause instanceof Error ? cause.message : "无法连接沙箱 Broker。",
   };
 }
@@ -46,6 +48,7 @@ export function useSandboxHealth(): SandboxHealthState {
   const [installed, setInstalled] = useState(false);
   const [code, setCode] = useState<string | null>(null);
   const [detail, setDetail] = useState<string | null>(null);
+  const [report, setReport] = useState<import("../api/errorReport").ErrorReport | null>(null);
   const [checking, setChecking] = useState(true);
   const [autoRecoveryPhase, setAutoRecoveryPhase] = useState<SandboxAutoRecoveryPhase>("idle");
   const [nextRetryAt, setNextRetryAt] = useState<number | null>(null);
@@ -86,6 +89,7 @@ export function useSandboxHealth(): SandboxHealthState {
     phaseRef.current = healthy ? "healthy" : "unhealthy";
     if (mountedRef.current) {
       setInstalled(status.installed);
+      setReport(healthy ? null : status.error_report ?? null);
       setCode(healthy ? null : status.code?.trim() || (
         status.installed ? "broker_unhealthy" : "broker_not_installed"
       ));
@@ -102,6 +106,7 @@ export function useSandboxHealth(): SandboxHealthState {
     phaseRef.current = "unhealthy";
     if (mountedRef.current) {
       setCode(failureCode);
+      setReport(cause instanceof ApiError ? cause.error_report ?? null : null);
       setDetail(cause instanceof Error ? cause.message : "沙箱 Broker 修复失败。");
       setPhase("unhealthy");
     }
@@ -278,6 +283,7 @@ export function useSandboxHealth(): SandboxHealthState {
     installed,
     code,
     detail,
+    error_report: report,
     checking,
     autoRecoveryPhase,
     nextRetryAt,

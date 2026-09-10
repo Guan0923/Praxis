@@ -15,7 +15,7 @@ from time import monotonic
 from uuid import uuid4
 
 from backend.configuration import atomic_write_text
-from backend.domain import safe_error_message
+from backend.domain import error_report, safe_error_message
 from backend.jobs import TERMINAL_STATES, AdmissionPolicy, JobLane, QueueMode, SlotMode, ThreadJob
 
 from .containers import ContainerCancelled, TaskContainer, cache_root, command
@@ -81,9 +81,14 @@ class ResourceStore:
         self.cache.mkdir(parents=True, exist_ok=True)
         atomic_write_text(self.path, json.dumps(self.data, ensure_ascii=True, indent=2))
 
-    def _status(self, task: BenchmarkTask, status: str, phase: str, error: str | None = None) -> None:
+    def _status(self, task: BenchmarkTask, status: str, phase: str, error: BaseException | str | None = None) -> None:
         with self.lock:
-            self.data["tasks"][task.name] = {"status": status, "phase": phase, "error": error}
+            self.data["tasks"][task.name] = {
+                "status": status,
+                "phase": phase,
+                "error": safe_error_message(error) if isinstance(error, BaseException) else error,
+                "error_report": error_report(error) if isinstance(error, BaseException) else None,
+            }
             self._save()
 
     def _claim(self, task: BenchmarkTask, kind: str, target: str, *, owned: bool) -> None:
@@ -389,7 +394,7 @@ class ResourceStore:
                     try:
                         self._check(task, images, repos)
                     except Exception as exc:
-                        self._status(task, "error", "validation", safe_error_message(exc))
+                        self._status(task, "error", "validation", exc)
                 self._checked = monotonic()
             return [
                 {
@@ -444,7 +449,8 @@ class ResourceStore:
                 except Exception as exc:
                     with self.lock:
                         phase = self.data["tasks"][task.name]["phase"]
-                        self._status(task, "error", phase, safe_error_message(exc))
+                        self._status(task, "error", phase, exc)
+                    raise
 
             job = ThreadJob(scope.registry.new_job_id(), worker)
             self._operations[task.name] = job.info().id
@@ -474,6 +480,6 @@ class ResourceStore:
                 )
             except Exception as exc:
                 self._operations.pop(task.name, None)
-                self._status(task, "error", action, safe_error_message(exc))
+                self._status(task, "error", action, exc)
                 raise
             return self.snapshot([task])[0]

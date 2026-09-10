@@ -10,20 +10,20 @@ from typing import Any
 
 from backend.domain import AssistantMessage, ToolMessage, safe_error_message
 
-from ..errors import ModelRequestError, ModelResponseError
+from ..errors import ModelRequestError, ModelResponseError, ProviderOutputError
 from .common import _PROVIDER
 from .models import ChatCompletion
 
 
 def _parse_arguments(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, str):
-        raise ModelRequestError("Chat Completions tool-call arguments must be a JSON string.")
+        raise ProviderOutputError("Chat Completions tool-call arguments must be a JSON string.")
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ModelRequestError(safe_error_message(exc)) from exc
+        raise ProviderOutputError(safe_error_message(exc)) from exc
     if not isinstance(parsed, dict):
-        raise ModelRequestError("Chat Completions tool-call arguments must decode to an object.")
+        raise ProviderOutputError("Chat Completions tool-call arguments must decode to an object.")
     return parsed
 
 
@@ -58,31 +58,31 @@ def _parse_choice(
 ) -> _ParsedChoice:
     message = raw_choice.get("message")
     if not isinstance(message, Mapping):
-        raise ModelRequestError("Chat Completions choice.message must be an object.")
+        raise ProviderOutputError("Chat Completions choice.message must be an object.")
     role = message.get("role")
     if role is not None and role != "assistant":
-        raise ModelRequestError("Chat Completions response message role must be 'assistant'.")
+        raise ProviderOutputError("Chat Completions response message role must be 'assistant'.")
     content = message.get("content")
     reasoning = message.get("reasoning_content")
     if content is not None and not isinstance(content, str):
-        raise ModelRequestError("Chat Completions response content must be text or null.")
+        raise ProviderOutputError("Chat Completions response content must be text or null.")
     if reasoning is not None and not isinstance(reasoning, str):
-        raise ModelRequestError("Chat Completions reasoning_content must be text or null.")
+        raise ProviderOutputError("Chat Completions reasoning_content must be text or null.")
     logprobs = raw_choice.get("logprobs")
     if logprobs is not None and not isinstance(logprobs, Mapping):
-        raise ModelRequestError("Chat Completions logprobs must be an object or null.")
+        raise ProviderOutputError("Chat Completions logprobs must be an object or null.")
     index = raw_choice.get("index", position)
     if isinstance(index, bool) or not isinstance(index, int):
-        raise ModelRequestError("Chat Completions choice index must be an integer.")
+        raise ProviderOutputError("Chat Completions choice index must be an integer.")
     finish_reason = raw_choice.get("finish_reason")
     if finish_reason is not None and not isinstance(finish_reason, str):
-        raise ModelRequestError("Chat Completions finish_reason must be text or null.")
+        raise ProviderOutputError("Chat Completions finish_reason must be text or null.")
 
     raw_calls = [] if finish_reason == "content_filter" else message.get("tool_calls")
     if raw_calls is None:
         raw_calls = []
     if not isinstance(raw_calls, list):
-        raise ModelRequestError("Chat Completions tool_calls must be an array.")
+        raise ProviderOutputError("Chat Completions tool_calls must be an array.")
     tools: list[ToolMessage] = []
     for call in raw_calls:
         try:
@@ -93,7 +93,7 @@ def _parse_choice(
         except (KeyError, TypeError) as exc:
             if finish_reason == "length":
                 continue
-            raise ModelRequestError(safe_error_message(exc)) from exc
+            raise ProviderOutputError(safe_error_message(exc)) from exc
         try:
             arguments = _parse_arguments(function.get("arguments"))
         except ModelRequestError:
@@ -101,13 +101,13 @@ def _parse_choice(
                 continue
             raise
         if call_type != "function":
-            raise ModelRequestError("Chat Completions tool call type must be 'function'.")
+            raise ProviderOutputError("Chat Completions tool call type must be 'function'.")
         if not isinstance(call_id, str) or not call_id or not isinstance(name, str) or not name:
             if finish_reason == "length":
                 continue
-            raise ModelRequestError("Chat Completions tool call id and name must be non-empty strings.")
+            raise ProviderOutputError("Chat Completions tool call id and name must be non-empty strings.")
         if call_id in seen_call_ids:
-            raise ModelRequestError(f"Duplicate Chat Completions tool call id in response: {call_id}.")
+            raise ProviderOutputError(f"Duplicate Chat Completions tool call id in response: {call_id}.")
         seen_call_ids.add(call_id)
         tools.append(ToolMessage(name=name, call_id=call_id, arguments=arguments))
 
@@ -130,16 +130,16 @@ def _parse_response(data: Mapping[str, Any]) -> ChatCompletion:
         raise ModelResponseError(str(detail or "Chat Completions returned an error."), diagnostics={"error": error})
     raw_choices = data.get("choices")
     if not isinstance(raw_choices, list) or not raw_choices:
-        raise ModelRequestError("Chat Completions response choices must be a non-empty array.")
+        raise ProviderOutputError("Chat Completions response choices must be a non-empty array.")
     usage = data.get("usage")
     if usage is not None and not isinstance(usage, Mapping):
-        raise ModelRequestError("Chat Completions usage must be an object or null.")
+        raise ProviderOutputError("Chat Completions usage must be an object or null.")
     response_metadata = _top_level_metadata(data)
     parsed: list[_ParsedChoice] = []
     seen_call_ids: set[str] = set()
     for position, choice in enumerate(raw_choices):
         if not isinstance(choice, Mapping):
-            raise ModelRequestError("Chat Completions choices must contain objects.")
+            raise ProviderOutputError("Chat Completions choices must contain objects.")
         parsed.append(
             _parse_choice(
                 choice,

@@ -82,10 +82,7 @@ class WindowsAclManager:
         sid = modules["security"].ConvertStringSidToSid(sid_value)
         if _find_covering_ace(dacl, modules["security"].ACCESS_DENIED_ACE_TYPE, sid, mask, inheritance) is not None:
             return AclLeaseEntry(str(target), identity.object_id, sid_value, "deny", mask, inheritance, False)
-        try:
-            _add_native_deny_ace(target, sid_value, mask)
-        except Exception as exc:  # pragma: no cover - requires Windows ACL support
-            raise SandboxInitializationError("sandbox capability deny ACL could not be applied") from exc
+        _add_native_deny_ace(target, sid_value, mask)
         entry = AclLeaseEntry(str(target), identity.object_id, sid_value, "deny", mask, inheritance, True)
         if not self.verify_entry(entry):
             raise SandboxInitializationError("sandbox capability deny ACL could not be verified")
@@ -121,22 +118,19 @@ class WindowsAclManager:
         existing = _find_covering_ace(dacl, security.ACCESS_ALLOWED_ACE_TYPE, sid, rights, inheritance)
         if existing is not None:
             return AclLeaseEntry(str(target), identity.object_id, sid_value, "allow", rights, inheritance, False)
-        try:
-            dacl.AddAccessAllowedAceEx(security.ACL_REVISION_DS, inheritance, rights, sid)
-            if direct:
-                _set_directory_dacl_direct(target, dacl)
-            else:
-                security.SetNamedSecurityInfo(
-                    str(target),
-                    security.SE_FILE_OBJECT,
-                    security.DACL_SECURITY_INFORMATION,
-                    None,
-                    None,
-                    dacl,
-                    None,
-                )
-        except Exception as exc:  # pragma: no cover - requires Windows ACL support
-            raise SandboxInitializationError("sandbox ACL lease could not be applied") from exc
+        dacl.AddAccessAllowedAceEx(security.ACL_REVISION_DS, inheritance, rights, sid)
+        if direct:
+            _set_directory_dacl_direct(target, dacl)
+        else:
+            security.SetNamedSecurityInfo(
+                str(target),
+                security.SE_FILE_OBJECT,
+                security.DACL_SECURITY_INFORMATION,
+                None,
+                None,
+                dacl,
+                None,
+            )
 
         entry = AclLeaseEntry(str(target), identity.object_id, sid_value, "allow", rights, inheritance, True)
         if not self.verify_entry(entry):
@@ -148,22 +142,17 @@ class WindowsAclManager:
         security = modules["security"]
         identity = self.path_identity(Path(path))
         target = identity.path
-        try:
-            if not target.is_dir():
-                raise SandboxInitializationError("sandbox ACL target is not a directory")
-            descriptor = security.GetNamedSecurityInfo(
-                str(target),
-                security.SE_FILE_OBJECT,
-                security.DACL_SECURITY_INFORMATION,
-            )
-            dacl = descriptor.GetSecurityDescriptorDacl()
-            if dacl is None:
-                raise SandboxInitializationError("sandbox path has a null DACL")
-            return target, identity, dacl
-        except SandboxInitializationError:
-            raise
-        except Exception as exc:  # pragma: no cover - requires Windows ACL support
-            raise SandboxInitializationError("sandbox path DACL could not be inspected") from exc
+        if not target.is_dir():
+            raise SandboxInitializationError("sandbox ACL target is not a directory")
+        descriptor = security.GetNamedSecurityInfo(
+            str(target),
+            security.SE_FILE_OBJECT,
+            security.DACL_SECURITY_INFORMATION,
+        )
+        dacl = descriptor.GetSecurityDescriptorDacl()
+        if dacl is None:
+            raise SandboxInitializationError("sandbox path has a null DACL")
+        return target, identity, dacl
 
     def verify_entry(self, entry: AclLeaseEntry) -> bool:
         modules = _modules()
@@ -311,8 +300,8 @@ def _path_identity(path: Path, _seen: set[str] | None = None) -> PathIdentity:
         return PathIdentity(Path(os.path.normcase(normalized)), object_id)
     except SandboxInitializationError:
         raise
-    except Exception as exc:  # pragma: no cover - requires Windows handle APIs
-        raise SandboxInitializationError("sandbox path identity could not be resolved") from exc
+    except Exception:  # pragma: no cover - requires Windows handle APIs
+        raise
     finally:
         if handle is not None:
             handle.Close()
@@ -409,23 +398,20 @@ def windows_pipe_security_attributes(*allowed_sid_strings: str) -> Any:
 
     modules = _modules()
     security = modules["security"]
-    try:
-        attributes = modules["types"].SECURITY_ATTRIBUTES()
-        descriptor = modules["types"].SECURITY_DESCRIPTOR()
-        acl = security.ACL()
-        full = modules["con"].GENERIC_READ | modules["con"].GENERIC_WRITE
-        sids = [
-            security.CreateWellKnownSid(security.WinLocalSystemSid, None),
-            security.CreateWellKnownSid(security.WinBuiltinAdministratorsSid, None),
-        ]
-        sids.extend(security.ConvertStringSidToSid(value) for value in allowed_sid_strings if value)
-        for sid in sids:
-            acl.AddAccessAllowedAce(security.ACL_REVISION, full, sid)
-        descriptor.SetSecurityDescriptorDacl(1, acl, 0)
-        attributes.SECURITY_DESCRIPTOR = descriptor
-        return attributes
-    except Exception as exc:  # pragma: no cover - Windows security adapter
-        raise SandboxInitializationError("Broker named-pipe ACL could not be created") from exc
+    attributes = modules["types"].SECURITY_ATTRIBUTES()
+    descriptor = modules["types"].SECURITY_DESCRIPTOR()
+    acl = security.ACL()
+    full = modules["con"].GENERIC_READ | modules["con"].GENERIC_WRITE
+    sids = [
+        security.CreateWellKnownSid(security.WinLocalSystemSid, None),
+        security.CreateWellKnownSid(security.WinBuiltinAdministratorsSid, None),
+    ]
+    sids.extend(security.ConvertStringSidToSid(value) for value in allowed_sid_strings if value)
+    for sid in sids:
+        acl.AddAccessAllowedAce(security.ACL_REVISION, full, sid)
+    descriptor.SetSecurityDescriptorDacl(1, acl, 0)
+    attributes.SECURITY_DESCRIPTOR = descriptor
+    return attributes
 
 
 def windows_service_sid(service_name: str) -> str:
@@ -437,8 +423,5 @@ def windows_service_sid(service_name: str) -> str:
     """
 
     modules = _modules()
-    try:
-        sid, _, _ = modules["security"].LookupAccountName(None, f"NT SERVICE\\{service_name}")
-        return str(modules["security"].ConvertSidToStringSid(sid))
-    except Exception as exc:  # pragma: no cover - Windows-only adapter
-        raise SandboxInitializationError("Broker service account SID is unavailable") from exc
+    sid, _, _ = modules["security"].LookupAccountName(None, f"NT SERVICE\\{service_name}")
+    return str(modules["security"].ConvertSidToStringSid(sid))

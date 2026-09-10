@@ -14,9 +14,12 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.api.error_handlers import error_response
+from backend.configuration import ConfigurationError
+
 from ..session_store import require_active_session, session_store
 from ..state import WebAppState
-from .store import SessionFileConflict, SessionFileError, SessionFileStore
+from .store import SessionFileConflict, SessionFileError, SessionFileNotFound, SessionFileStore
 
 router = APIRouter(prefix="/api")
 
@@ -83,7 +86,7 @@ def _store_for(state: WebAppState, session_id: str) -> SessionFileStore:
 def _file_error(exc: SessionFileError) -> HTTPException:
     if isinstance(exc, SessionFileConflict):
         return HTTPException(status_code=409, detail=str(exc))
-    if "不存在" in str(exc) or "无效" in str(exc):
+    if isinstance(exc, SessionFileNotFound):
         return HTTPException(status_code=404, detail=str(exc))
     return HTTPException(status_code=400, detail=str(exc))
 
@@ -92,16 +95,16 @@ def _file_error(exc: SessionFileError) -> HTTPException:
 def file_roots(session_id: str, request: Request) -> list[dict[str, object]]:
     try:
         return _store_for(request.app.state.web, session_id).roots()
-    except SessionFileError as exc:
-        raise _file_error(exc) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        return error_response(exc, status_code=_file_error(exc).status_code)
 
 
 @router.get("/sessions/{session_id}/files/tree")
 def list_file_directory(session_id: str, request: Request, source: str, path: str) -> list[dict[str, object]]:
     try:
         return _store_for(request.app.state.web, session_id).list_directory(source, path)
-    except SessionFileError as exc:
-        raise _file_error(exc) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        return error_response(exc, status_code=_file_error(exc).status_code)
 
 
 @router.get("/sessions/{session_id}/files/editor")
@@ -114,8 +117,8 @@ def read_editor_file(
 ) -> dict[str, object]:
     try:
         return _store_for(request.app.state.web, session_id).read_editor_file(source, path, encoding)
-    except SessionFileError as exc:
-        raise _file_error(exc) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        return error_response(exc, status_code=_file_error(exc).status_code)
 
 
 @router.put("/sessions/{session_id}/files/editor")
@@ -131,8 +134,8 @@ def save_editor_file(session_id: str, body: SaveEditorFileRequest, request: Requ
             expected_version=body.version,
             force=body.force,
         )
-    except SessionFileError as exc:
-        raise _file_error(exc) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        return error_response(exc, status_code=_file_error(exc).status_code)
 
 
 @router.post("/sessions/{session_id}/files/entries", status_code=201)
@@ -141,16 +144,16 @@ def create_file_entry(session_id: str, body: CreateEntryRequest, request: Reques
         return _store_for(request.app.state.web, session_id).create_entry(
             body.source, body.parent_path, body.name, body.kind
         )
-    except SessionFileError as exc:
-        raise _file_error(exc) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        return error_response(exc, status_code=_file_error(exc).status_code)
 
 
 @router.patch("/sessions/{session_id}/files/entries/rename")
 def rename_file_entry(session_id: str, body: RenameEntryRequest, request: Request) -> dict[str, object]:
     try:
         return _store_for(request.app.state.web, session_id).rename_entry(body.source, body.path, body.name)
-    except SessionFileError as exc:
-        raise _file_error(exc) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        return error_response(exc, status_code=_file_error(exc).status_code)
 
 
 @router.patch("/sessions/{session_id}/files/entries/move")
@@ -159,16 +162,16 @@ def move_file_entry(session_id: str, body: MoveEntryRequest, request: Request) -
         return _store_for(request.app.state.web, session_id).move_entry(
             body.source, body.path, body.target_source, body.target_parent_path
         )
-    except SessionFileError as exc:
-        raise _file_error(exc) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        return error_response(exc, status_code=_file_error(exc).status_code)
 
 
 @router.delete("/sessions/{session_id}/files/entries")
 def recycle_file_entry(session_id: str, request: Request, source: str, path: str) -> dict[str, str]:
     try:
         _store_for(request.app.state.web, session_id).recycle_entry(source, path)
-    except SessionFileError as exc:
-        raise _file_error(exc) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        return error_response(exc, status_code=_file_error(exc).status_code)
     return {"deleted": path}
 
 
@@ -185,8 +188,8 @@ def upload_session_files(
         store = _store_for(state, session_id)
         items = [(upload.filename, upload.file) for upload in files]
         return store.store_batch(items)
-    except SessionFileError as exc:
-        raise _file_error(exc) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        return error_response(exc, status_code=_file_error(exc).status_code)
 
 
 @router.get("/sessions/{session_id}/files")
@@ -200,8 +203,8 @@ def search_session_files(
     try:
         store = _store_for(state, session_id)
         return store.search(q, limit)
-    except SessionFileError as exc:
-        raise _file_error(exc) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        return error_response(exc, status_code=_file_error(exc).status_code)
 
 
 @router.get("/sessions/{session_id}/files/content")
@@ -231,8 +234,8 @@ def session_file_content(
             },
         )
         return response
-    except SessionFileError as exc:
-        raise _file_error(exc) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        return error_response(exc, status_code=_file_error(exc).status_code)
 
 
 @router.head("/sessions/{session_id}/files/content")
@@ -261,8 +264,8 @@ def session_file_content_head(
                 "Cache-Control": "private, no-store",
             },
         )
-    except SessionFileError as exc:
-        raise _file_error(exc) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        return error_response(exc, status_code=_file_error(exc).status_code)
 
 
 @router.delete("/sessions/{session_id}/files")
@@ -280,8 +283,8 @@ def delete_session_file(
     try:
         store = _store_for(state, session_id)
         store.delete_upload(path)
-    except SessionFileError as exc:
-        raise _file_error(exc) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        return error_response(exc, status_code=_file_error(exc).status_code)
     return {"deleted": path}
 
 

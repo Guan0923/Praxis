@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from backend.api.error_handlers import error_response
 from backend.domain import MessageEnvelope, PlanningError
 from backend.domain.runtime_state import (
     RuntimeState,
@@ -91,7 +92,7 @@ def get_turn_trace(
             after_sequence=after_sequence,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return error_response(exc, status_code=422, detail=str(exc))
     return {
         "turn": project_turn(store, turn),
         "data_idx": data_idx,
@@ -171,7 +172,7 @@ def create_turn(body: CreateTurnRequest, request: Request) -> dict[str, object]:
     try:
         state.message_queue.ping()
     except Exception as exc:
-        raise _queue_http_error(exc) from exc
+        return error_response(exc, status_code=_queue_http_error(exc).status_code)
     command_payload = {
         "version": 1,
         "operation": "create",
@@ -197,7 +198,7 @@ def create_turn(body: CreateTurnRequest, request: Request) -> dict[str, object]:
                 command_payload=command_payload,
             )
         except Exception as exc:
-            raise _queue_http_error(exc) from exc
+            return error_response(exc, status_code=_queue_http_error(exc).status_code)
     else:
         assert body.message is not None
         item = _user_item(body.message)
@@ -219,7 +220,7 @@ def create_turn(body: CreateTurnRequest, request: Request) -> dict[str, object]:
         try:
             state.message_queue.dispatch_turn_start(envelope)
         except Exception as exc:
-            raise _queue_http_error(exc) from exc
+            return error_response(exc, status_code=_queue_http_error(exc).status_code)
     return {"turn_id": body.id, "delivery_id": delivery_id, "status": "accepted"}
 
 
@@ -233,7 +234,7 @@ def rewind_turn(turn_id: str, body: RewindTurnRequest, request: Request) -> dict
     try:
         state.message_queue.ping()
     except Exception as exc:
-        raise _queue_http_error(exc) from exc
+        return error_response(exc, status_code=_queue_http_error(exc).status_code)
     delivery_id = body.delivery_id or f"turn-rewind:{turn_id}:{len(source.data)}"
     envelope = MessageEnvelope(
         delivery_id=delivery_id,
@@ -263,7 +264,7 @@ def rewind_turn(turn_id: str, body: RewindTurnRequest, request: Request) -> dict
     try:
         state.message_queue.dispatch_turn_start(envelope)
     except Exception as exc:
-        raise _queue_http_error(exc) from exc
+        return error_response(exc, status_code=_queue_http_error(exc).status_code)
     return {"turn_id": source.id, "delivery_id": delivery_id, "status": "accepted"}
 
 
@@ -281,7 +282,7 @@ def resume_turn(turn_id: str, body: TurnExecutionConfig, request: Request) -> di
     try:
         state.message_queue.ping()
     except Exception as exc:
-        raise _queue_http_error(exc) from exc
+        return error_response(exc, status_code=_queue_http_error(exc).status_code)
 
     def operation(
         conversation,
@@ -332,7 +333,7 @@ def pause_turn(turn_id: str, request: Request) -> dict[str, object]:
     try:
         return store.pause_turn(turn_id).to_dict()
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return error_response(exc, status_code=409, detail=str(exc))
 
 
 @router.post("/{turn_id}/steer", status_code=202)
@@ -366,9 +367,9 @@ def steer_turn(
         else:
             controller.dispatch_steering(dispatch)
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail="Turn 正在暂停，消息保留在待发队列。") from exc
+        return error_response(exc, status_code=409, detail="Turn 正在暂停，消息保留在待发队列。")
     except Exception as exc:
-        raise _queue_http_error(exc) from exc
+        return error_response(exc, status_code=_queue_http_error(exc).status_code)
     return {"delivery_id": body.delivery_id, "status": "accepted"}
 
 
@@ -389,7 +390,7 @@ def fork_turn(turn_id: str, body: ForkTurnRequest, request: Request) -> dict[str
             title_is_custom=False,
         )
     except (ValueError, RuntimeStateValidationError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return error_response(exc, status_code=409, detail=str(exc))
     return {"turn": forked.to_dict(), "sidebar_thread": store.sidebar_thread_summary(sidebar).to_dict()}
 
 
@@ -439,13 +440,13 @@ def compact_turn(
     except HTTPException:
         raise
     except SandboxInitializationError as exc:
-        raise HTTPException(status_code=503, detail=_startup_failure_message(exc)) from exc
+        return error_response(exc, status_code=503, detail=_startup_failure_message(exc))
     except PlanningError as exc:
-        raise HTTPException(status_code=502, detail="上下文压缩失败，请稍后重试。") from exc
+        return error_response(exc, status_code=502, detail="上下文压缩失败，请稍后重试。")
     except (KeyError, ValueError, RuntimeStateValidationError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return error_response(exc, status_code=409, detail=str(exc))
     except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail="上下文压缩失败，请稍后重试。") from exc
+        return error_response(exc, status_code=502, detail="上下文压缩失败，请稍后重试。")
     finally:
         if app is not None:
             app.close()
@@ -460,9 +461,9 @@ def patch_current_data(turn_id: str, body: CurrentDataRequest, request: Request)
     try:
         return store.set_turn_current_data(turn_id, body.current_data_idx).to_dict()
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="未知 Turn。") from exc
+        return error_response(exc, status_code=404, detail="未知 Turn。")
     except RuntimeStateValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return error_response(exc, status_code=422, detail=str(exc))
 
 
 @router.patch("/{turn_id}/config")
@@ -480,7 +481,7 @@ def patch_turn_config(turn_id: str, body: TurnConfigPatch, request: Request) -> 
         try:
             changes["model"] = RuntimeModelRequest.model_validate(merged_model).model_dump()
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return error_response(exc, status_code=422, detail=str(exc))
     if body.permission_mode is not None:
         changes["permission_mode"] = body.permission_mode
     if body.running_mode is not None:
@@ -498,7 +499,7 @@ def patch_turn_config(turn_id: str, body: TurnConfigPatch, request: Request) -> 
             store.update_node(writer_node)
             updated = writer_node
     except (ValueError, RuntimeStateValidationError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return error_response(exc, status_code=422, detail=str(exc))
     return updated.to_dict()
 
 

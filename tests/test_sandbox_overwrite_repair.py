@@ -248,7 +248,7 @@ def test_service_query_error_does_not_mean_missing(monkeypatch):
 
 
 def test_existing_marker_does_not_hide_service_failure(transaction):
-    from backend.sandbox import SandboxInitializationError, WindowsBrokerClient
+    from backend.sandbox import WindowsBrokerClient
     from backend.sandbox.broker_service.readiness import write_ready_marker
 
     helper.run_transaction(transaction.payload)
@@ -257,7 +257,7 @@ def test_existing_marker_does_not_hide_service_failure(transaction):
     write_ready_marker(ready, marker)
 
     def unavailable(_payload):
-        raise SandboxInitializationError("Windows Broker pipe is unavailable")
+        raise OSError(22, "Invalid argument")
 
     installer = types.SimpleNamespace(service_installed=lambda: True, configuration_healthy=lambda: True)
     client = WindowsBrokerClient(

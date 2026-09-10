@@ -10,6 +10,7 @@ from backend.api.pause_control import TurnPauseController
 from backend.domain import AssistantMessage, ToolMessage
 from backend.jobs import (
     AdmissionPolicy,
+    CommandError,
     JobKind,
     JobLane,
     JobLimitPolicy,
@@ -186,10 +187,10 @@ def test_command_tool_uses_bash_on_unix_and_reports_command_failures(tmp_path: P
         return process
 
     command = WorkspaceCommand(tmp_path, is_windows=False, popen_factory=popen_factory)
-    with pytest.raises(ToolError, match="code 7") as exc_info:
+    with pytest.raises(CommandError, match="code 7") as exc_info:
         command.run("mkdir demo")
 
-    assert "stderr:\nbad command" in str(exc_info.value)
+    assert "stderr:\nbad command" in "\n".join(exc_info.value.__notes__)
     assert calls[0][0] == ["bash", "-c", "mkdir demo"]
     assert calls[0][1]["start_new_session"] is True
     assert "creationflags" not in calls[0][1]
@@ -203,10 +204,11 @@ def test_command_failure_reports_status_and_labeled_streams(tmp_path: Path) -> N
         environment={},
     )
 
-    with pytest.raises(ToolError) as exc_info:
+    with pytest.raises(CommandError) as exc_info:
         command.run("failing command")
 
-    assert str(exc_info.value) == "Command exited with code 7.\nstdout:\n0\n\nstderr:\nbad"
+    assert str(exc_info.value) == "Command exited with code 7."
+    assert exc_info.value.__notes__ == ["stdout:\n0\n\nstderr:\nbad"]
 
 
 @pytest.mark.parametrize(
@@ -248,10 +250,10 @@ def test_command_timeout_terminates_the_process_tree(tmp_path: Path, is_windows:
         tree_terminator=terminate,
     )
 
-    with pytest.raises(ToolError, match="timed out") as exc_info:
+    with pytest.raises(CommandError, match="timed out") as exc_info:
         command.run("slow", timeout_seconds=2)
 
-    assert "stdout:\npartial" in str(exc_info.value)
+    assert "stdout:\npartial" in "\n".join(exc_info.value.__notes__)
     assert terminated == [1234]
     assert process.communicate_calls == [2, 30.0]
 
@@ -282,10 +284,10 @@ def test_command_failure_output_limit_includes_status_and_stream_labels(tmp_path
         environment={},
     )
 
-    with pytest.raises(ToolError) as exc_info:
+    with pytest.raises(CommandError) as exc_info:
         command.run("large failing output")
 
-    output = str(exc_info.value)
+    output = str(exc_info.value) + "\n" + "\n".join(exc_info.value.__notes__)
     assert len(output) <= 20_000
     assert output.startswith("Command exited with code 7.\nstdout:\n")
     assert "\nstderr:\n" in output
@@ -460,7 +462,7 @@ def test_default_job_admission_wait_is_ninety_seconds() -> None:
     assert AdmissionPolicy().queue_timeout_seconds == 90.0
 
 
-def test_registry_wraps_unexpected_handler_exceptions_as_tool_error() -> None:
+def test_registry_preserves_unexpected_handler_exceptions() -> None:
     def boom(**_arguments: Any) -> str:
         raise RuntimeError("boom")
 
@@ -475,7 +477,7 @@ def test_registry_wraps_unexpected_handler_exceptions_as_tool_error() -> None:
         ]
     )
 
-    with pytest.raises(ToolError, match="boom"):
+    with pytest.raises(RuntimeError, match="boom"):
         registry.invoke("boom_tool", {})
 
 

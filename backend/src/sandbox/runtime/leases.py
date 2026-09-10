@@ -100,8 +100,8 @@ class CommandLeaseStore:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return ()
-        except (OSError, ValueError) as exc:
-            raise SandboxInitializationError(f"sandbox lease manifest is invalid: {self.path.resolve()}") from exc
+        except (OSError, ValueError):
+            raise
         if (
             not isinstance(raw, dict)
             or raw.get("version") != LEASE_MANIFEST_VERSION
@@ -109,35 +109,32 @@ class CommandLeaseStore:
         ):
             raise SandboxInitializationError(f"sandbox lease manifest version is unsupported: {self.path.resolve()}")
         result: list[CommandLease] = []
-        try:
-            for item in raw["leases"]:
-                if not isinstance(item, dict) or not isinstance(item.get("acl_entries"), list):
-                    raise TypeError
-                lease = CommandLease(
-                    **{
-                        **item,
-                        "workspaces": tuple(item["workspaces"]),
-                        "acl_entries": tuple(AclLeaseEntry(**entry) for entry in item["acl_entries"]),
-                    }
-                )
-                FileAccessMode(lease.file_mode)
-                if (
-                    not lease.job_id
-                    or not lease.reservation_id
-                    or not lease.logon_sid
-                    or not lease.account_sid
-                    or not lease.service_sid
-                    or not lease.workspaces
-                    or not lease.cwd
-                    or not lease.temp_dir
-                    or not lease.workspace_cap_sid
-                    or not lease.temp_cap_sid
-                    or not lease.capability_digest
-                ):
-                    raise ValueError
-                result.append(lease)
-        except (KeyError, TypeError, ValueError) as exc:
-            raise SandboxInitializationError(f"sandbox lease manifest is invalid: {self.path.resolve()}") from exc
+        for item in raw["leases"]:
+            if not isinstance(item, dict) or not isinstance(item.get("acl_entries"), list):
+                raise TypeError
+            lease = CommandLease(
+                **{
+                    **item,
+                    "workspaces": tuple(item["workspaces"]),
+                    "acl_entries": tuple(AclLeaseEntry(**entry) for entry in item["acl_entries"]),
+                }
+            )
+            FileAccessMode(lease.file_mode)
+            if (
+                not lease.job_id
+                or not lease.reservation_id
+                or not lease.logon_sid
+                or not lease.account_sid
+                or not lease.service_sid
+                or not lease.workspaces
+                or not lease.cwd
+                or not lease.temp_dir
+                or not lease.workspace_cap_sid
+                or not lease.temp_cap_sid
+                or not lease.capability_digest
+            ):
+                raise ValueError
+            result.append(lease)
         return tuple(result)
 
     def _write(self, values: tuple[CommandLease, ...]) -> None:

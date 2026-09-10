@@ -38,7 +38,7 @@ export interface ChatPageProps {
   queuedMessages?: QueuedMessage[];
   onQueuedMessagesChange?: (conversationId: string, updater: (items: QueuedMessage[]) => QueuedMessage[]) => void;
   onQueuedMessagesRefresh?: (conversationId: string) => Promise<void>;
-  sandboxHealth?: Pick<SandboxHealthState, "phase" | "detail">;
+  sandboxHealth?: Pick<SandboxHealthState, "phase" | "detail" | "error_report">;
 }
 
 export interface RewindResult {

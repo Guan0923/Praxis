@@ -36,6 +36,7 @@ export interface ChatMessage {
   status?: string;
   metrics?: Metrics;
   error?: string;
+  error_report?: import("../api/errorReport").ErrorReport;
   running?: boolean;
   runId?: string;
   /** Durable runtime node id for rewind targets. */

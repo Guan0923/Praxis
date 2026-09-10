@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "../../components/ErrorDisplay";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { App as AntApp, FloatButton } from "antd";
 import { VerticalAlignBottomOutlined } from "@ant-design/icons";
@@ -330,7 +331,7 @@ export default function ChatPage({
   });
 
   useEffect(() => {
-    if (agentThreadView.streamError) void message.error(`Subagent 实时流重连中：${agentThreadView.streamError}`);
+    if (agentThreadView.streamError) void message.error({ content: <ErrorDisplay error={agentThreadView.streamError} />, duration: 0 });
   }, [agentThreadView.streamError, message]);
 
   function updateLast(updater: (message: ChatMessage) => ChatMessage, conversationId = conversation?.id) {
@@ -520,7 +521,7 @@ export default function ChatPage({
         await runPrompt(item.content, undefined, item.references, release, item);
       }
     } catch (error) {
-      void message.error(String((error as Error).message ?? error));
+      void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
     } finally {
       release();
     }
@@ -581,7 +582,7 @@ export default function ChatPage({
             model: requestModel,
           });
         } catch (error) {
-          void message.error(String((error as Error).message ?? error));
+          void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
         }
         return;
       }
@@ -600,7 +601,7 @@ export default function ChatPage({
         releaseSend,
       );
     } catch (error) {
-      void message.error(String((error as Error).message ?? error));
+      void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
     } finally {
       releaseSend();
     }
@@ -686,6 +687,7 @@ export default function ChatPage({
           changeMessageVersion={changeMessageVersion}
           onDecision={chooseDecision}
           onFork={!agentThreadView.isSubagent && onFork ? forkMessage : undefined}
+          sandboxErrorReport={sandboxHealth.error_report}
           sandboxFailure={sandboxHealth.phase === "unhealthy" ? sandboxHealth.detail ?? "健康检查未通过。" : null}
         />
         {!isMobile ? (

@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
+from backend.configuration import ConfigurationError
 from backend.domain import (
     DeliveryConflict,
     MessageQueueUnavailable,
@@ -55,8 +56,9 @@ def _references(item: Mapping[str, object], files: SessionFileStore) -> list[dic
         raise HTTPException(status_code=422, detail="无效的文件引用。")
     try:
         return files.normalize_references(raw)
-    except SessionFileError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (SessionFileError, ConfigurationError) as exc:
+        exc.api_status_code = 422
+        raise
 
 
 def _queue_http_error(exc: Exception) -> HTTPException:

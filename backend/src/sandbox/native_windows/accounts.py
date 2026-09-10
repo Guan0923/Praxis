@@ -43,21 +43,15 @@ class WindowsRestrictedTokenFactory:
             raise SandboxInitializationError("sandbox capability SID collision")
         try:
             security = modules["security"]
-            try:
-                source = security.LogonUser(
-                    account.name,
-                    ".",
-                    account.password,
-                    modules["con"].LOGON32_LOGON_BATCH,
-                    modules["con"].LOGON32_PROVIDER_DEFAULT,
-                )
-            except Exception as exc:  # pragma: no cover - requires Windows account
-                raise SandboxInitializationError("sandbox account batch logon failed") from exc
-            try:
-                logon_sid = self._logon_sid(source)
-                logon_sid_value = security.ConvertStringSidToSid(logon_sid)
-            except Exception as exc:  # pragma: no cover - requires Windows token
-                raise SandboxInitializationError("sandbox logon SID extraction failed") from exc
+            source = security.LogonUser(
+                account.name,
+                ".",
+                account.password,
+                modules["con"].LOGON32_LOGON_BATCH,
+                modules["con"].LOGON32_PROVIDER_DEFAULT,
+            )
+            logon_sid = self._logon_sid(source)
+            logon_sid_value = security.ConvertStringSidToSid(logon_sid)
             capability_values = (
                 security.ConvertStringSidToSid(workspace_cap_sid),
                 security.ConvertStringSidToSid(temp_cap_sid),
@@ -80,19 +74,16 @@ class WindowsRestrictedTokenFactory:
                         (everyone_sid, 0),
                     )
                 )
-            try:
-                token = security.CreateRestrictedToken(source, flags, [], [], restricting_sids)
-            except Exception as exc:  # pragma: no cover - requires Windows token
-                raise SandboxInitializationError("sandbox restricted token creation failed") from exc
+            token = security.CreateRestrictedToken(source, flags, [], [], restricting_sids)
             try:
                 self._set_default_dacl(token, logon_sid_value, capability_values, self.service_sid)
                 self._restore_change_notify(token)
-            except Exception as exc:  # pragma: no cover - requires Windows token
+            except Exception:  # pragma: no cover - requires Windows token
                 try:
                     token.Close()
                 except Exception:
                     pass
-                raise SandboxInitializationError("sandbox token default DACL configuration failed") from exc
+                raise
             return WindowsReservedToken(
                 token,
                 logon_sid,

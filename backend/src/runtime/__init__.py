@@ -14,7 +14,6 @@ _EXPORTS = {
     "CancellationHandler": ("core.contracts", "CancellationHandler"),
     "ConversationService": ("conversation.service", "ConversationService"),
     "HookErrorInfo": ("core.hooks", "HookErrorInfo"),
-    "HookExecutionError": ("core.hooks", "HookExecutionError"),
     "HookManager": ("core.hooks", "HookManager"),
     "HookOperationResult": ("core.hooks", "HookOperationResult"),
     "HookOutcome": ("core.hooks", "HookOutcome"),

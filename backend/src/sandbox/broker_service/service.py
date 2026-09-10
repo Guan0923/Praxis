@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from threading import RLock
 from typing import Any
 
-from backend.domain import root_error, safe_error_message
+from backend.domain import error_report, root_error, safe_error_message
 
 from ..errors import (
     SandboxCleanupPending,
@@ -94,10 +94,7 @@ class WindowsBrokerService:
     def handle(self, payload: bytes) -> bytes:
         """Verify one request and return one authenticated response."""
 
-        try:
-            request = json.loads(payload.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise SandboxInitializationError("Broker request is invalid") from exc
+        request = json.loads(payload.decode("utf-8"))
         if not isinstance(request, dict):
             raise SandboxInitializationError("Broker request is invalid")
         operation = request.get("operation")
@@ -145,7 +142,9 @@ class WindowsBrokerService:
         except Exception as exc:
             self._audit(operation, "failed", body, error=exc)
             code = exc.code if isinstance(exc, SandboxError) else SandboxFailureCode.INIT_FAILED
-            result = {"error": {"code": str(code), "message": safe_error_message(exc)}}
+            result = {
+                "error": {"code": str(code), "message": safe_error_message(exc), "error_report": error_report(exc)}
+            }
         else:
             self._audit(operation, "succeeded", body)
         response = {"nonce": nonce, **result}
@@ -176,6 +175,7 @@ class WindowsBrokerService:
         if error is not None:
             cause = root_error(error)
             winerror = getattr(cause, "winerror", None)
+            record["error_report"] = error_report(error)
             record["failure"] = safe_error_message(error)
             record["failure_type"] = type(cause).__name__
             if isinstance(winerror, int):
@@ -272,8 +272,14 @@ class WindowsBrokerService:
             identity = (backend_instance_id, user_id, job_id)
             try:
                 released = self.adapter is not None and bool(self.adapter.release(body))
-            except Exception:
-                released = False
+            except Exception as exc:
+                with self._lock:
+                    self._pending_releases[identity] = dict(body)
+                self._reclaimer.notify()
+                # Cleanup stays queued, but its original failure must reach the caller.
+                failure = SandboxCleanupPending(safe_error_message(exc))
+                failure.error_report = error_report(exc)
+                raise failure from exc
             if not released:
                 with self._lock:
                     self._pending_releases[identity] = dict(body)

@@ -37,7 +37,7 @@ export type ProviderEditDraft = {
 
 export type ProviderModelFeedback = {
   status: "success" | "warning" | "error";
-  message: string;
+  message: string | Error;
 };
 
 export interface UserSettingsModalProps {

@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "../ErrorDisplay";
 import { UserOutlined } from "@ant-design/icons";
 import { Button, Input, Popover, Space, Typography } from "antd";
 import { useEffect, useState, type CSSProperties } from "react";
@@ -33,7 +34,7 @@ export function ProfileLabel({ label }: { label: string }) {
 export function ProfilePopover({ profile, onSave }: ProfilePopoverProps) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<Error | string>("");
   const [draft, setDraft] = useState({ display_name: "", agent_preferences: "" });
   const label = profile.display_name.trim() || "本地用户";
 
@@ -67,7 +68,7 @@ export function ProfilePopover({ profile, onSave }: ProfilePopoverProps) {
       await onSave({ display_name: displayName, agent_preferences: draft.agent_preferences.trim() });
       setOpen(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "保存失败，请稍后重试。");
+      setError(cause instanceof Error ? cause : "保存失败，请稍后重试。");
     } finally {
       setSaving(false);
     }
@@ -90,7 +91,7 @@ export function ProfilePopover({ profile, onSave }: ProfilePopoverProps) {
         value={draft.agent_preferences}
         onChange={(event) => setDraft((current) => ({ ...current, agent_preferences: event.target.value }))}
       />
-      {error ? <Typography.Text type="danger">{error}</Typography.Text> : null}
+      {error ? <Typography.Text type="danger"><ErrorDisplay error={error} /></Typography.Text> : null}
       <Space className="profile-popover-actions">
         <Button onClick={() => setOpen(false)} disabled={saving}>取消</Button>
         <Button type="primary" aria-label="保存" onClick={() => void save()} loading={saving}>

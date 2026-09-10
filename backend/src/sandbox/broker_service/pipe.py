@@ -52,8 +52,8 @@ class WindowsNamedPipeServer:
             win32file.WriteFile(handle, response)
         except SandboxInitializationError:
             raise
-        except Exception as exc:  # pragma: no cover - Windows-only adapter
-            raise SandboxInitializationError("Broker named-pipe request failed") from exc
+        except Exception:  # pragma: no cover - Windows-only adapter
+            raise
         finally:
             try:
                 import win32file  # type: ignore[import-not-found]
@@ -99,11 +99,9 @@ class WindowsNamedPipeServer:
             self._close_handle(handle)
 
     def _create_pipe(self) -> Any:
-        try:
-            import win32con  # type: ignore[import-not-found]
-            import win32pipe  # type: ignore[import-not-found]
-        except ImportError as exc:  # pragma: no cover - Windows-only adapter
-            raise SandboxInitializationError("pywin32 is required for the Broker named pipe") from exc
+        import win32con  # type: ignore[import-not-found]
+        import win32pipe  # type: ignore[import-not-found]
+
         try:
             return win32pipe.CreateNamedPipe(
                 self.service.configuration.pipe_name,
@@ -133,7 +131,7 @@ class WindowsNamedPipeServer:
                 getattr(exc, "winerror", None),
                 exc_info=False,
             )
-            raise SandboxInitializationError("Broker named-pipe creation failed") from exc
+            raise
 
     def _serve_connected(self, handle: Any) -> None:
         try:
@@ -158,7 +156,4 @@ class WindowsNamedPipeServer:
     def _security_attributes(self) -> Any:
         if self.security_attributes_factory is None:
             raise SandboxInitializationError("Broker named-pipe ACL is not configured")
-        try:
-            return self.security_attributes_factory()
-        except Exception as exc:  # pragma: no cover - Windows-only adapter
-            raise SandboxInitializationError("Broker named-pipe ACL could not be created") from exc
+        return self.security_attributes_factory()

@@ -1,3 +1,4 @@
+import { ErrorDisplay } from "../../components/ErrorDisplay";
 import { Alert, BorderBeam, Collapse, App as AntApp, message as staticMessage } from "antd";
 import { BranchesOutlined, CopyOutlined, EditOutlined, FileTextOutlined, ToolOutlined } from "@ant-design/icons";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -267,6 +268,7 @@ function runtimeItemBody(item: TurnItem, display: DisplayMode, active: boolean) 
     );
   }
   const failed = item.type === "tool_result" && item.status === "failed";
+  if (failed && item.error_report) return <ErrorDisplay error={item.content} report={item.error_report} />;
   const event: ToolEvent = item.type === "tool_call"
     ? { kind: "tool_call", message: String(item.name ?? "工具"), data: { ...item, tool: item.name } }
     : { kind: failed ? "tool_failed" : "tool_result", message: jsonText(item.content), data: { ...item, result: item.content } };
@@ -477,7 +479,7 @@ function OrderedAssistantItems({
           return value ? <div className="runtime-item-response" data-item-type={item.type} key={identity}><MarkdownContent text={value} itemId={identity} running={item.status === "running"} /></div> : null;
         }
         if (item.type === "error") {
-          return <Alert key={identity} className="error-text" type="error" showIcon title={String(item.message ?? "Execution failed.")} />;
+          return <Alert key={identity} className="error-text" type="error" showIcon title={<ErrorDisplay error={item.message ?? "Execution failed."} report={item.error_report} />} />;
         }
         if (item.type === "subagent" && item.event === "agent_report") {
           const value = String(item.text ?? "");
@@ -537,7 +539,7 @@ export function AssistantMessage({
     <div className={msg.running ? "assistant-run-frame is-running" : "assistant-run-frame"}>
       {hasItems ? <OrderedAssistantItems msg={msg} items={visibleItems} configuredDisplay={display} onDecision={onDecision} /> : null}
       {!hasDecisionItem && msg.decision ? <DecisionCard request={msg.decision} onSubmit={(choice, options) => onDecision(msg.decision!, choice, options)} /> : null}
-      {!hasErrorItem && msg.error ? <Alert className="error-text" type="error" showIcon title={msg.error} /> : null}
+      {!hasErrorItem && msg.error ? <Alert className="error-text" type="error" showIcon title={<ErrorDisplay error={msg.error} report={msg.error_report} />} /> : null}
       {!hasItems && msg.content ? <MarkdownContent text={msg.content} /> : null}
       {!msg.error && (!hasItems || visibleItems.length === 0) && !msg.content && msg.running && !msg.decision ? <div className="thinking" role="status" aria-label="思考中" data-state="thinking" aria-live="polite"><span className="dot" /><span className="dot" /><span className="dot" /></div> : null}
       {display !== "minimal" && (msg.status || (msg.metrics && msg.metrics.duration_ms != null)) ? <div className="meta">{msg.status ?? ""}{msg.status && msg.metrics && msg.metrics.duration_ms != null ? " · " : ""}{msg.metrics && msg.metrics.duration_ms != null ? `${(msg.metrics.duration_ms / 1000).toFixed(1)}s · ${msg.metrics.model_calls ?? 0} 次模型调用 · ${msg.metrics.tool_calls ?? 0} 次工具调用` : null}</div> : null}

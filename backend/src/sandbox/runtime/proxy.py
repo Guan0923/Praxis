@@ -15,7 +15,6 @@ from urllib.parse import urlsplit
 
 import h11
 
-from ..errors import SandboxInitializationError
 from ..policy import NetworkRule, canonical_network_host
 
 logger = logging.getLogger(__name__)
@@ -77,9 +76,9 @@ class RunCommandProxy:
             listener.bind(("127.0.0.1", self.port))
             listener.listen(64)
             listener.settimeout(0.5)
-        except OSError as exc:
+        except OSError:
             listener.close()
-            raise SandboxInitializationError("run_command proxy port is unavailable") from exc
+            raise
         self._listener = listener
         self._thread = threading.Thread(target=self._serve, name="run-command-proxy", daemon=True)
         self._thread.start()

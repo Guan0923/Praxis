@@ -1,6 +1,8 @@
+import { readErrorReport, type ErrorReport } from "../errorReport";
+import { apiErrorFrom } from "../transport/request";
 import type { ChatMode, FileReference, PermissionMode, ReasoningEffort, RuntimeConfigModel, StreamMessage } from "../../types";
 import { apiUrl } from "../transport/base";
-import { ApiError, errorFrom, jsonBody, requestJson } from "../transport/request";
+import { ApiError, jsonBody, requestJson } from "../transport/request";
 
 export interface StreamOptions {
   sessionId: string;
@@ -31,7 +33,7 @@ export class SseProtocolError extends Error {
 }
 
 export class SseExecutionError extends Error {
-  constructor(message: string) {
+  constructor(message: string, public readonly error_report?: ErrorReport) {
     super(message);
     this.name = "SseExecutionError";
   }
@@ -57,6 +59,7 @@ async function streamEndpoint(
   let lastEventId = "";
   let reconnects = 0;
   let latestStatus: string | undefined;
+  let failureReport: ErrorReport | undefined;
 
   const waitToReconnect = async (): Promise<boolean> => {
     if (signal.aborted) return false;
@@ -96,7 +99,7 @@ async function streamEndpoint(
     }
     if (!response.ok || !response.body) {
       if (response.status === 503 && await waitToReconnect()) continue;
-      throw new ApiError(response.status, await errorFrom(response));
+      throw await apiErrorFrom(response);
     }
 
     const reader = response.body.getReader();
@@ -136,6 +139,10 @@ async function streamEndpoint(
             } catch (error) {
               throw new SseProtocolError(`Invalid SSE JSON: ${String((error as Error).message ?? error)}`);
             }
+            if ((frame as { type: string }).type === "turn.error") {
+              failureReport = readErrorReport((frame as unknown as { error_report?: unknown }).error_report);
+              continue;
+            }
             if (frame.type !== "turn.snapshot" && frame.type !== "turn.delta") {
               throw new SseProtocolError(`Unsupported SSE frame: ${String((frame as { type?: unknown }).type)}`);
             }
@@ -171,14 +178,14 @@ async function streamEndpoint(
     }
     if (!receivedFrame) {
       if (terminal[2] === "failed") {
-        if (terminal[3]) throw new Error(terminal[3]);
+        if (terminal[3]) throw new ApiError(500, terminal[3], undefined, failureReport);
         return "silent_failed";
       }
       throw new SseProtocolError("SSE stream completed without a Turn baseline");
     }
     if (terminal[2] === "network") throw new Error("network");
     if (terminal[2] === "failed" && latestStatus === "running") {
-      throw new SseExecutionError(terminal[3] || "Execution stopped before its final state could be saved.");
+      throw new SseExecutionError(terminal[3] || "Execution stopped before its final state could be saved.", failureReport);
     }
     return "completed";
   }
