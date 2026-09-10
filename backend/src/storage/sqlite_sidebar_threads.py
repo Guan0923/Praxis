@@ -13,7 +13,6 @@ class SQLiteSidebarThreadMixin:
     def _sidebar_summaries_for_session(self, session_id: str) -> list[SidebarThreadSummary]:
         with self._connection(session_id) as connection:
             # Keep node data and thread heads in the same snapshot during concurrent writes.
-            connection.execute("BEGIN")
             threads = [
                 SidebarThread.from_dict(value) for value in self._json_values(connection, session_id, "sidebar_thread")
             ]
@@ -89,7 +88,7 @@ class SQLiteSidebarThreadMixin:
             now,
             title_is_custom=title_is_custom,
         )
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
             if self._json_object(connection, session_id, "sidebar_thread", thread_id) is not None:
                 raise ValueError("SidebarThread already exists.")
@@ -126,7 +125,7 @@ class SQLiteSidebarThreadMixin:
         if "title" in changes and not str(changes["title"]).strip():
             raise ValueError("SidebarThread title cannot be empty.")
         next_item = replace(item, **changes, updated_at=utc_now())
-        with self._connection(item.session_id) as connection:
+        with self._connection(item.session_id, write=True) as connection:
             self._assert_writable(connection)
             self._put_json_object(
                 connection, item.session_id, "sidebar_thread", item.thread_id, next_item.to_dict(), next_item.updated_at
@@ -139,7 +138,7 @@ class SQLiteSidebarThreadMixin:
             raise KeyError(thread_id)
         activity_at = timestamp or utc_now()
         next_item = replace(item, last_activity_at=activity_at)
-        with self._connection(item.session_id) as connection:
+        with self._connection(item.session_id, write=True) as connection:
             self._assert_writable(connection)
             self._put_json_object(
                 connection,

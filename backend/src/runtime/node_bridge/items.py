@@ -59,12 +59,6 @@ class _ItemProjectionMixin:
                 persist=True,
             )
         else:
-            self._stream_text += chunk
-            self.assistant_blocks[self._stream_item_index] = {
-                "type": item_type,
-                "text": self._stream_text,
-                "status": "running",
-            }
             assert self.assistant is not None
             self.assistant = self.writer.append_text(
                 self.assistant,
@@ -74,6 +68,11 @@ class _ItemProjectionMixin:
                 delta=chunk,
                 persist=True,
             )
+            item = self.assistant.data[self.assistant.current_data_idx][self.assistant_message_idx]["content"][
+                self._stream_item_index
+            ]
+            self.assistant_blocks[self._stream_item_index] = item
+            self._stream_text = item["text"]
         self.last_node = self.assistant
 
     def _finish_stream_item(self, item_type: str | None = None, *, status: str = "success") -> None:
@@ -84,7 +83,6 @@ class _ItemProjectionMixin:
         if self._stream_item_index is not None:
             assert self.assistant is not None
             assert self.assistant_message_idx is not None
-            self.assistant = self.writer.persist(self.assistant)
             self.assistant = self.writer.set_item_status(
                 self.assistant,
                 data_idx=self.assistant.current_data_idx,
@@ -92,7 +90,9 @@ class _ItemProjectionMixin:
                 item_idx=self._stream_item_index,
                 status=status,
             )
-            self.assistant_blocks[self._stream_item_index]["status"] = status
+            self.assistant_blocks[self._stream_item_index] = self.assistant.data[self.assistant.current_data_idx][
+                self.assistant_message_idx
+            ]["content"][self._stream_item_index]
             self.last_node = self.assistant
             self.produced_item = True
             self._record_completed_item(self.assistant_message_idx, self._stream_item_index)
@@ -170,6 +170,7 @@ class _ItemProjectionMixin:
             return
         append = getattr(self.store, "append_turn_trace_item", None)
         try:
+            self.writer.flush()
             if not callable(append):
                 raise RuntimeError("Turn Trace Item persistence is unavailable.")
             data_idx = self.assistant.current_data_idx

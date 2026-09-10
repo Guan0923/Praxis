@@ -13,17 +13,6 @@ TODO_FINALIZATION_INSTRUCTION = (
 )
 
 
-def should_defer_todo_content(runtime: AgentRuntime) -> bool:
-    """Keep the first candidate final answer private until its tool intent is known."""
-
-    store = runtime.services.todo_store
-    turn_id = runtime.run.turn_id
-    if store is None or not turn_id:
-        return False
-    session_id = runtime.state.session_id
-    return bool(store.snapshot(session_id, turn_id).unfinished and not store.finalization_claimed(session_id, turn_id))
-
-
 def refresh_todo_finalization_context(runtime: AgentRuntime) -> None:
     """Restore the private correction instruction across loops and resumes."""
 
@@ -83,5 +72,4 @@ __all__ = [
     "TODO_FINALIZATION_INSTRUCTION",
     "check_todo_finalization",
     "refresh_todo_finalization_context",
-    "should_defer_todo_content",
 ]

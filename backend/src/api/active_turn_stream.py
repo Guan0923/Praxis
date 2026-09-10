@@ -96,7 +96,7 @@ class ActiveTurnStream:
     def publish_frame(self, frame: NodeFrame, current: RuntimeState) -> None:
         key = (frame.session_id, frame.turn_id)
         with self._lock:
-            self._latest_nodes[key] = current.clone()
+            self._latest_nodes[key] = current
             self._source_revisions[key] = frame.revision
             for subscription in self._subscriptions.values():
                 if frame.type == "turn.snapshot":

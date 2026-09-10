@@ -27,6 +27,21 @@ describe("runtime thinking summary", () => {
 });
 
 describe("message actions", () => {
+  it("keeps Markdown and formula nodes mounted when a running answer finishes", () => {
+    const msg: ChatMessage = {
+      id: "turn:message:1", role: "assistant", content: "$x^2$\n\nStable text.", events: [],
+      items: [{ type: "text", text: "$x^2$\n\nStable text.", status: "running" }],
+      running: true, status: "running", itemVersion: 0,
+    };
+    const props = { display: "normal" as DisplayMode, busy: false, onDecision: vi.fn() };
+    const { container, rerender } = render(<AssistantMessage {...props} msg={msg} />);
+    const markdown = container.querySelector(".markdown");
+    const formula = container.querySelector(".math-source");
+    rerender(<AssistantMessage {...props} msg={{ ...msg, running: false, status: "success", items: [{ ...msg.items![0], status: "success" }] }} />);
+    expect(container.querySelector(".markdown")).toBe(markdown);
+    expect(container.querySelector(".math-source")).toBe(formula);
+  });
+
   it("removes the user rewind action while retaining copy and edit", () => {
     render(
       <AntApp>

@@ -51,6 +51,8 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         delivery_id: str | None = None,
         isolated_thread_context: bool = False,
         emit: Callable[[NodeFrame], None],
+        persist_delta: Callable[[NodeFrame, str, str], None] | None = None,
+        flush_persistence: Callable[[], None] | None = None,
     ) -> None:
         self.store = store
         self.session_id = session_id
@@ -79,7 +81,7 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         self.references = [dict(item) for item in references or []]
         self.delivery_id = delivery_id or ""
         self.isolated_thread_context = isolated_thread_context
-        self.writer = NodeWriter(store, emit=emit)
+        self.writer = NodeWriter(store, emit=emit, persist_delta=persist_delta, flush_persistence=flush_persistence)
         self.parent: RuntimeState | RuntimeRootState | None = None
         self.assistant: RuntimeState | None = None
         self.last_node: RuntimeState | None = None
@@ -114,6 +116,7 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         runtime.services.runtime_node_context = self.model_context
 
     def model_context(self) -> list[RuntimeState]:
+        self.writer.flush()
         current = self._current()
         if current is None:
             return []
@@ -248,7 +251,7 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         if self.assistant is None:
             self.start()
         assert self.assistant is not None
-        current = self.writer.current(self.assistant.session_id, self.assistant.id)
+        current = self.writer.view(self.assistant.session_id, self.assistant.id)
         messages = current.data[current.current_data_idx]
         if (
             self.assistant_message_idx is not None

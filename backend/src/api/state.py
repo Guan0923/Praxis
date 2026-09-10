@@ -99,8 +99,19 @@ class WebAppState:
 
         agent_store = SQLiteSessionStore(self.paths, self.agent_thread_index)
         self.session_store = agent_store
+        from .runtime_event_transport import publish_frame, publish_terminal
+
         self.agent_thread_events = AgentThreadEventHub(
-            lambda frame, current: project_frame(agent_store, frame, current)
+            lambda frame, current: project_frame(agent_store, frame, current),
+            frame_publisher=lambda frame, current: publish_frame(self, frame, current),
+            terminal_publisher=lambda turn: publish_terminal(
+                self,
+                session_id=turn.session_id,
+                thread_id=turn.thread_id,
+                turn_id=turn.id,
+                terminal_type="success" if turn.status in {"success", "paused"} else "failed",
+                message="Agent execution or local persistence failed." if turn.status == "failed" else "",
+            ),
         )
         self._reconcile_message_queue()
         self.agent_thread_index.rebuild(agent_store)

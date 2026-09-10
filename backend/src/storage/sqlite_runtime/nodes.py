@@ -77,7 +77,7 @@ class SQLiteNodeMixin:
     def ensure_root_node(self, session_id: str, *, id: str | None = None) -> RuntimeRootState:
         """Persist and return the sole synthetic root for an otherwise empty Session."""
 
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
             self._session_document(connection, session_id)
             nodes = self._objects(connection, session_id, "runtime_node")
@@ -112,7 +112,7 @@ class SQLiteNodeMixin:
             raise ValueError("A Turn cannot continue across Sessions.")
         if node.parent_thread_id != parent.thread_id:
             raise ValueError("parent_thread_id does not match the parent Turn.")
-        with self._connection(node.session_id) as connection:
+        with self._connection(node.session_id, write=True) as connection:
             self._assert_writable(connection)
             self._session_document(connection, node.session_id)
             self._ensure_runtime_thread_record(
@@ -145,11 +145,14 @@ class SQLiteNodeMixin:
         self._update_node(node, None)
 
     def update_node_with_frame(self, node: TreeRuntimeState, frame: NodeFrame) -> None:
-        self._update_node(node, frame)
+        if frame.type == "turn.delta":
+            self.append_runtime_delta(frame, thread_id=node.thread_id, status=node.status)
+        else:
+            self._update_node(node, frame)
 
     def _update_node(self, node: TreeRuntimeState, frame: NodeFrame | None) -> None:
         activity_at = utc_now()
-        with self._connection(node.session_id) as connection:
+        with self._connection(node.session_id, write=True) as connection:
             self._assert_writable(connection)
             existing = self._json_object(connection, node.session_id, "runtime_node", node.id)
             if existing is None:
@@ -175,7 +178,7 @@ class SQLiteNodeMixin:
         session_id = nodes[0].session_id
         if any(node.session_id != session_id for node in nodes):
             raise ValueError("A finalized node batch must belong to one session.")
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
             self._session_document(connection, session_id)
             existing = self._objects(connection, session_id, "runtime_node")
@@ -263,7 +266,7 @@ class SQLiteNodeMixin:
 
     def finalize_node(self, node: TreeRuntimeState) -> None:
         activity_at = utc_now()
-        with self._connection(node.session_id) as connection:
+        with self._connection(node.session_id, write=True) as connection:
             self._assert_writable(connection)
             existing = self._json_object(connection, node.session_id, "runtime_node", node.id)
             if existing is None:
@@ -297,7 +300,7 @@ class SQLiteNodeMixin:
             raise ValueError("A running Turn cannot be rewound.")
         user = message_payload("user", [dict(user_item)], delivery_id=delivery_id)
         assistant = message_payload("assistant", [])
-        with self._connection(node.session_id) as connection:
+        with self._connection(node.session_id, write=True) as connection:
             self._assert_writable(connection)
             current = self._json_object(connection, node.session_id, "runtime_node", node.id)
             if current is None:
@@ -353,7 +356,7 @@ class SQLiteNodeMixin:
         node = _require_runtime_turn(self.find_node(turn_id), turn_id)
         if node.status != "paused":
             raise ValueError("Only a paused Turn can be resumed.")
-        with self._connection(node.session_id) as connection:
+        with self._connection(node.session_id, write=True) as connection:
             self._assert_writable(connection)
             self._claim_thread_turn(
                 connection,
@@ -387,7 +390,7 @@ class SQLiteNodeMixin:
         node.status = "success"
         node.timestamp = utc_iso()
         node = TreeRuntimeState.from_dict(node.to_dict())
-        with self._connection(node.session_id) as connection:
+        with self._connection(node.session_id, write=True) as connection:
             self._assert_writable(connection)
             current = self._json_object(connection, node.session_id, "runtime_node", node.id)
             if current is None or str(current.get("status")) != "paused":

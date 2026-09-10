@@ -23,6 +23,7 @@ class FinalizationPlanner:
 
     def __init__(self) -> None:
         self.saw_private_instruction = False
+        self.on_candidate = lambda: None
 
     def decide(self, runtime):
         if runtime.run.model_turns == 1:
@@ -41,6 +42,7 @@ class FinalizationPlanner:
         if runtime.run.model_turns == 2:
             assert runtime.exchange.on_content is not None
             runtime.exchange.on_content("discarded candidate")
+            self.on_candidate()
             return AssistantMessage(content="discarded candidate")
         self.saw_private_instruction = any(
             isinstance(message, UserMessage) and message.content == TODO_FINALIZATION_INSTRUCTION
@@ -236,10 +238,15 @@ def redis_store() -> tuple[TrackingRedisTodoListStore, Redis]:
     client.close()
 
 
-def test_finalization_discards_first_candidate_and_appends_authoritative_unfinished_list(tmp_path: Path) -> None:
+def test_finalization_streams_candidate_and_appends_authoritative_unfinished_list(tmp_path: Path) -> None:
     store = MemoryTodoListStore()
     planner = FinalizationPlanner()
     events = []
+
+    def check_candidate_visible():
+        assert [event.message for event in events if event.kind == "response_delta"] == ["discarded candidate"]
+
+    planner.on_candidate = check_candidate_visible
     runner = AgentRunner(planner, build_tool_registry(tmp_path), todo_store=store)
     runtime = runner.new_runtime(task="work", on_event=events.append)
     runtime.run.turn_id = "turn-finalization"
@@ -248,7 +255,7 @@ def test_finalization_discards_first_candidate_and_appends_authoritative_unfinis
     assert result.status == "completed"
     assert result.model_turns == 3
     assert planner.saw_private_instruction is True
-    assert "discarded candidate" not in [event.message for event in events if event.kind == "response_delta"]
+    assert [event.message for event in events if event.kind == "response_delta"].count("discarded candidate") == 1
     assert "discarded candidate" not in [
         message.content for message in result.history if isinstance(message, AssistantMessage)
     ]

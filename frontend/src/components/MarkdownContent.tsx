@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, type RefObject } from "react";
+import { memo, useLayoutEffect, useRef } from "react";
 import MarkdownIt from "markdown-it";
 import type { Token } from "markdown-it";
 import texmath from "markdown-it-texmath";
 import { MATHML_NAMESPACE, loadMathJax, supportsNativeMathML } from "../math";
 import type { MathJaxBrowserInstance } from "../math/mathjax.d";
 import { MATH_SOURCE_SELECTOR, copySelectionWithMarkdown, selectFormula } from "./latexClipboard";
+import { IncrementalMarkdown } from "./incrementalMarkdown";
+import { reconcileMarkdown, type RenderedMarkdownBlock } from "./markdownDom";
 
 const MATH_SOURCE_ATTRIBUTE = "data-latex-source";
 
@@ -135,6 +137,23 @@ for (const ruleName of ["math_inline", "math_inline_double", "math_block", "math
 }
 
 const typesetQueues = new WeakMap<HTMLElement, Promise<void>>();
+const disposedFormulas = new WeakSet<HTMLElement>();
+let loadedMathJax: MathJaxBrowserInstance | undefined;
+let mathQueue: Promise<void> = Promise.resolve();
+
+function formulasWithin(root: HTMLElement): HTMLElement[] {
+  return [
+    ...(root.matches(MATH_SOURCE_SELECTOR) ? [root] : []),
+    ...Array.from(root.querySelectorAll<HTMLElement>(MATH_SOURCE_SELECTOR)),
+  ];
+}
+
+function disposeMath(node: Node): void {
+  if (!(node instanceof HTMLElement)) return;
+  const formulas = formulasWithin(node);
+  for (const formula of formulas) disposedFormulas.add(formula);
+  if (formulas.length) loadedMathJax?.typesetClear?.(formulas);
+}
 
 type NativeMathReplacement = {
   formula: HTMLElement;
@@ -173,7 +192,7 @@ export async function renderNativeMathML(
   }
 
   const replacements: NativeMathReplacement[] = [];
-  const formulas = Array.from(root.querySelectorAll<HTMLElement>(MATH_SOURCE_SELECTOR));
+  const formulas = formulasWithin(root);
   for (const formula of formulas) {
     const body = formula.getAttribute("data-latex-body");
     if (body === null || !isCurrent()) {
@@ -218,7 +237,7 @@ export async function renderNativeMathML(
 }
 
 function markSvgFallback(root: HTMLElement): void {
-  root.querySelectorAll<HTMLElement>(MATH_SOURCE_SELECTOR).forEach((formula) => {
+  formulasWithin(root).forEach((formula) => {
     formula.classList.add("math-svg-fallback");
     formula.dataset.mathRenderer = "svg";
   });
@@ -228,14 +247,13 @@ function enqueueMathJaxTypesetting(
   root: HTMLElement,
   isCurrent: () => boolean,
 ): Promise<void> {
-  const previous = typesetQueues.get(root) ?? Promise.resolve();
+  const previous = mathQueue;
   const next = previous
     .catch(() => undefined)
     .then(async () => {
       if (!isCurrent()) return;
       const mathJax = await loadMathJax();
-      if (!isCurrent()) return;
-      mathJax.typesetClear?.([root]);
+      loadedMathJax = mathJax;
       if (!isCurrent()) return;
 
       if (await renderNativeMathML(root, mathJax, isCurrent)) return;
@@ -243,8 +261,10 @@ function enqueueMathJaxTypesetting(
 
       await mathJax.typesetPromise?.([root]);
       if (isCurrent()) markSvgFallback(root);
+      else mathJax.typesetClear?.([root]);
     });
   typesetQueues.set(root, next);
+  mathQueue = next;
   void next.then(
     () => {
       if (typesetQueues.get(root) === next) typesetQueues.delete(root);
@@ -260,34 +280,31 @@ export function renderMarkdown(text: string): string {
   return markdown.render(text || "");
 }
 
-function useMathJaxTypesetting(rootRef: RefObject<HTMLDivElement>, html: string): void {
-  const generationRef = useRef(0);
-
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root || !root.querySelector("[data-latex-source]")) return;
-
-    let cancelled = false;
-    const generation = ++generationRef.current;
-    let timer: number | undefined;
-    const schedule = window.setTimeout(() => {
-      void enqueueMathJaxTypesetting(root, () => !cancelled && generation === generationRef.current).catch(
-        () => undefined,
-      );
-    }, 0);
-    timer = schedule;
-
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [html, rootRef]);
-}
-
-export default function MarkdownContent({ text, className = "" }: { text: string; className?: string }) {
+function MarkdownContent({ text, className = "", itemId = "", running = false }: {
+  text: string; className?: string; itemId?: string; running?: boolean;
+}) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const html = useMemo(() => renderMarkdown(text), [text]);
-  useMathJaxTypesetting(rootRef, html);
+  const state = useRef({ itemId, parser: new IncrementalMarkdown(markdown), rendered: new Map<number, RenderedMarkdownBlock>() });
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    if (state.current.itemId !== itemId) {
+      disposeMath(root);
+      root.replaceChildren();
+      state.current = { itemId, parser: new IncrementalMarkdown(markdown), rendered: new Map() };
+    }
+    const blocks = state.current.parser.update(text, running);
+    state.current.rendered = reconcileMarkdown(root, blocks, state.current.rendered, disposeMath);
+    for (const formula of formulasWithin(root)) {
+      disposedFormulas.delete(formula);
+      if (formula.dataset.mathRenderer || typesetQueues.has(formula)) continue;
+      void enqueueMathJaxTypesetting(formula, () => formula.isConnected && !disposedFormulas.has(formula)).catch(() => undefined);
+    }
+  }, [text, running, itemId]);
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    return () => { if (root) disposeMath(root); };
+  }, []);
   const classes = ["markdown", className].filter(Boolean).join(" ");
 
   return (
@@ -295,7 +312,6 @@ export default function MarkdownContent({ text, className = "" }: { text: string
       ref={rootRef}
       className={classes}
       tabIndex={-1}
-      dangerouslySetInnerHTML={{ __html: html }}
       onClick={(event) => {
         const target = event.target as Element;
         const formula = target.closest(MATH_SOURCE_SELECTOR);
@@ -309,3 +325,5 @@ export default function MarkdownContent({ text, className = "" }: { text: string
     />
   );
 }
+
+export default memo(MarkdownContent);

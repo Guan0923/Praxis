@@ -25,7 +25,7 @@ class SQLiteCheckpointMixin:
     ) -> None:
         timestamp = utc_now()
         origin = provenance or RunProvenance(workflow_id=run_id, trigger="legacy")
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
             document = self._session_document(connection, session_id)
             if not bool(document.get("title_is_custom")) and not self._session_has_turn(connection):
@@ -65,7 +65,7 @@ class SQLiteCheckpointMixin:
         )
 
     def append_turn_input(self, session_id: str, run_id: str, content: str, *, delivery_id: str | None = None) -> None:
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
             if self._json_object(connection, session_id, "run", run_id) is None:
                 raise ValueError(f"Unknown session run: {run_id}")
@@ -77,7 +77,7 @@ class SQLiteCheckpointMixin:
 
     def finish_turn(self, session_id: str, run_id: str, status: RunStatus, answer: str | None) -> None:
         timestamp = utc_now()
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
             run = self._json_object(connection, session_id, "run", run_id)
             if run is None:
@@ -107,7 +107,7 @@ class SQLiteCheckpointMixin:
         if reduced_payload.get("current_run"):
             for key in ("history", "actions"):
                 reduced_payload["current_run"].pop(key, None)
-        with self._connection(state.session_id) as connection:
+        with self._connection(state.session_id, write=True) as connection:
             self._assert_writable(connection)
             self._session_document(connection, state.session_id)
             self._put_json_object(

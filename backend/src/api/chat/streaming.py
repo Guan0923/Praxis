@@ -21,6 +21,7 @@ from backend.domain.runtime_state import NodeFrame
 from backend.jobs import AdmissionPolicy, JobLane, JobScopeKind, ThreadJob
 from backend.providers import ModelConfig, ModelConfigurationError
 from backend.runtime.node_bridge import RuntimeEventNodeBridge
+from backend.runtime.persistence.streaming import RuntimeFramePersistence
 from backend.sandbox import ApprovalStore
 from backend.storage.message_queue import RedisAgentMailbox
 from backend.storage.settings.crypto import SecretDecryptionError
@@ -176,6 +177,7 @@ def _stream(
     job_registry = getattr(state, "job_registry", None)
     job_holder: dict[str, ThreadJob | None] = {"job": None}
     bridge_ref: dict[str, RuntimeEventNodeBridge | None] = {"bridge": None}
+    persistence_ref: dict[str, RuntimeFramePersistence | None] = {"worker": None}
     initial_user_activity_recorded = False
 
     def record_sidebar_activity(active_thread_id: str) -> None:
@@ -188,6 +190,8 @@ def _stream(
             logger.warning("Failed to update sidebar activity for thread %s: %s", active_thread_id, type(exc).__name__)
 
     def cancellation_requested() -> bool:
+        if persistence_ref["worker"] is not None:
+            persistence_ref["worker"].check()
         job = job_holder["job"]
         if job is not None and job.is_cancelled():
             cancel_requested.set()
@@ -259,7 +263,12 @@ def _stream(
         with active_turn_streams_lock:
             active_turn_streams[alias] = active_stream
             active_stream_aliases.add(alias)
-        current = bridge.writer.current(frame.session_id, frame.turn_id)
+        current = bridge.writer.view(frame.session_id, frame.turn_id)
+        live_bridges = getattr(state, "live_turn_bridges", None)
+        if live_bridges is None:
+            live_bridges = {}
+            state.live_turn_bridges = live_bridges
+        live_bridges[(frame.session_id, frame.turn_id)] = bridge
         if frame.type == "turn.snapshot" and operation is None and not initial_user_activity_recorded:
             record_sidebar_activity(current.thread_id)
             initial_user_activity_recorded = True
@@ -341,6 +350,8 @@ def _stream(
                     conversation.ensure_session(prompt or None)
                 active_session = getattr(conversation, "active_session", None)
                 if active_session is not None:
+                    if callable(getattr(node_store, "append_runtime_delta", None)):
+                        persistence_ref["worker"] = RuntimeFramePersistence(node_store)
                     bridge_ref["bridge"] = RuntimeEventNodeBridge(
                         node_store,
                         session_id=active_session.session_id,
@@ -390,6 +401,8 @@ def _stream(
                         references=references,
                         delivery_id=initial_delivery.envelope.delivery_id if initial_delivery is not None else None,
                         emit=publish_frame,
+                        persist_delta=persistence_ref["worker"].submit if persistence_ref["worker"] else None,
+                        flush_persistence=persistence_ref["worker"].flush if persistence_ref["worker"] else None,
                     )
                     bridge_ref["bridge"].apply_runtime_config(
                         {
@@ -526,15 +539,29 @@ def _stream(
                     final_node = bridge.finish_exception(exc)
                     rendered_error = terminal_error_text(bridge.terminal_error or {}) if bridge.terminal_error else ""
                 terminal_id = final_node.id if final_node is not None else turn_id or bridge.turn_id or "unknown"
-                if pause_controller.is_requested():
+                if pause_controller.is_requested() and final_node is not None and not bridge.persistence_failed:
                     enqueue_terminal("success", terminal_id)
                 else:
-                    enqueue_terminal("failed", terminal_id, rendered_error or safe_error_message(exc))
+                    enqueue_terminal(
+                        "failed",
+                        terminal_id,
+                        terminal_error_text(bridge.terminal_error or {}) or rendered_error or safe_error_message(exc),
+                    )
             else:
                 enqueue_terminal("failed", turn_id or "unknown", _startup_failure_message(exc))
         finally:
+            persistence = persistence_ref["worker"]
+            if persistence is not None:
+                try:
+                    persistence.close()
+                except Exception:
+                    logger.error("Runtime persistence worker stopped after a write failure.")
             bridge = bridge_ref["bridge"]
             if bridge is not None:
+                live_bridges = getattr(state, "live_turn_bridges", {})
+                for key, live in list(live_bridges.items()):
+                    if live is bridge:
+                        live_bridges.pop(key, None)
                 # A plan handoff can switch the bridge to a new session while
                 # the old key remains in the process-local registry.  Remove
                 # every alias that points to this bridge, otherwise a later

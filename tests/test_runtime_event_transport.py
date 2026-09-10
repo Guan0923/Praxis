@@ -176,7 +176,7 @@ def test_turn_sse_replays_terminal_published_before_sqlite_baseline(
 
     events = asyncio.run(receive())
     assert len(events) == 1
-    assert events[0].startswith(f"id: {stream.latest_thread_id(thread_id)}\ndata: <SSE")
+    assert events[0].startswith(f"id: {state.runtime_event_epoch}|{stream.latest_thread_id(thread_id)}\ndata: <SSE")
     assert f'id="{turn_id}" type="failed">startup failed</SSE>' in events[0]
 
 
@@ -307,9 +307,9 @@ def test_sse_reconnect_rebases_from_sqlite_and_emits_standard_cursor_ids(
 
     events = asyncio.run(reconnect())
     assert len(events) == 2
-    assert events[0].startswith(f"id: {latest_cursor}\ndata: ")
+    assert events[0].startswith(f"id: {state.runtime_event_epoch}|{latest_cursor}\ndata: ")
     assert '"type":"turn.snapshot"' in events[0]
-    assert events[1].startswith(f"id: {latest_cursor}\ndata: <SSE")
+    assert events[1].startswith(f"id: {state.runtime_event_epoch}|{latest_cursor}\ndata: <SSE")
     assert 'type="success"' in events[1]
 
     async def thread_baseline() -> list[str]:

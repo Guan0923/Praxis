@@ -22,7 +22,7 @@ class SQLiteTurnTraceMixin:
     def initialize_turn_trace(self, session_id: str, trace: TurnTrace) -> TurnTrace:
         """Create the immutable context once and return the stored aggregate."""
 
-        with self._connection_for_existing(session_id) as connection:
+        with self._connection_for_existing(session_id, write=True) as connection:
             self._assert_writable(connection)
             node = self._json_object(connection, session_id, "runtime_node", trace.turn_id)
             if node is None:
@@ -59,7 +59,7 @@ class SQLiteTurnTraceMixin:
         """Append one terminal Item, or no-op before the Trace is initialized."""
 
         object_id = f"{turn_id}:{data_idx}"
-        with self._connection_for_existing(session_id) as connection:
+        with self._connection_for_existing(session_id, write=True) as connection:
             self._assert_writable(connection)
             payload = self._json_object(connection, session_id, self._TRACE_NAMESPACE, object_id)
             if payload is None:

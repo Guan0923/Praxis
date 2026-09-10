@@ -389,6 +389,8 @@ function AgentApp() {
     }
     const clientId = crypto.randomUUID();
     const summary = await createSession(title?.trim() || "新对话", clientId);
+    // An older catalog response must not remove the newly created conversation after selection.
+    await refreshPromiseRef.current?.catch(() => undefined);
     const conversation = summaryToConversation(summary, {
       id: summary.session_id,
       clientId,

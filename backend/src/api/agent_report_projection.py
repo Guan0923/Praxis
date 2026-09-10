@@ -33,6 +33,12 @@ def project_turn(store: object, turn: RuntimeState) -> dict[str, object]:
 
 def project_frame(store: object, frame: NodeFrame, current: RuntimeState) -> dict[str, object]:
     payload = frame.to_dict()
+    if (
+        frame.type == "turn.delta"
+        and frame.operations
+        and all(op.get("op") == "append_text" for op in frame.operations)
+    ):
+        return payload
     statuses = report_statuses(store, current)
     if not statuses:
         return payload
