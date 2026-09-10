@@ -504,6 +504,11 @@ describe("assistant Item presentation", () => {
     expect(collapses[2].querySelector(".ant-collapse-header")).toHaveTextContent("read_file 结果");
     expect(collapses[3].querySelector(".ant-collapse-header")).toHaveTextContent("write_file 失败");
 
+    fireEvent.click(collapses[3].querySelector(".ant-collapse-header")!);
+    await waitFor(() => expect(collapses[3].querySelector(".tool-result > pre")?.textContent).toBe("失败结果"));
+    expect(collapses[3].querySelector(".error-text, .tool-line.failed, .tool-status.failed")).toBeNull();
+    expect(collapses[3].querySelector(".ant-collapse-header")).toHaveTextContent("write_file 失败");
+
     fireEvent.click(collapses[0].querySelector(".ant-collapse-header")!);
     fireEvent.click(collapses[1].querySelector(".ant-collapse-header")!);
     await waitFor(() => expect(collapses[0].querySelector(".ant-collapse-item")).toHaveClass("ant-collapse-item-active"));
@@ -603,7 +608,7 @@ describe("assistant Item presentation", () => {
     expect(answerCode).toHaveTextContent("最终答案代码");
   });
 
-  it("keeps a denied tool visible without exposing model feedback", () => {
+  it.each(["minimal", "verbose", "developer"] as const)("keeps a denied tool visible without exposing model feedback in %s mode", (display) => {
     const { container } = render(
       <ToolLine
         ev={{
@@ -611,7 +616,7 @@ describe("assistant Item presentation", () => {
           message: "The user denied this write_file tool call.",
           data: { tool: "write_file", call_id: "call-denied", failure_code: "user_denied" },
         }}
-        display="minimal"
+        display={display}
       />,
     );
 
@@ -620,20 +625,34 @@ describe("assistant Item presentation", () => {
     expect(container).not.toHaveTextContent("The user denied this write_file tool call.");
   });
 
-  it("renders non-denial tool failures inside their Item", () => {
+  it.each(["minimal", "verbose", "developer"] as const)("renders tool failures like ordinary results in %s mode", (display) => {
+    const result = "The selected lines no longer match expected_lines; file was not changed.\n  Original indentation preserved.\n";
+    const data = { tool: "edit_file", call_id: "call-failed", result };
     const { container } = render(
-      <ToolLine
-        ev={{
-          kind: "tool_failed",
-          message: "command failed",
-          data: { tool: "run_command", call_id: "call-failed", result: "exit code 1" },
-        }}
-        display="verbose"
-      />,
+      <>
+        <section data-testid="failed-result"><ToolLine ev={{ kind: "tool_failed", message: "fallback", data }} display={display} /></section>
+        <section data-testid="successful-result"><ToolLine ev={{ kind: "tool_result", message: "fallback", data }} display={display} /></section>
+      </>,
     );
 
-    expect(container).toHaveTextContent("run_command");
-    expect(container).toHaveTextContent("失败");
-    expect(container).toHaveTextContent("exit code 1");
+    const failed = screen.getByTestId("failed-result");
+    expect(failed.innerHTML).toBe(screen.getByTestId("successful-result").innerHTML);
+    expect(failed.querySelector(".tool-result-label")).toHaveTextContent("edit_file 结果");
+    expect(container.querySelector(".error-text, .tool-line.failed, .tool-status.failed")).toBeNull();
+    expect(failed.querySelector(".tool-result > pre")?.textContent ?? null).toBe(display === "minimal" ? null : result);
+    expect(failed.querySelector(".tool-call-id")?.textContent ?? null).toBe(display === "developer" ? "call ID: call-failed" : null);
+    expect(failed.querySelector(".tool-payload")?.textContent ?? null).toBe(display === "developer" ? JSON.stringify(data, null, 2) : null);
+  });
+
+  it("uses the failure message when no result field is provided", () => {
+    const message = "first line\n  second line\n";
+    const { container } = render(<ToolLine ev={{ kind: "tool_failed", message, data: { tool: "edit_file" } }} display="verbose" />);
+    expect(container.querySelector(".tool-result > pre")?.textContent).toBe(message);
+  });
+
+  it("keeps genuine task errors in their error alert", () => {
+    const { container } = render(renderAssistant(assistant([{ type: "error", message: "Task execution failed", status: "failed" }])));
+    expect(container.querySelector(".ant-alert.error-text")).toHaveTextContent("Task execution failed");
+    expect(container.querySelector(".tool-result")).toBeNull();
   });
 });
