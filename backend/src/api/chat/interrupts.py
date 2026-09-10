@@ -10,7 +10,6 @@ from __future__ import annotations
 import threading
 import uuid
 from collections.abc import Callable
-from time import monotonic
 from typing import Any
 
 from backend.runtime.core.contracts import InterruptDecision, InterruptRequest
@@ -103,12 +102,11 @@ registry = DecisionRegistry()
 def make_interactive_interrupt(
     sink,
     *,
-    timeout: float = 120.0,
     cancel_requested: Callable[[], bool] | None = None,
     auto_approve_tools: bool = False,
     approval_store: ApprovalStore | None = None,
 ):
-    """Build an interrupt handler that pauses the run and asks the client."""
+    """Wait for the client's decision or explicit cancellation, without expiry."""
 
     def decide(request: InterruptRequest) -> InterruptDecision:
         if request.kind == "tool" and auto_approve_tools:
@@ -162,14 +160,9 @@ def make_interactive_interrupt(
         except BaseException:
             registry.discard(decision_id)
             raise
-        deadline = monotonic() + timeout
-        while True:
-            if pending.event.wait(timeout=min(0.1, max(0.0, deadline - monotonic()))):
-                break
+        # Poll only to observe pause/stop requests; user decisions have no deadline.
+        while not pending.event.wait(timeout=0.1):
             if cancel_requested is not None and cancel_requested():
-                registry.discard(decision_id)
-                return InterruptDecision("cancel")
-            if monotonic() >= deadline:
                 registry.discard(decision_id)
                 return InterruptDecision("cancel")
         if cancel_requested is not None and cancel_requested():
