@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -23,6 +24,7 @@ from ..chat.routes import (
     _runtime_stream_lock_registry,
     _startup_failure_message,
 )
+from ..jsonl import jsonl_download
 from ..runtime_event_transport import turn_sse
 from ..session_files.routes import _store_for as session_file_store
 from ..session_store import require_active_session, session_store
@@ -51,6 +53,47 @@ def list_turns(session_id: str, request: Request) -> list[dict[str, object]]:
         for item in store.load_nodes(session_id)
         if item.session_id == session_id
     ]
+
+
+@router.get("/trace/export")
+def export_thread_trace(
+    request: Request,
+    session_id: str = Query(min_length=1, max_length=200),
+    thread_id: str = Query(min_length=1, max_length=200),
+) -> StreamingResponse:
+    store = session_store(request.app.state.web)
+    require_active_session(store, session_id)
+    thread = store.get_runtime_thread(session_id, thread_id)
+    if thread is None or thread.session_id != session_id:
+        raise HTTPException(status_code=404, detail="对话不存在。")
+    sidebar = store.get_sidebar_thread(thread_id)
+    if sidebar is not None and sidebar.state != "active":
+        raise HTTPException(status_code=409, detail="对话已归档或删除，请先恢复。")
+    turns = sorted(
+        (
+            node
+            for node in store.load_nodes(session_id)
+            if isinstance(node, RuntimeState) and node.session_id == session_id and node.thread_id == thread_id
+        ),
+        key=lambda node: (node.timestamp, node.id),
+    )
+
+    def records() -> Iterator[dict[str, object]]:
+        for turn in turns:
+            data_idx = turn.current_data_idx
+            trace = store.load_turn_trace(session_id, turn.id, data_idx)
+            identity = {
+                "session_id": session_id,
+                "thread_id": thread_id,
+                "turn_id": turn.id,
+                "data_idx": data_idx,
+            }
+            yield {"type": "context", **identity, "data": trace.context.to_dict() if trace is not None else None}
+            if trace is not None:
+                for item in sorted(trace.items, key=lambda item: item.sequence):
+                    yield {"type": "item", **identity, "data": item.to_dict()}
+
+    return jsonl_download(records(), f"thread-{thread_id}-trace.jsonl")
 
 
 @router.get("/{turn_id}/trace")

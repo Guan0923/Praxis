@@ -10,12 +10,14 @@ const mocks = vi.hoisted(() => ({
   runAllBenchmark: vi.fn(),
   listBenchmarkRuns: vi.fn(),
   cancelBenchmark: vi.fn(),
-  getBenchmarkTrace: vi.fn(),
   listBenchmarkResources: vi.fn(),
   changeBenchmarkResources: vi.fn(),
 }));
 
-vi.mock("../api", () => mocks);
+vi.mock("../api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../api")>(),
+  ...mocks,
+}));
 
 const task = (name: string): TaskInfo => ({
   name,
@@ -69,7 +71,6 @@ beforeEach(() => {
   mocks.cancelBenchmark.mockImplementation(async () => {
     const run = batch("stopping"); snapshot.runs = [run]; return run;
   });
-  mocks.getBenchmarkTrace.mockResolvedValue([{ kind: "tool_call", timestamp: "2026-01-01T00:00:00Z", message: "读取文件", data: { path: "safe.txt" } }]);
 });
 
 describe("BenchmarkPage layout and runs", () => {
@@ -154,7 +155,7 @@ describe("BenchmarkPage layout and runs", () => {
     expect(container.querySelectorAll(".ant-col-lg-12")).toHaveLength(2);
   });
 
-  it("starts immediately, polls completion even when the score fails, and loads trace on demand", async () => {
+  it("starts immediately, polls completion even when the score fails, and only links the trace download", async () => {
     const user = userEvent.setup();
     render(<BenchmarkPage />);
     await screen.findByText("task-one");
@@ -163,21 +164,39 @@ describe("BenchmarkPage layout and runs", () => {
     await user.click(runButtons[0]);
     await waitFor(() => expect(mocks.runBenchmark).toHaveBeenCalledWith("task-one", "llm"));
     expect(await screen.findByText("状态：运行中")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /下载 Trace/ })).not.toBeInTheDocument();
     expect(runButtons[0]).toBeDisabled();
     expect(runButtons[1]).not.toBeDisabled();
     snapshot = { ...snapshot, runs: [batch("completed")] };
     expect(await screen.findByText("状态：已完成", {}, { timeout: 3000 })).toBeInTheDocument();
     expect(screen.getByText("评分：未通过")).toBeInTheDocument();
     expect(runButtons[0]).not.toBeDisabled();
-    expect(mocks.getBenchmarkTrace).not.toHaveBeenCalled();
-    const traceLabel = screen.getByText(/完整 Trace（1 条事件）/);
-    expect(traceLabel.closest(".ant-collapse-item")).not.toHaveClass("ant-collapse-item-active");
-    await user.click(traceLabel);
-    expect(await screen.findByText("读取文件")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /下载 Trace/ }))
+      .toHaveAttribute("href", "/benchmark/runs/run-one/tasks/execution-0/trace/export");
+    expect(screen.queryByText(/完整 Trace/)).not.toBeInTheDocument();
+    expect(document.querySelector(".benchmark-trace-list")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /全部运行/ }));
     await waitFor(() => expect(mocks.runAllBenchmark).toHaveBeenCalledWith("llm"));
     expect(await screen.findByText("全部运行：0 / 2 项已结束")).toBeInTheDocument();
+  });
+
+  it.each(["completed", "failed", "cancelled"] as const)("offers empty trace downloads for %s tests", async (status) => {
+    const run = batch("completed");
+    run.tasks[0].status = status;
+    run.tasks[0].trace_count = 0;
+    snapshot.runs = [run];
+    render(<BenchmarkPage />);
+    expect(await screen.findByRole("link", { name: /下载 Trace/ })).toHaveAttribute("download");
+  });
+
+  it("does not offer a download while a result is still being finalized", async () => {
+    const run = batch("completed");
+    run.tasks[0].status = "stopping";
+    snapshot.runs = [run];
+    render(<BenchmarkPage />);
+    await screen.findByText("评分：未通过");
+    expect(screen.queryByRole("link", { name: /下载 Trace/ })).not.toBeInTheDocument();
   });
 
   it("shows an empty state after loading no tasks", async () => {

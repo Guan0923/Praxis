@@ -172,6 +172,13 @@
   background: var(--surface-subtle);
 }
 
+.trace-download-actions {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 1100px;
+  margin: 0 auto 12px;
+}
+
 .trace-version-controls,
 .trace-turn-label,
 .trace-collapse-label {

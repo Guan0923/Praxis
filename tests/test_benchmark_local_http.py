@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import socket
 from threading import Thread
 
@@ -41,6 +42,10 @@ def test_real_http_runtime_file_tool_and_grading(tmp_path_factory, monkeypatch, 
                 assert result["metrics"]["model_calls"] == 2
                 trace = client.get(f"/benchmark/runs/{batch['id']}/tasks/{batch['tasks'][0]['id']}/trace").json()
                 assert any(event["kind"] == "tool_call" for event in trace)
+                exported = client.get(f"/benchmark/runs/{batch['id']}/tasks/{batch['tasks'][0]['id']}/trace/export")
+                assert exported.status_code == 200
+                assert [json.loads(line) for line in exported.iter_lines()] == trace
+                assert exported.headers["content-type"].startswith("application/x-ndjson")
                 assert len(calls) == 2
                 batch = client.post("/benchmark/run-all", json={}).json()
                 until(lambda: client.get(f"/benchmark/runs/{batch['id']}").json()["finished"] == 9, timeout=30)

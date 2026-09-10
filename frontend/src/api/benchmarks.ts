@@ -1,4 +1,4 @@
-import type { BenchmarkRun, BenchmarkRuns, BenchmarkTraceEvent, SkillInfo, TaskInfo, ToolInfo } from "../types";
+import type { BenchmarkRun, BenchmarkRuns, SkillInfo, TaskInfo, ToolInfo } from "../types";
 import { jsonBody, requestJson } from "./transport/request";
 
 export async function listTasks(): Promise<TaskInfo[]> {
@@ -19,8 +19,8 @@ export function listBenchmarkRuns(signal?: AbortSignal): Promise<BenchmarkRuns> 
   return requestJson("/benchmark/runs", { signal });
 }
 
-export function getBenchmarkTrace(runId: string, taskId: string, signal?: AbortSignal): Promise<BenchmarkTraceEvent[]> {
-  return requestJson(`/benchmark/runs/${encodeURIComponent(runId)}/tasks/${encodeURIComponent(taskId)}/trace`, { signal });
+export function benchmarkTraceDownloadUrl(runId: string, taskId: string): string {
+  return `/benchmark/runs/${encodeURIComponent(runId)}/tasks/${encodeURIComponent(taskId)}/trace/export`;
 }
 
 export function cancelBenchmark(runId: string, taskId?: string): Promise<BenchmarkRun> {

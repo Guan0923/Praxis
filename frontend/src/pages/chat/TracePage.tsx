@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Alert, Button, Collapse, Empty, Spin, Tag, type CollapseProps } from "antd";
-import { LeftOutlined, RightOutlined } from "@ant-design/icons";
-import { getTurnTrace } from "../../api";
+import { DownloadOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
+import { getTurnTrace, threadTraceDownloadUrl } from "../../api";
 import type {
   RuntimeStateNode,
   TurnItem,
@@ -320,6 +320,17 @@ export default function TracePage({ turns }: TracePageProps) {
 
   return (
     <div className="trace-page">
+      <div className="trace-download-actions">
+        <Button
+          icon={<DownloadOutlined />}
+          href={threadTraceDownloadUrl(orderedTurns[0].session_id, orderedTurns[0].thread_id)}
+          target="_blank"
+          rel="noopener noreferrer"
+          download
+        >
+          下载 Trace
+        </Button>
+      </div>
       <Collapse
         className="trace-turn-collapse"
         classNames={{ title: "trace-collapse-title" }}
