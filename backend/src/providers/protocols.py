@@ -20,7 +20,7 @@ from backend.runtime.core.context import AgentRuntime, PreparedResponse
 
 from .chat_completions import ChatCompletions
 from .config import ModelConfig
-from .errors import ModelRequestError, ProviderOutputError
+from .errors import ModelRequestError, ModelResponseError, ModelTransportError, ProviderOutputError
 
 
 class ChatCompletionsAdapter(ChatCompletions):
@@ -49,6 +49,27 @@ def _estimate(messages: list[ChatMessage], tools: list[ToolSpec], parameters: Ma
     input_tokens = max(1, len(json.dumps(payload, ensure_ascii=False)) // 4)
     max_tokens = parameters.get("max_tokens", 0)
     return input_tokens + (int(max_tokens) if isinstance(max_tokens, int) and max_tokens > 0 else 0)
+
+
+def _parse_tool_call(name: Any, call_id: Any, arguments: Any, *, incomplete: bool) -> ToolMessage | None:
+    try:
+        if not isinstance(name, str) or not name or not isinstance(call_id, str) or not call_id:
+            raise ValueError("Tool call name and id must be non-empty strings.")
+        parsed = json.loads(arguments) if isinstance(arguments, str) else arguments
+        if not isinstance(parsed, Mapping):
+            raise ValueError("Tool call arguments must be a complete JSON object.")
+    except (TypeError, ValueError) as exc:
+        if incomplete:
+            return None
+        raise ModelRequestError(safe_error_message(exc)) from exc
+    return ToolMessage(name=name, call_id=call_id, arguments=dict(parsed), status="pending")
+
+
+def _message_block_index(event: Mapping[str, Any]) -> int:
+    index = event.get("index")
+    if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+        raise ModelRequestError("Messages content block requires a non-negative integer index.")
+    return index
 
 
 class ResponsesAdapter:
@@ -145,6 +166,8 @@ class ResponsesAdapter:
         raw = runtime.exchange.raw_response
         try:
             parsed = self._parse_stream(runtime, raw) if not isinstance(raw, Mapping) else self._parse_json(raw)
+        except (ModelTransportError, ModelResponseError):
+            raise
         except ModelRequestError as exc:
             raise ProviderOutputError(safe_error_message(exc), operation=runtime.exchange.operation) from exc
         runtime.exchange.prepared_response = parsed
@@ -152,6 +175,22 @@ class ResponsesAdapter:
         return parsed
 
     def _parse_json(self, data: Mapping[str, Any]) -> PreparedResponse:
+        status = data.get("status")
+        details = data.get("incomplete_details")
+        reason = details.get("reason") if isinstance(details, Mapping) else None
+        incomplete = status == "incomplete" and reason == "max_output_tokens"
+        if (status == "incomplete" and not incomplete) or status in {"failed", "cancelled"} or data.get("error"):
+            error = data.get("error")
+            detail = error.get("message") if isinstance(error, Mapping) else None
+            raise ModelResponseError(
+                str(detail or f"Responses generation did not complete: {reason or status or 'error'}."),
+                diagnostics={
+                    "finish_reason": status,
+                    "incomplete_details": details,
+                    "error": error,
+                    "usage": data.get("usage"),
+                },
+            )
         output = data.get("output")
         if not isinstance(output, list):
             raise ModelRequestError("Responses output must be an array.")
@@ -167,19 +206,16 @@ class ResponsesAdapter:
             elif item_type in {"reasoning", "summary"}:
                 reasoning += _text_content(item.get("summary") or item.get("content"))
             elif item_type == "function_call":
-                arguments = item.get("arguments", "{}")
-                try:
-                    parsed_arguments = json.loads(arguments) if isinstance(arguments, str) else dict(arguments)
-                except (TypeError, ValueError) as exc:
-                    raise ModelRequestError(safe_error_message(exc)) from exc
-                tools.append(
-                    ToolMessage(
-                        name=str(item.get("name") or ""),
-                        call_id=str(item.get("call_id") or item.get("id") or ""),
-                        arguments=parsed_arguments,
-                        status="pending",
-                    )
+                if incomplete and item.get("status") not in {None, "completed"}:
+                    continue
+                tool = _parse_tool_call(
+                    item.get("name"),
+                    item.get("call_id") or item.get("id"),
+                    item.get("arguments"),
+                    incomplete=incomplete,
                 )
+                if tool is not None:
+                    tools.append(tool)
         usage = data.get("usage")
         usage = dict(usage) if isinstance(usage, Mapping) else None
         return PreparedResponse(
@@ -193,14 +229,13 @@ class ResponsesAdapter:
             response_id=str(data.get("id")) if data.get("id") else None,
             model=str(data.get("model")) if data.get("model") else None,
             finish_reason=str(data.get("status")) if data.get("status") else None,
-            provider_metadata={"type": data.get("object", "response")},
+            provider_metadata={"type": data.get("object", "response"), "incomplete_details": copy.deepcopy(details)},
+            incomplete_reason="output_limit" if incomplete else None,
         )
 
     def _parse_stream(self, runtime: AgentRuntime, events: Iterable[dict[str, Any]]) -> PreparedResponse:
         text: list[str] = []
         reasoning: list[str] = []
-        calls: dict[str, dict[str, Any]] = {}
-        usage: dict[str, Any] | None = None
         final: Mapping[str, Any] | None = None
         for event in events:
             kind = str(event.get("__sse_event") or event.get("type") or "")
@@ -216,27 +251,15 @@ class ResponsesAdapter:
                     reasoning.append(delta)
                     if runtime.exchange.on_reasoning:
                         runtime.exchange.on_reasoning(delta)
-            elif kind == "response.output_item.added":
-                item = event.get("item")
-                if isinstance(item, Mapping) and item.get("type") == "function_call":
-                    key = str(item.get("call_id") or item.get("id") or len(calls))
-                    calls[key] = {
-                        "name": str(item.get("name") or ""),
-                        "call_id": key,
-                        "arguments": str(item.get("arguments") or ""),
-                    }
-            elif kind == "response.function_call_arguments.delta":
-                key = str(event.get("call_id") or event.get("item_id") or "")
-                target = calls.setdefault(key, {"name": str(event.get("name") or ""), "call_id": key, "arguments": ""})
-                if isinstance(event.get("delta"), str):
-                    target["arguments"] += event["delta"]
-            elif kind == "response.completed":
+            elif kind in {"response.completed", "response.incomplete", "response.failed", "response.cancelled"}:
                 candidate = event.get("response")
                 if isinstance(candidate, Mapping):
-                    final = candidate
-                    raw_usage = candidate.get("usage")
-                    if isinstance(raw_usage, Mapping):
-                        usage = dict(raw_usage)
+                    final = {**candidate, "status": kind.removeprefix("response.")}
+            elif kind == "error":
+                raise ModelResponseError(
+                    str(event.get("message") or "Responses stream returned an error."),
+                    diagnostics={"provider_error": dict(event)},
+                )
         if final is not None:
             parsed = self._parse_json(final)
             if text:
@@ -244,19 +267,7 @@ class ResponsesAdapter:
             if reasoning:
                 parsed.message.reasoning = "".join(reasoning)
             return parsed
-        tools = []
-        for value in calls.values():
-            try:
-                arguments = json.loads(value["arguments"] or "{}")
-            except ValueError as exc:
-                raise ModelRequestError(safe_error_message(exc)) from exc
-            tools.append(
-                ToolMessage(name=value["name"], call_id=value["call_id"], arguments=arguments, status="pending")
-            )
-        return PreparedResponse(
-            AssistantMessage(content="".join(text) or None, reasoning="".join(reasoning) or None, tool_messages=tools),
-            usage=usage,
-        )
+        raise ModelResponseError("Responses stream ended without a terminal response event.")
 
 
 class MessagesAdapter:
@@ -357,6 +368,8 @@ class MessagesAdapter:
         raw = runtime.exchange.raw_response
         try:
             parsed = self._parse_stream(runtime, raw) if not isinstance(raw, Mapping) else self._parse_json(raw)
+        except (ModelTransportError, ModelResponseError):
+            raise
         except ModelRequestError as exc:
             raise ProviderOutputError(safe_error_message(exc), operation=runtime.exchange.operation) from exc
         runtime.exchange.prepared_response = parsed
@@ -364,6 +377,15 @@ class MessagesAdapter:
         return parsed
 
     def _parse_json(self, data: Mapping[str, Any]) -> PreparedResponse:
+        stop_reason = data.get("stop_reason")
+        incomplete = stop_reason == "max_tokens"
+        if data.get("type") == "error" or stop_reason in {"refusal", "content_filter"}:
+            error = data.get("error")
+            detail = error.get("message") if isinstance(error, Mapping) else None
+            raise ModelResponseError(
+                str(detail or f"Messages generation did not complete: {stop_reason or 'error'}."),
+                diagnostics={"finish_reason": stop_reason, "error": error, "usage": data.get("usage")},
+            )
         blocks = data.get("content")
         if not isinstance(blocks, list):
             raise ModelRequestError("Messages response content must be an array.")
@@ -379,14 +401,14 @@ class MessagesAdapter:
             elif kind in {"thinking", "redacted_thinking"}:
                 reasoning.append(str(block.get("thinking") or block.get("text") or ""))
             elif kind == "tool_use":
-                tools.append(
-                    ToolMessage(
-                        name=str(block.get("name") or ""),
-                        call_id=str(block.get("id") or ""),
-                        arguments=dict(block.get("input") or {}),
-                        status="pending",
-                    )
+                tool = _parse_tool_call(
+                    block.get("name"),
+                    block.get("id"),
+                    block.get("input"),
+                    incomplete=incomplete,
                 )
+                if tool is not None:
+                    tools.append(tool)
         usage = data.get("usage")
         usage = dict(usage) if isinstance(usage, Mapping) else None
         return PreparedResponse(
@@ -401,21 +423,29 @@ class MessagesAdapter:
             model=str(data.get("model")) if data.get("model") else None,
             finish_reason=str(data.get("stop_reason")) if data.get("stop_reason") else None,
             provider_metadata={"type": "message"},
+            incomplete_reason="output_limit" if incomplete else None,
         )
 
     def _parse_stream(self, runtime: AgentRuntime, events: Iterable[dict[str, Any]]) -> PreparedResponse:
         text: list[str] = []
         reasoning: list[str] = []
-        calls: dict[str, dict[str, Any]] = {}
-        usage: dict[str, Any] | None = None
+        calls: dict[int, dict[str, Any]] = {}
+        stopped_blocks: set[int] = set()
+        usage: dict[str, Any] = {}
+        header: dict[str, Any] = {}
         stop_reason: str | None = None
+        stopped = False
         for event in events:
             kind = str(event.get("__sse_event") or event.get("type") or "")
             if kind == "content_block_start":
                 block = event.get("content_block")
                 if isinstance(block, Mapping) and block.get("type") == "tool_use":
-                    key = str(block.get("id") or len(calls))
-                    calls[key] = {"id": key, "name": str(block.get("name") or ""), "input": ""}
+                    index = _message_block_index(event)
+                    calls[index] = {**block, "fragments": []}
+                elif isinstance(block, Mapping) and block.get("type") == "text" and block.get("text"):
+                    text.append(str(block["text"]))
+                    if runtime.exchange.on_content:
+                        runtime.exchange.on_content(str(block["text"]))
             elif kind == "content_block_delta":
                 delta = event.get("delta")
                 if isinstance(delta, Mapping):
@@ -428,27 +458,45 @@ class MessagesAdapter:
                         if runtime.exchange.on_reasoning:
                             runtime.exchange.on_reasoning(delta["thinking"])
                     if isinstance(delta.get("partial_json"), str):
-                        index = int(event.get("index", 0))
-                        keys = list(calls)
-                        if index < len(keys):
-                            calls[keys[index]]["input"] += delta["partial_json"]
+                        index = _message_block_index(event)
+                        if index not in calls:
+                            raise ModelRequestError("Messages tool delta has no matching content block.")
+                        calls[index]["fragments"].append(delta["partial_json"])
+            elif kind == "content_block_stop":
+                stopped_blocks.add(_message_block_index(event))
             elif kind == "message_delta":
                 if isinstance(event.get("delta"), Mapping):
                     stop_reason = str(event["delta"].get("stop_reason") or "") or stop_reason
                 if isinstance(event.get("usage"), Mapping):
-                    usage = dict(event["usage"])
+                    usage.update(event["usage"])
             elif kind == "message_start" and isinstance(event.get("message"), Mapping):
+                header = dict(event["message"])
                 if isinstance(event["message"].get("usage"), Mapping):
-                    usage = dict(event["message"]["usage"])
-        tools = []
-        for value in calls.values():
-            try:
-                arguments = json.loads(value["input"] or "{}")
-            except ValueError as exc:
-                raise ModelRequestError(safe_error_message(exc)) from exc
-            tools.append(ToolMessage(name=value["name"], call_id=value["id"], arguments=arguments, status="pending"))
-        return PreparedResponse(
-            AssistantMessage(content="".join(text) or None, reasoning="".join(reasoning) or None, tool_messages=tools),
-            usage=usage,
-            finish_reason=stop_reason,
-        )
+                    usage.update(event["message"]["usage"])
+            elif kind == "message_stop":
+                stopped = True
+            elif kind == "error":
+                error = event.get("error")
+                detail = error.get("message") if isinstance(error, Mapping) else None
+                raise ModelResponseError(
+                    str(detail or "Messages stream returned an error."), diagnostics={"provider_error": dict(event)}
+                )
+        if not stopped or stop_reason is None:
+            raise ModelResponseError("Messages stream ended without message_stop and a stop reason.")
+        if stop_reason in {"refusal", "content_filter"}:
+            raise ModelResponseError(
+                f"Messages generation did not complete: {stop_reason}.",
+                diagnostics={"finish_reason": stop_reason, "usage": usage},
+            )
+        blocks = [
+            {"type": "text", "text": "".join(text)},
+            {"type": "thinking", "thinking": "".join(reasoning)},
+        ]
+        for index, value in sorted(calls.items()):
+            if index not in stopped_blocks:
+                if stop_reason == "max_tokens":
+                    continue
+                raise ModelRequestError("Messages tool block ended without content_block_stop.")
+            fragments = value.pop("fragments")
+            blocks.append({**value, "input": "".join(fragments) if fragments else value.get("input")})
+        return self._parse_json({**header, "content": blocks, "usage": usage or None, "stop_reason": stop_reason})

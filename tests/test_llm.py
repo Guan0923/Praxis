@@ -249,7 +249,7 @@ def test_prepare_response_uses_lowest_choice_and_preserves_alternatives() -> Non
             {
                 "index": 0,
                 "message": {"role": "assistant", "content": "Primary"},
-                "finish_reason": "content_filter",
+                "finish_reason": "stop",
                 "logprobs": None,
             },
         ],
@@ -258,7 +258,8 @@ def test_prepare_response_uses_lowest_choice_and_preserves_alternatives() -> Non
     response = chat_completions_for_test().prepare_response(runtime)
 
     assert response.message.content == "Primary"
-    assert response.finish_reason == "content_filter"
+    assert response.finish_reason == "stop"
+    assert response.incomplete_reason is None
     alternatives = response.message.provider_options["chat_completions"]["response"]["alternative_choices"]
     assert alternatives[0]["index"] == 1
 
@@ -397,7 +398,7 @@ class FakeStreamResponse:
     def raise_for_status(self) -> None:
         return None
 
-    def iter_lines(self, decode_unicode=False):
+    def iter_lines(self, chunk_size=1, decode_unicode=False):
         assert decode_unicode is False
         return [
             'data: {"id":"stream","model":"demo","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"},"finish_reason":null,"logprobs":null}],"usage":null}',

@@ -344,6 +344,7 @@ class LLMClient:
             response_id=prepared.response_id,
             response_model=prepared.model,
             finish_reason=prepared.finish_reason,
+            incomplete_reason=prepared.incomplete_reason,
             content_chars=len(prepared.message.content or ""),
             reasoning_chars=len(prepared.message.reasoning or ""),
             usage=prepared.usage,

@@ -96,6 +96,7 @@ def apply_steering(runtime: AgentRuntime, update: SteeringUpdate, *, phase: str)
 
     if runtime.stop_requested():
         return
+    runtime.exchange.continuation_pending = False
     publish = runtime.services.publish or (lambda _event: None)
     data = {
         "message_count": update.message_count,

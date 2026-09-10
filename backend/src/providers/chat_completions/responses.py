@@ -10,7 +10,7 @@ from typing import Any
 
 from backend.domain import AssistantMessage, ToolMessage, safe_error_message
 
-from ..errors import ModelRequestError
+from ..errors import ModelRequestError, ModelResponseError
 from .common import _PROVIDER
 from .models import ChatCompletion
 
@@ -78,7 +78,7 @@ def _parse_choice(
     if finish_reason is not None and not isinstance(finish_reason, str):
         raise ModelRequestError("Chat Completions finish_reason must be text or null.")
 
-    raw_calls = message.get("tool_calls")
+    raw_calls = [] if finish_reason == "content_filter" else message.get("tool_calls")
     if raw_calls is None:
         raw_calls = []
     if not isinstance(raw_calls, list):
@@ -90,12 +90,21 @@ def _parse_choice(
             call_type = call["type"]
             function = call["function"]
             name = function["name"]
-            arguments = _parse_arguments(function["arguments"])
         except (KeyError, TypeError) as exc:
+            if finish_reason == "length":
+                continue
             raise ModelRequestError(safe_error_message(exc)) from exc
+        try:
+            arguments = _parse_arguments(function.get("arguments"))
+        except ModelRequestError:
+            if finish_reason == "length":
+                continue
+            raise
         if call_type != "function":
             raise ModelRequestError("Chat Completions tool call type must be 'function'.")
         if not isinstance(call_id, str) or not call_id or not isinstance(name, str) or not name:
+            if finish_reason == "length":
+                continue
             raise ModelRequestError("Chat Completions tool call id and name must be non-empty strings.")
         if call_id in seen_call_ids:
             raise ModelRequestError(f"Duplicate Chat Completions tool call id in response: {call_id}.")
@@ -115,6 +124,10 @@ def _parse_choice(
 
 
 def _parse_response(data: Mapping[str, Any]) -> ChatCompletion:
+    error = data.get("error")
+    if error:
+        detail = error.get("message") if isinstance(error, Mapping) else error
+        raise ModelResponseError(str(detail or "Chat Completions returned an error."), diagnostics={"error": error})
     raw_choices = data.get("choices")
     if not isinstance(raw_choices, list) or not raw_choices:
         raise ModelRequestError("Chat Completions response choices must be a non-empty array.")
@@ -137,6 +150,11 @@ def _parse_response(data: Mapping[str, Any]) -> ChatCompletion:
         )
     parsed.sort(key=lambda choice: choice.index)
     primary = parsed[0]
+    if primary.finish_reason == "content_filter":
+        raise ModelResponseError(
+            "Chat Completions response stopped by content_filter.",
+            diagnostics={"finish_reason": primary.finish_reason},
+        )
     if len(parsed) > 1:
         primary.message.provider_options[_PROVIDER]["response"]["alternative_choices"] = [
             choice.raw for choice in parsed[1:]
@@ -152,5 +170,6 @@ def _parse_response(data: Mapping[str, Any]) -> ChatCompletion:
         response_id=response_id if isinstance(response_id, str) else None,
         model=model if isinstance(model, str) else None,
         finish_reason=primary.finish_reason,
+        incomplete_reason="output_limit" if primary.finish_reason == "length" else None,
         provider_metadata=provider_metadata,
     )

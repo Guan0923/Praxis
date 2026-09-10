@@ -82,10 +82,15 @@ class ExecutionWorkflow:
                 streamed = close(publish_deferred_content=bool(response.tool_messages) or not defer_todo_content)
             self._tool_batches.prepare(response)
             _publish_repairs(runtime, capabilities)
-            todo_retry = not response.tool_messages and check_todo_finalization(
-                runtime,
-                response,
-                content_streamed=streamed.content,
+            incomplete = runtime.exchange.continuation_pending
+            todo_retry = (
+                not incomplete
+                and not response.tool_messages
+                and check_todo_finalization(
+                    runtime,
+                    response,
+                    content_streamed=streamed.content,
+                )
             )
             if not todo_retry:
                 _publish_assistant_message(runtime, response, streamed)
@@ -103,6 +108,10 @@ class ExecutionWorkflow:
                 continue
 
             if not response.tool_messages:
+                if incomplete:
+                    _start_assistant(runtime, response)
+                    _finish_assistant(runtime)
+                    continue
                 if todo_retry:
                     continue
                 complete_run(runtime, response, response_streamed=streamed.content)

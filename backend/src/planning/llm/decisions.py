@@ -35,6 +35,14 @@ class DecisionMixin:
                 raise PlanningError(f"{names} {verb} reserved for the Plan-mode control protocol.")
             allowed = [*allowed, REQUEST_USER_INPUT_SPEC, REQUEST_PLAN_REVIEW_SPEC]
         system = SystemMessage(content=compose_system_prompt(runtime.run.mode))
+        if runtime.exchange.continuation_pending:
+            system.content += (
+                "\n\n[Continue interrupted generation]\n"
+                "The previous response reached the output limit. Continue the same task using the "
+                "partial answer and completed tool results in the conversation. Do not repeat completed work. "
+                "Any unfinished tool call was not executed; generate it again with complete arguments if still needed."
+            )
+            runtime.exchange.continuation_pending = False
         prepared = self._request(
             runtime,
             self._messages_for_request(
@@ -56,12 +64,17 @@ class DecisionMixin:
                     operation="decision",
                     invalid_output=self._message_preview(message),
                 )
-        if not message.tool_messages and not (message.content and message.content.strip()):
+        if (
+            not message.tool_messages
+            and not (message.content and message.content.strip())
+            and not prepared.incomplete_reason
+        ):
             raise ModelOutputError(
                 "Model returned neither text nor a tool call.",
                 operation="decision",
                 invalid_output=self._message_preview(message),
             )
+        runtime.exchange.continuation_pending = prepared.incomplete_reason == "output_limit"
         return message
 
     def finalize(self, runtime: AgentRuntime, reason: str) -> AssistantMessage:
