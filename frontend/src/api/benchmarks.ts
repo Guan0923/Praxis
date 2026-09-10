@@ -35,3 +35,22 @@ export async function listTools(): Promise<ToolInfo[]> {
 export async function listSkills(): Promise<SkillInfo[]> {
   return requestJson<SkillInfo[]>("/api/skills");
 }
+export interface BenchmarkResource {
+  task_name: string;
+  status: "not_prepared" | "preparing" | "ready" | "deleting" | "error";
+  phase: string;
+  error: string | null;
+  has_resources: boolean;
+  in_use: boolean;
+}
+
+export function listBenchmarkResources(signal?: AbortSignal): Promise<BenchmarkResource[]> {
+  return requestJson("/benchmark/resources", { signal });
+}
+
+export function changeBenchmarkResources(name: string, action: "prepare" | "delete"): Promise<BenchmarkResource> {
+  return requestJson(`/benchmark/tasks/${encodeURIComponent(name)}/resources`, {
+    method: action === "prepare" ? "POST" : "DELETE",
+    operation: { dedupeKey: `benchmark:resources:${name}` },
+  });
+}

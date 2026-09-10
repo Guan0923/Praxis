@@ -170,6 +170,24 @@ describe("AgentShell sidebar collapse", () => {
 });
 
 describe("AgentShell right panel sizing", () => {
+  it("keeps visited pages and the desktop chat node across navigation", async () => {
+    const props = makeProps();
+    const { rerender } = render(<AgentShell {...props} />);
+    const chat = screen.getByTestId("chat-page");
+    expect(screen.queryByTestId("benchmark-page")).not.toBeInTheDocument();
+    rerender(<AgentShell {...props} page="benchmark" />);
+    const benchmark = screen.getByTestId("benchmark-page");
+    expect(chat).not.toBeVisible();
+    rerender(<AgentShell {...props} page="trash" />);
+    const trash = screen.getByTestId("trash-page");
+    expect(benchmark).not.toBeVisible();
+    rerender(<AgentShell {...props} page="chat" />);
+    expect(screen.getByTestId("chat-page")).toBe(chat);
+    expect(chat).toBeVisible();
+    expect(screen.getByTestId("benchmark-page")).toBe(benchmark);
+    expect(screen.getByTestId("trash-page")).toBe(trash);
+  });
+
   it("uses 420px by default and collapses only below 280px", () => {
     expect(DEFAULT_RIGHT_PANEL_WIDTH).toBe(420);
     expect(RIGHT_PANEL_CLOSE_THRESHOLD).toBe(280);

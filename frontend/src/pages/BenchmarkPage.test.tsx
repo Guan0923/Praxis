@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   listBenchmarkRuns: vi.fn(),
   cancelBenchmark: vi.fn(),
   getBenchmarkTrace: vi.fn(),
+  listBenchmarkResources: vi.fn(),
+  changeBenchmarkResources: vi.fn(),
 }));
 
 vi.mock("../api", () => mocks);
@@ -56,6 +58,7 @@ beforeEach(() => {
   sessionStorage.clear();
   snapshot = { instance_id: "backend-one", runs: [] };
   mocks.listBenchmarkRuns.mockImplementation(async () => snapshot);
+  mocks.listBenchmarkResources.mockImplementation(async () => ["task-one", "task-two", "terminal-case", "data-case"].map((name) => ({ task_name: name, status: "ready", phase: "ready", error: null, has_resources: true, in_use: false })));
   mocks.listTasks.mockResolvedValue([task("task-one"), task("task-two")]);
   mocks.runBenchmark.mockImplementation(async () => {
     const run = batch(); snapshot.runs = [run]; return run;
@@ -70,6 +73,41 @@ beforeEach(() => {
 });
 
 describe("BenchmarkPage layout and runs", () => {
+  it("pauses hidden polling and refreshes without losing task content", async () => {
+    const { rerender } = render(<BenchmarkPage active />);
+    await screen.findByText("task-one");
+    await waitFor(() => expect(mocks.listBenchmarkResources).toHaveBeenCalled());
+    rerender(<BenchmarkPage active={false} />);
+    const calls = mocks.listBenchmarkResources.mock.calls.length;
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1100)); });
+    expect(mocks.listBenchmarkResources).toHaveBeenCalledTimes(calls);
+    expect(screen.getByText("task-one")).toBeInTheDocument();
+    rerender(<BenchmarkPage active />);
+    await waitFor(() => expect(mocks.listBenchmarkResources.mock.calls.length).toBeGreaterThan(calls));
+  });
+
+  it("requires resources, downloads explicitly, and confirms resource deletion", async () => {
+    let ready = false;
+    mocks.listBenchmarkResources.mockImplementation(async () => ["task-one", "task-two"].map((name) => ({ task_name: name, status: ready ? "ready" : "not_prepared", phase: "idle", error: null, has_resources: ready, in_use: false })));
+    mocks.changeBenchmarkResources.mockImplementation(async (name, action) => {
+      ready = action === "prepare";
+      return { task_name: name, status: ready ? "ready" : "not_prepared", phase: "idle", has_resources: ready, error: null, in_use: false };
+    });
+    const user = userEvent.setup();
+    render(<BenchmarkPage />);
+    await screen.findByText("task-one");
+    expect(screen.getByRole("button", { name: /全部运行/ })).toBeDisabled();
+    const runButtons = screen.getAllByRole("button").filter((button) => button.textContent?.trim() === "运行");
+    expect(runButtons[0]).toBeDisabled();
+    await user.click(screen.getAllByRole("button", { name: /下载资源/ })[0]);
+    await waitFor(() => expect(runButtons[0]).not.toBeDisabled());
+    expect(mocks.runBenchmark).not.toHaveBeenCalled();
+    await user.click(screen.getAllByRole("button", { name: /删除资源/ })[0]);
+    expect((await screen.findAllByText("删除“task-one”的资源？"))[0]).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: /取\s*消/ }));
+    expect(mocks.changeBenchmarkResources).toHaveBeenCalledTimes(1);
+  });
+
   it("filters the visible tasks without narrowing run-all and shows unlimited budgets", async () => {
     const first = task("terminal-case");
     first.capability = "terminal";

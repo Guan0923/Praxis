@@ -28,6 +28,7 @@ from backend.providers import ModelConfig
 from backend.runtime.core.events import RuntimeEvent
 
 from .model import BenchmarkTask, TaskResult
+from .resources import ResourceStore, resource_store
 from .runner import _error_result, run_one_task
 from .sandbox import Sandbox
 
@@ -74,10 +75,12 @@ class BenchmarkService:
         root: Path,
         *,
         execute: Callable[..., TaskResult] = run_one_task,
+        resources: ResourceStore | None = None,
     ) -> None:
         self.instance_id = uuid4().hex
         self._root = root
         self._execute = execute
+        self.resources = resources or resource_store()
         self._scope = registry.root_scope().child(JobScopeKind.TASK)
         self._lock = RLock()
         self._runs: dict[str, BatchRun] = {}
@@ -98,6 +101,7 @@ class BenchmarkService:
             conflicts = sorted(active.intersection(task.name for task in tasks))
             if conflicts:
                 raise BenchmarkConflict("Tasks already active: " + ", ".join(conflicts))
+            self.resources.reserve(tasks)
             batch = BatchRun(uuid4().hex, [TaskRun(uuid4().hex, task, planner, model_config) for task in tasks])
             self._runs[batch.id] = batch
             self._pending.extend(batch.tasks)
@@ -152,6 +156,7 @@ class BenchmarkService:
                     cancel_requested=is_cancelled,
                     on_phase=phase,
                     on_event=event,
+                    resource_cache=self.resources.cache,
                 )
                 with self._lock:
                     item.result = result
@@ -191,11 +196,18 @@ class BenchmarkService:
             self._dispatch()
 
     def _finish(self, item: TaskRun, status: str) -> None:
+        self.resources.release(item.task)
         item.status = status
         item.finished = monotonic()
         item.updated_at = _now()
         item.model_config = None
         self._running.discard(item.id)
+
+    def resource_operation(self, task: BenchmarkTask, action: str) -> dict:
+        with self._lock:
+            if self._closed:
+                raise BenchmarkConflict("Benchmark service is shutting down.")
+            return self.resources.submit(task, action, self._scope)
 
     def snapshot(self, run_id: str | None = None) -> dict:
         with self._lock:

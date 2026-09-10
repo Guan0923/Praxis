@@ -1,6 +1,6 @@
 """Download pinned source data, prepare images, and verify without a model API.
 
-uv run --with pyarrow==25.0.1 python -m benchmarks.prepare --sources
+uv run python -m benchmarks.prepare --task tb2-log-summary-date-ranges
 python -m benchmarks.prepare --verify --task tb2-log-summary-date-ranges
 """
 
@@ -10,33 +10,33 @@ import argparse
 import json
 import shlex
 import tomllib
-import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
 from backend.configuration import atomic_write_text
 
-from .containers import TaskContainer, cache_root, command
-from .import_public_suite import DATA_REV, SWE_REV, TB_REV, check_revision
+from .containers import TaskContainer, cache_root
 from .tasks import resolve_tasks
 from .upstream import grade, prepare_environment, run_oracle, task_source
 
 
-def prepare_task(task, cache: Path, cancelled=None) -> dict:
+def environment_version(task) -> int:
+    return {"financial-document-processor": 5, "headless-terminal": 3}.get(task.container.get("task_path"), 2)
+
+
+def prepare_task(task, cache: Path, cancelled=None, *, image_tag: str | None = None) -> dict:
     receipts = cache / "prepared"
     receipts.mkdir(parents=True, exist_ok=True)
     path = receipts / f"{task.name}.json"
     container = TaskContainer(task, cancelled, cache=cache)
     source_image = container.prepare_image(prepared=False)
-    environment_version = {"financial-document-processor": 5, "headless-terminal": 3}.get(
-        task.container.get("task_path"), 2
-    )
+    version = environment_version(task)
     if path.exists():
         previous = json.loads(path.read_text(encoding="utf-8"))
         if (
             previous.get("prepared")
             and previous.get("suite_version") == task.suite_version
-            and previous.get("environment_version") == environment_version
+            and previous.get("environment_version") == version
         ):
             code, _ = container.docker("image", "inspect", previous["image_id"], check=False)
             if code == 0:
@@ -48,7 +48,7 @@ def prepare_task(task, cache: Path, cancelled=None) -> dict:
         "source_image_id": source_image,
         "prepared": True,
         "verified": False,
-        "environment_version": environment_version,
+        "environment_version": version,
     }
     if task.container["kind"] == "terminal_bench":
         # Prime exactly the package set requested by the pinned test launcher.
@@ -87,7 +87,9 @@ def prepare_task(task, cache: Path, cancelled=None) -> dict:
             container.exec(
                 'printf \'Acquire::Retries "0";\\nAcquire::http::Timeout "2";\\nAcquire::https::Timeout "2";\\n\' > /etc/apt/apt.conf.d/99benchmark-timeouts'
             )
-            _, image = container.docker("commit", container.name, "praxis-benchmark:prepared-" + task.name, timeout=120)
+            _, image = container.docker(
+                "commit", container.name, image_tag or "praxis-benchmark:prepared-" + task.name, timeout=120
+            )
             report["image_id"] = image.strip()
         finally:
             container.close()
@@ -95,44 +97,16 @@ def prepare_task(task, cache: Path, cancelled=None) -> dict:
     return report
 
 
-def download_sources(cache: Path) -> None:
-    cache.mkdir(parents=True, exist_ok=True)
-    repositories = (
-        ("terminal-bench-2", "https://github.com/harbor-framework/terminal-bench-2.git", TB_REV),
-        ("swe-bench-pro", "https://github.com/scaleapi/SWE-bench_Pro-os.git", SWE_REV),
-    )
-    for name, url, revision in repositories:
-        root = cache / name
-        if not root.exists():
-            command(["git", "-c", "core.autocrlf=false", "clone", "--no-checkout", url, str(root)], timeout=900)
-            command(["git", "-C", str(root), "config", "core.autocrlf", "false"])
-            command(["git", "-C", str(root), "checkout", "--detach", revision], timeout=120)
-        check_revision(root, revision)
-    parquet = cache / f"swe-pro-{DATA_REV}.parquet"
-    if not parquet.exists():
-        url = (
-            f"https://huggingface.co/datasets/ScaleAI/SWE-bench_Pro/resolve/{DATA_REV}/data/test-00000-of-00001.parquet"
-        )
-        with urllib.request.urlopen(url, timeout=120) as response:
-            data = response.read(50_000_001)
-        if len(data) > 50_000_000:
-            raise RuntimeError("Unexpectedly large dataset download.")
-        parquet.write_bytes(data)
-    try:
-        import pyarrow.parquet as pq
-    except ImportError as exc:
-        raise RuntimeError(
-            "Source preparation requires: uv run --with pyarrow==25.0.1 python -m benchmarks.prepare --sources"
-        ) from exc
-    selected = {
-        task.source.task_id
-        for task in resolve_tasks([])
-        if task.container and task.container["kind"] == "swe_bench_pro"
-    }
-    rows = {row["instance_id"]: row for row in pq.read_table(parquet).to_pylist() if row["instance_id"] in selected}
-    if set(rows) != selected:
-        raise RuntimeError("Pinned dataset is missing selected tasks.")
-    (cache / "swe-selected.json").write_text(json.dumps(rows), encoding="utf-8")
+def download_sources(cache: Path, tasks=None) -> None:
+    from .resources import resource_store
+
+    store = resource_store(cache)
+    for task in tasks if tasks is not None else resolve_tasks([]):
+        if task.container is None:
+            continue
+        store._source(task, lambda: False)
+        if task.container["kind"] == "swe_bench_pro":
+            store._swe_data(task, lambda: False)
 
 
 def validate_task(task, cache: Path) -> dict:
@@ -179,8 +153,11 @@ def main() -> int:
     parser.add_argument("--task", action="append", default=[])
     parser.add_argument("--cache", type=Path, default=cache_root())
     args = parser.parse_args()
+    from .resources import resource_store
+
+    store = resource_store(args.cache)
     if args.sources:
-        download_sources(args.cache)
+        download_sources(args.cache, resolve_tasks(args.task))
         print("Pinned public source data prepared.")
         if not args.verify and not args.task:
             return 0
@@ -192,6 +169,7 @@ def main() -> int:
             continue
         if args.verify:
             try:
+                store.prepare(task)
                 report = validate_task(task, args.cache)
             except Exception as exc:
                 from backend.domain import safe_error_message
@@ -205,7 +183,8 @@ def main() -> int:
             failed |= not report["verified"]
         else:
             try:
-                report = prepare_task(task, args.cache)
+                store.prepare(task)
+                report = json.loads((receipts / f"{task.name}.json").read_text(encoding="utf-8"))
             except Exception as exc:
                 from backend.domain import safe_error_message
 

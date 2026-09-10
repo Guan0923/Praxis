@@ -204,11 +204,13 @@ export function RightPanelLauncher({
 }
 
 interface RightPanelProps {
+  active?: boolean;
   controller: RightPanelController;
   renderSideChat: (window: RightPanelWindow) => ReactNode;
 }
 
 export default function RightPanel({
+  active = true,
   controller,
   sourceAvailable,
   terminalAvailable,
@@ -254,7 +256,7 @@ export default function RightPanel({
     children: window.kind === "terminal"
       ? <TerminalPane panelWindow={window} readOnly={controller.writable === false} />
       : window.kind === "files"
-        ? <FilesPane panelWindow={window} active={payload?.state.active_window_id === window.id} readOnly={controller.writable === false} />
+        ? <FilesPane panelWindow={window} active={active && payload?.state.active_window_id === window.id} readOnly={controller.writable === false} />
         : renderSideChat(window),
   }));
   const extra = (

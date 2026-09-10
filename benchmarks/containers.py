@@ -118,7 +118,7 @@ class TaskContainer:
     def docker(self, *args: str, timeout: float = 60, data: bytes | None = None, check: bool = True) -> tuple[int, str]:
         return command(["docker", *args], timeout=timeout, cancelled=self.cancelled, data=data, check=check)
 
-    def prepare_image(self, *, prepared: bool = True) -> str:
+    def prepare_image(self, *, prepared: bool = True, allow_download: bool = True) -> str:
         image = self.spec["image"]
         with _locks_guard:
             lock = _image_locks.setdefault(image, Lock())
@@ -134,6 +134,8 @@ class TaskContainer:
                     pinned = previous.get("image_id")
             code, value = self.docker("image", "inspect", image, "--format", "{{.Id}}", check=False)
             if code:
+                if not allow_download:
+                    raise RuntimeError("Benchmark image is missing. Download task resources first.")
                 self.docker("pull", "--platform", "linux/amd64", image, timeout=self.spec["build_seconds"])
                 _, value = self.docker("image", "inspect", image, "--format", "{{.Id}}")
             self.image = value.strip()
@@ -153,9 +155,9 @@ class TaskContainer:
         finally:
             lock.release()
 
-    def start(self, *, image: str | None = None, network: bool = False) -> None:
+    def start(self, *, image: str | None = None, network: bool = False, allow_download: bool = True) -> None:
         if image is None:
-            image = self.prepare_image()
+            image = self.prepare_image(allow_download=allow_download)
         self.image = image
         if network:
             proxy = urllib.request.getproxies().get("https") or urllib.request.getproxies().get("http")

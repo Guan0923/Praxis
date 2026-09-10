@@ -351,6 +351,8 @@ export function deleteProviderConfig(id: string): Promise<ProviderConfig[]> {
   });
 }
 
+const modelDiscoveries = new Map<string, Promise<{ models: string[] }>>();
+
 export function discoverProviderModels(values: {
   config_id?: string;
   provider_name: string;
@@ -358,9 +360,18 @@ export function discoverProviderModels(values: {
   base_url: string;
   api_key?: string;
 }): Promise<{ models: string[] }> {
-  return requestJson<{ models: string[] }>("/api/settings/providers/models", {
+  const body = JSON.stringify({ config_id: values.config_id, provider_name: values.provider_name,
+    protocol: values.protocol, base_url: values.base_url, api_key: values.api_key });
+  const existing = modelDiscoveries.get(body);
+  if (existing) return existing;
+  const request = requestJson<{ models: string[] }>("/api/settings/providers/models", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(values),
+    body,
+    operation: { dedupeKey: `models:${crypto.randomUUID()}` },
   });
+  modelDiscoveries.set(body, request);
+  const cleanup = () => { if (modelDiscoveries.get(body) === request) modelDiscoveries.delete(body); };
+  void request.then(cleanup, cleanup);
+  return request;
 }

@@ -95,6 +95,10 @@ export default function AgentShell(props: AgentShellProps) {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [chatRevealKey, setChatRevealKey] = useState(0);
+  const [visited, setVisited] = useState(() => new Set<Page>([props.page]));
+  useEffect(() => {
+    setVisited((current) => current.has(props.page) ? current : new Set([...current, props.page]));
+  }, [props.page]);
   const [previewPanelWidth, setPreviewPanelWidth] = useState(DEFAULT_RIGHT_PANEL_WIDTH);
   const rawPanelWidthRef = useRef(DEFAULT_RIGHT_PANEL_WIDTH);
   const panel = useRightPanel(
@@ -203,9 +207,8 @@ export default function AgentShell(props: AgentShellProps) {
     && Boolean(sourceTurn && "cwd" in sourceTurn && sourceTurn.cwd)
     && panel.payload?.capabilities.terminal_available === true;
   const mainContent = (
-    <>
-      {props.page === "chat" ? (
         <ChatPage
+          active={props.page === "chat"}
           conversation={props.current}
           agentThreadNavigation
           mode={props.current ? props.modeBySession[props.current.threadId ?? props.current.sessionId ?? props.current.id] ?? "agent" : props.draftMode}
@@ -229,22 +232,13 @@ export default function AgentShell(props: AgentShellProps) {
           onQueuedMessagesRefresh={props.onQueuedMessagesRefresh}
           sandboxHealth={props.sandboxHealth}
         />
-      ) : props.page === "trash" ? (
-        <TrashPage
-          conversations={props.archivedConversations}
-          projects={props.removedProjects}
-          onRestore={(id) => userBackendRequest(() => props.onRestore(id))}
-          onDelete={(id) => userBackendRequest(() => props.onDelete(id))}
-          onRestoreProject={(id) => userBackendRequest(() => props.onRestoreProject(id))}
-        />
-      ) : <BenchmarkPage />}
-    </>
   );
   const renderSideChat = (window: RightPanelWindow) => {
     const conversation = props.panelConversations[window.id] ?? null;
     return (
       <div className="right-panel-side-chat">
         <ChatPage
+          active={props.page === "chat" && panel.payload?.state.collapsed === false && panel.payload?.state.active_window_id === window.id}
           showButtonTooltips={false}
           conversation={conversation}
           mode={conversation ? props.modeBySession[conversation.threadId ?? conversation.id] ?? "agent" : "agent"}
@@ -270,8 +264,8 @@ export default function AgentShell(props: AgentShellProps) {
       </div>
     );
   };
-  const rightPanel = <RightPanel controller={panel} sourceAvailable={sourceAvailable} terminalAvailable={terminalAvailable} terminalReason={terminalReason} renderSideChat={renderSideChat} />;
-  const panelOpen = props.page === "chat" && Boolean(props.current?.sessionId) && panel.payload?.state.collapsed === false;
+  const panelOpen = Boolean(props.current?.sessionId) && panel.payload?.state.collapsed === false;
+  const rightPanel = <RightPanel active={props.page === "chat" && panelOpen} controller={panel} sourceAvailable={sourceAvailable} terminalAvailable={terminalAvailable} terminalReason={terminalReason} renderSideChat={renderSideChat} />;
   return (
     <Layout className={`app-shell${sidebarCollapsed && !isMobile ? " app-shell--sidebar-collapsed" : ""}`} style={{ minHeight: "100vh", height: "100vh" }}>
       {!isMobile && <Layout.Sider id="chat-sidebar" width={280} collapsed={sidebarCollapsed} collapsedWidth={0} trigger={null} style={{ background: "var(--sidebar-bg)", borderRight: "1px solid var(--border)", zIndex: 1 }}>{sidebar}</Layout.Sider>}
@@ -280,7 +274,9 @@ export default function AgentShell(props: AgentShellProps) {
         {sidebarCollapsed && !isMobile ? <Button className="sidebar-reopen-button" type="default" size="small" onClick={() => setSidebarCollapsed(false)} aria-label="展开侧边栏" aria-expanded={false} aria-controls="chat-sidebar" icon={<MenuOutlined />} /> : null}
         {isMobile && <div className="mobile-sidebar-bar"><Button type="text" icon={<MenuOutlined />} onClick={() => setMobileSidebarOpen(true)} aria-label="打开会话列表">会话列表</Button></div>}
         <Layout.Content className="main" style={{ minHeight: 0 }}>
-          {!isMobile && panelOpen ? (
+          <div className="retained-page retained-page--chat" hidden={props.page !== "chat"}>
+          {visited.has("chat") || props.page === "chat" ? <>
+          {!isMobile ? (
             <Splitter
               style={{ width: "100%", height: "100%" }}
               onResize={(sizes) => {
@@ -298,8 +294,8 @@ export default function AgentShell(props: AgentShellProps) {
               }}
             >
               <Splitter.Panel min={0}>{mainContent}</Splitter.Panel>
-              <Splitter.Panel size={previewPanelWidth} min={0} max="100%">
-                <div className="right-panel-shell">{rightPanel}</div>
+              <Splitter.Panel size={panelOpen ? previewPanelWidth : 0} resizable={panelOpen} min={0} max="100%" destroyOnHidden={false}>
+                <div className="right-panel-shell" hidden={!panelOpen}>{rightPanel}</div>
               </Splitter.Panel>
             </Splitter>
           ) : mainContent}
@@ -310,7 +306,7 @@ export default function AgentShell(props: AgentShellProps) {
               title="右侧边栏"
               placement="right"
               size="100%"
-              open={panelOpen}
+              open={props.page === "chat" && panelOpen}
               onClose={() => {
                 void allowAllFilePanelsToLeave().then((allowed) => {
                   if (allowed) panel.setLayout({ collapsed: true });
@@ -321,6 +317,20 @@ export default function AgentShell(props: AgentShellProps) {
               <div className="right-panel-shell">{rightPanel}</div>
             </Drawer>
           ) : null}
+          </> : null}
+          </div>
+          <div className="retained-page" hidden={props.page !== "trash"}>
+            {visited.has("trash") || props.page === "trash" ? <TrashPage
+              conversations={props.archivedConversations}
+              projects={props.removedProjects}
+              onRestore={(id) => userBackendRequest(() => props.onRestore(id))}
+              onDelete={(id) => userBackendRequest(() => props.onDelete(id))}
+              onRestoreProject={(id) => userBackendRequest(() => props.onRestoreProject(id))}
+            /> : null}
+          </div>
+          <div className="retained-page" hidden={props.page !== "benchmark"}>
+            {visited.has("benchmark") || props.page === "benchmark" ? <BenchmarkPage active={props.page === "benchmark"} /> : null}
+          </div>
         </Layout.Content>
       </Layout>
       <UserSettingsModal

@@ -52,6 +52,7 @@ export default function TerminalPane({ panelWindow, readOnly = false }: Terminal
       terminal.open(host);
       terminalRef.current = terminal;
       const sendResize = () => {
+        if (host.clientWidth === 0 || host.clientHeight === 0) return;
         fit.fit();
         if (!readOnly && socket?.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }));

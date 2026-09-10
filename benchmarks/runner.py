@@ -113,6 +113,7 @@ def run_one_task(
     attempt: int = 1,
     cancel_requested: Callable[[], bool] | None = None,
     on_phase: Callable[[str], None] | None = None,
+    resource_cache: Path | None = None,
     on_event: Callable[[RuntimeEvent], None] | None = None,
 ) -> TaskResult:
     """Run one task end to end and return its graded result."""
@@ -157,7 +158,7 @@ def run_one_task(
         workspace = sandbox.materialize_workspace(task)
         if task.container is not None:
             progress("environment")
-            container = TaskContainer(task, cancelled)
+            container = TaskContainer(task, cancelled, cache=resource_cache)
             prepare_environment(container)
 
         settings = RunnerSettings(

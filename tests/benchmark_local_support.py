@@ -129,9 +129,16 @@ def local_model(*, delay: float = 0, tool_name: str = "read_file", tool_argument
         thread.join(timeout=5)
 
 
-def acceptance_app(root: Path, config: ModelConfig):
+def acceptance_app(root: Path, config: ModelConfig, *, ui: bool = False):
     web = WebAppState(root, message_queue=MemoryMessageQueue())
     web.model_config = lambda *_args, **_kwargs: config
+    if ui:
+        from types import SimpleNamespace
+
+        # Navigation tests must never install or repair the machine-wide broker.
+        web.sandbox_broker = SimpleNamespace(
+            status=lambda: {"installed": True, "healthy": True, "code": None, "detail": None}
+        )
     return create_app(web)
 
 
@@ -148,13 +155,18 @@ if __name__ == "__main__":
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--delay", type=float, default=2)
     parser.add_argument(
+        "--ui", action="store_true", help="Disable machine-wide sandbox maintenance in navigation tests."
+    )
+    parser.add_argument(
         "--public", action="store_true", help="Show the public suite with a free local smoke-test model."
     )
     args = parser.parse_args()
-    os.environ["PRAXIS_ALLOWED_ORIGINS"] = f"http://127.0.0.1:{args.port}"
+    os.environ.setdefault("PRAXIS_ALLOWED_ORIGINS", f"http://127.0.0.1:{args.port}")
     if not args.public:
         benchmarks.tasks.ALL_TASKS = local_tasks()
         benchmarks.tasks.TASKS_BY_NAME = {task.name: task for task in benchmarks.tasks.ALL_TASKS}
     kwargs = {"tool_name": "container_exec", "tool_arguments": {"command": "pwd"}} if args.public else {}
     with local_model(delay=args.delay, **kwargs) as (config, _calls):
-        uvicorn.run(acceptance_app(args.root, config), host="127.0.0.1", port=args.port, log_level="warning")
+        uvicorn.run(
+            acceptance_app(args.root, config, ui=args.ui), host="127.0.0.1", port=args.port, log_level="warning"
+        )

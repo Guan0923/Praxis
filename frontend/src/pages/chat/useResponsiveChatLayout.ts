@@ -3,7 +3,7 @@ import { Grid } from "antd";
 
 export const CHAT_COMPACT_WIDTH = 700;
 
-export function useResponsiveChatLayout() {
+export function useResponsiveChatLayout(active = true) {
   const screens = Grid.useBreakpoint();
   const isMobile = screens.md === false && (typeof window === "undefined" || window.innerWidth < 768);
   const chatPageRef = useRef<HTMLDivElement | null>(null);
@@ -12,6 +12,7 @@ export function useResponsiveChatLayout() {
   const compactRef = useRef(isMobile);
 
   useEffect(() => {
+    if (!active) return;
     const element = chatPageRef.current;
     if (!element) return;
     const applyWidth = (width: number) => {
@@ -29,7 +30,7 @@ export function useResponsiveChatLayout() {
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [isMobile]);
+  }, [isMobile, active]);
 
   return { chatPageRef, compact, isMobile };
 }
