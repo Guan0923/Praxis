@@ -123,6 +123,15 @@
 .composer-reveal-shell .composer-reveal-item[data-reveal-index="4"] { --composer-reveal-index: 4; }
 .composer-reveal-shell .composer-reveal-item[data-reveal-index="5"] { --composer-reveal-index: 5; }
 
+/* A retained page is revealed, not entered again. */
+.retained-page--returned .composer-reveal-shell,
+.retained-page--returned .composer-reveal-item {
+  opacity: 1;
+  transform: none;
+  animation: none;
+  will-change: auto;
+}
+
 .sidebar-reopen-button {
   position: fixed;
   top: 14px;

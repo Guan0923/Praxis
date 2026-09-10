@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Grid } from "antd";
 
 export const CHAT_COMPACT_WIDTH = 700;
@@ -11,12 +11,13 @@ export function useResponsiveChatLayout(active = true) {
   const [compact, setCompact] = useState(isMobile);
   const compactRef = useRef(isMobile);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!active) return;
     const element = chatPageRef.current;
     if (!element) return;
     const applyWidth = (width: number) => {
-      if (width > 0) measuredChatWidthRef.current = width;
+      if (width <= 0) return;
+      measuredChatWidthRef.current = width;
       const measuredWidth = measuredChatWidthRef.current;
       const next = isMobile || (measuredWidth != null && measuredWidth < CHAT_COMPACT_WIDTH);
       if (compactRef.current === next) return;

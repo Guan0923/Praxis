@@ -174,6 +174,7 @@ describe("AgentShell right panel sizing", () => {
     const props = makeProps();
     const { rerender } = render(<AgentShell {...props} />);
     const chat = screen.getByTestId("chat-page");
+    expect(chat.closest(".retained-page")).not.toHaveClass("retained-page--returned");
     expect(screen.queryByTestId("benchmark-page")).not.toBeInTheDocument();
     rerender(<AgentShell {...props} page="benchmark" />);
     const benchmark = screen.getByTestId("benchmark-page");
@@ -184,6 +185,7 @@ describe("AgentShell right panel sizing", () => {
     rerender(<AgentShell {...props} page="chat" />);
     expect(screen.getByTestId("chat-page")).toBe(chat);
     expect(chat).toBeVisible();
+    expect(chat.closest(".retained-page")).toHaveClass("retained-page--returned");
     expect(screen.getByTestId("benchmark-page")).toBe(benchmark);
     expect(screen.getByTestId("trash-page")).toBe(trash);
   });

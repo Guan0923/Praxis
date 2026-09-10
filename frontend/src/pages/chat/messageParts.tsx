@@ -545,7 +545,7 @@ export function AssistantMessage({
     </div>
   );
   return (
-    <div className="message assistant">
+    <div className="message assistant" data-scroll-message-id={msg.id}>
       <AssistantIcon className="assistant-icon" />
       <div className="bubble">
         <div className="assistant-name">Praxis</div>

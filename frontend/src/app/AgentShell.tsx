@@ -96,9 +96,11 @@ export default function AgentShell(props: AgentShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [chatRevealKey, setChatRevealKey] = useState(0);
   const [visited, setVisited] = useState(() => new Set<Page>([props.page]));
+  const [chatWasHidden, setChatWasHidden] = useState(false);
   useEffect(() => {
     setVisited((current) => current.has(props.page) ? current : new Set([...current, props.page]));
-  }, [props.page]);
+    if (props.page !== "chat" && visited.has("chat")) setChatWasHidden(true);
+  }, [props.page, visited]);
   const [previewPanelWidth, setPreviewPanelWidth] = useState(DEFAULT_RIGHT_PANEL_WIDTH);
   const rawPanelWidthRef = useRef(DEFAULT_RIGHT_PANEL_WIDTH);
   const panel = useRightPanel(
@@ -274,7 +276,7 @@ export default function AgentShell(props: AgentShellProps) {
         {sidebarCollapsed && !isMobile ? <Button className="sidebar-reopen-button" type="default" size="small" onClick={() => setSidebarCollapsed(false)} aria-label="展开侧边栏" aria-expanded={false} aria-controls="chat-sidebar" icon={<MenuOutlined />} /> : null}
         {isMobile && <div className="mobile-sidebar-bar"><Button type="text" icon={<MenuOutlined />} onClick={() => setMobileSidebarOpen(true)} aria-label="打开会话列表">会话列表</Button></div>}
         <Layout.Content className="main" style={{ minHeight: 0 }}>
-          <div className="retained-page retained-page--chat" hidden={props.page !== "chat"}>
+          <div className={`retained-page retained-page--chat${chatWasHidden ? " retained-page--returned" : ""}`} hidden={props.page !== "chat"}>
           {visited.has("chat") || props.page === "chat" ? <>
           {!isMobile ? (
             <Splitter
