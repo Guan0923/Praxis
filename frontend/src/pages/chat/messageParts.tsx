@@ -262,7 +262,7 @@ function runtimeItemBody(item: TurnItem, display: DisplayMode, active: boolean) 
     const raw = String(item.text ?? "");
     return (
       <div className="thinking-content">
-        <MarkdownContent text={raw || "正在思考…"} />
+        <MarkdownContent text={raw || "正在思考…"} running={active && item.status === "running"} />
       </div>
     );
   }
@@ -474,7 +474,7 @@ function OrderedAssistantItems({
         }
         if (item.type === "text" || item.type === "bash") {
           const value = String(item.text ?? "");
-          return value ? <div className="runtime-item-response" data-item-type={item.type} key={identity}><MarkdownContent text={value} /></div> : null;
+          return value ? <div className="runtime-item-response" data-item-type={item.type} key={identity}><MarkdownContent text={value} itemId={identity} running={item.status === "running"} /></div> : null;
         }
         if (item.type === "error") {
           return <Alert key={identity} className="error-text" type="error" showIcon title={String(item.message ?? "Execution failed.")} />;
@@ -549,7 +549,7 @@ export function AssistantMessage({
       <AssistantIcon className="assistant-icon" />
       <div className="bubble">
         <div className="assistant-name">Praxis</div>
-        {msg.running ? <BorderBeam>{frame}</BorderBeam> : frame}
+        <BorderBeam style={msg.running ? undefined : { display: "none" }}>{frame}</BorderBeam>
       </div>
     </div>
   );

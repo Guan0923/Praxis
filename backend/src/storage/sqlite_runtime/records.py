@@ -6,6 +6,7 @@ import json
 import sqlite3
 
 from backend.domain.runtime_state import RuntimeNode, runtime_node_from_dict
+from backend.domain.runtime_state.deltas import apply_turn_delta
 
 from ..sqlite_json import read_json_object
 
@@ -26,7 +27,11 @@ class SQLiteJsonObjectMixin:
         rows = connection.execute(
             "SELECT payload_json FROM json_objects WHERE session_id=? AND namespace=?", (session_id, namespace)
         ).fetchall()
-        return [dict(value) for row in rows if isinstance(value := json.loads(str(row[0])), dict)]
+        values = [dict(value) for row in rows if isinstance(value := json.loads(str(row[0])), dict)]
+        if namespace == "runtime_node":
+            for value in values:
+                SQLiteJsonObjectMixin._merge_turn_deltas(connection, session_id, value)
+        return values
 
     @staticmethod
     def _put_json_object(
@@ -47,12 +52,29 @@ class SQLiteJsonObjectMixin:
                 updated_at,
             ),
         )
+        if namespace == "runtime_node":
+            connection.execute(
+                "DELETE FROM json_objects WHERE session_id=? AND namespace=?",
+                (session_id, f"runtime_delta:{object_id}"),
+            )
 
     @staticmethod
     def _json_object(
         connection: sqlite3.Connection, session_id: str, namespace: str, object_id: str
     ) -> dict[str, object] | None:
-        return read_json_object(connection, session_id, namespace, object_id)
+        value = read_json_object(connection, session_id, namespace, object_id)
+        if namespace == "runtime_node" and value is not None:
+            SQLiteJsonObjectMixin._merge_turn_deltas(connection, session_id, value)
+        return value
+
+    @staticmethod
+    def _merge_turn_deltas(connection: sqlite3.Connection, session_id: str, payload: dict[str, object]) -> None:
+        rows = connection.execute(
+            "SELECT payload_json FROM json_objects WHERE session_id=? AND namespace=? ORDER BY object_id",
+            (session_id, f"runtime_delta:{payload['id']}"),
+        )
+        for row in rows:
+            apply_turn_delta(payload, json.loads(row[0])["frame"])
 
     @staticmethod
     def _assert_writable(_connection: sqlite3.Connection) -> None:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from copy import copy
+from dataclasses import replace
 from threading import RLock
 from typing import Any
 
@@ -32,6 +34,8 @@ class NodeWriter:
         *,
         emit: Callable[[NodeFrame], None] | None = None,
         id_factory: Callable[[], str] = new_node_id,
+        persist_delta: Callable[[NodeFrame, str, str], None] | None = None,
+        flush_persistence: Callable[[], None] | None = None,
     ) -> None:
         self.store = store
         self.emit = emit or (lambda _frame: None)
@@ -40,13 +44,32 @@ class NodeWriter:
         self._dynamic: dict[tuple[str, str], RuntimeState] = {}
         self._revisions: dict[tuple[str, str], int] = {}
         self._lock = RLock()
+        self._sequences: dict[tuple[str, str], int] = {}
+        self._persist_delta = persist_delta
+        self.flush = flush_persistence or (lambda: None)
+
+    def live_snapshot(self, session_id: str, turn_id: str) -> tuple[RuntimeState, int]:
+        with self._lock:
+            return self.current(session_id, turn_id), self._sequences.get((session_id, turn_id), 0)
+
+    def view(self, session_id: str, turn_id: str) -> RuntimeState:
+        """Read-only, copy-on-write view for synchronous event delivery."""
+        with self._lock:
+            return self._dynamic.get((session_id, turn_id)) or self.current(session_id, turn_id)
+
+    def _number(self, frame: NodeFrame) -> NodeFrame:
+        key = (frame.session_id, frame.turn_id)
+        sequence = self._sequences.get(key, 0) + 1
+        self._sequences[key] = sequence
+        return replace(frame, sequence=sequence)
 
     def _emit_snapshot(self, node: RuntimeState, *, persist: bool = False) -> None:
         if not self._emits_frames:
             if persist:
                 self.store.update_node(node)
             return
-        frame = NodeFrame.snapshot(node)
+        self.flush()
+        frame = self._number(NodeFrame.snapshot(node))
         if persist:
             persist_frame = getattr(self.store, "update_node_with_frame", None)
             if callable(persist_frame):
@@ -76,22 +99,30 @@ class NodeWriter:
         if previous is None:
             raise RuntimeStateValidationError("A Turn delta requires a baseline snapshot.")
         revision = previous + 1
-        frame = NodeFrame(
-            "turn.delta",
-            node.session_id,
-            node.id,
-            revision,
-            patch={str(key): _clone(value) for key, value in (patch or {}).items()},
-            operations=tuple(_clone(list(operations))),
+        frame = self._number(
+            NodeFrame(
+                "turn.delta",
+                node.session_id,
+                node.id,
+                revision,
+                patch={str(key): _clone(value) for key, value in (patch or {}).items()},
+                operations=tuple(_clone(list(operations))),
+            )
         )
         if persist:
-            persist_frame = getattr(self.store, "update_node_with_frame", None)
-            if callable(persist_frame):
-                persist_frame(node, frame)
+            if self._persist_delta is not None:
+                self._persist_delta(frame, node.thread_id, node.status)
             else:
-                self.store.update_node(node)
-        self.emit(frame)
+                persist_frame = getattr(self.store, "update_node_with_frame", None)
+                if callable(persist_frame):
+                    persist_frame(node, frame)
+                else:
+                    self.store.update_node(node)
         self._revisions[node.key] = revision
+        if patch and patch.get("status") in {"success", "paused", "failed"}:
+            self.flush()
+            self.store.update_node(node)
+        self.emit(frame)
 
     def _store_dynamic(self, node: RuntimeState, *, persist: bool) -> RuntimeState:
         del persist
@@ -104,7 +135,8 @@ class NodeWriter:
             if node is None:
                 kwargs.setdefault("id", self.id_factory())
                 node = RuntimeState.create(**kwargs)
-            frame = NodeFrame.snapshot(node)
+            self.flush()
+            frame = self._number(NodeFrame.snapshot(node))
             persist_frame = getattr(self.store, "create_node_with_frame", None)
             if callable(persist_frame):
                 persist_frame(node, frame)
@@ -120,6 +152,10 @@ class NodeWriter:
         """Seed an existing Turn as this stream's baseline."""
 
         with self._lock:
+            self.flush()
+            sequence = getattr(self.store, "runtime_event_sequence", None)
+            if callable(sequence):
+                self._sequences[node.key] = sequence(node.session_id, node.id)
             value = RuntimeState.from_dict(node.to_dict())
             self._dynamic[value.key] = value.clone()
             self._emit_snapshot(value, persist=True)
@@ -145,15 +181,9 @@ class NodeWriter:
             frame = NodeFrame.delta(previous, value, revision=revision) if self._emits_frames else None
             value = self._store_dynamic(value, persist=persist)
             if frame is not None:
-                if persist:
-                    persist_frame = getattr(self.store, "update_node_with_frame", None)
-                    if callable(persist_frame):
-                        persist_frame(value, frame)
-                    else:
-                        self.store.update_node(value)
-                self.emit(frame)
-                self._revisions[value.key] = revision
+                self._emit_delta(value, patch=frame.patch, operations=frame.operations, persist=persist)
             elif persist:
+                self.flush()
                 self.store.update_node(value)
             return value.clone()
 
@@ -301,7 +331,9 @@ class NodeWriter:
         if not delta:
             return self.current(node.session_id, node.id)
         with self._lock:
-            current = self.current(node.session_id, node.id)
+            current = self._dynamic.get(node.key)
+            if current is None:
+                current = self.current(node.session_id, node.id)
             try:
                 messages = current.data[data_idx]
                 target_idx = len(messages) - 1 if message_idx is None else message_idx
@@ -312,8 +344,15 @@ class NodeWriter:
                 raise RuntimeStateValidationError("Turn text delta target is out of range.") from exc
             if item.get("type") not in {"text", "reasoning"} or not isinstance(item.get("text"), str):
                 raise RuntimeStateValidationError("Turn text delta must target text or reasoning.")
-            item["text"] += delta
-            value = self._store_dynamic(current, persist=persist)
+            # Copy only the path to the changed Item; previous views remain stable.
+            value = copy(current)
+            value.data = list(current.data)
+            value.data[data_idx] = list(messages)
+            changed_message = dict(messages[target_idx])
+            changed_message["content"] = list(messages[target_idx]["content"])
+            changed_message["content"][item_idx] = {**item, "text": item["text"] + delta}
+            value.data[data_idx][target_idx] = changed_message
+            self._dynamic[value.key] = value
             self._emit_delta(
                 value,
                 operations=(
@@ -327,12 +366,13 @@ class NodeWriter:
                 ),
                 persist=persist,
             )
-            return value.clone()
+            return value
 
     def persist(self, node: RuntimeState) -> RuntimeState:
         """Persist the current dynamic Turn without publishing another delta."""
 
         with self._lock:
+            self.flush()
             value = self._store_dynamic(node, persist=True)
             self.store.update_node(value)
             return value.clone()
@@ -341,6 +381,7 @@ class NodeWriter:
         if status == "running":
             raise RuntimeStateValidationError("A finalized Turn cannot remain running.")
         with self._lock:
+            self.flush()
             current = self.current(node.session_id, node.id)
             current.status = status
             result = self._store_dynamic(current, persist=True)

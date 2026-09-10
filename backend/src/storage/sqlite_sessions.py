@@ -214,7 +214,7 @@ class SQLiteSessionMixin:
         self._write_session_document(connection, session_id, document)
 
     def set_client_id(self, session_id: str, client_id: str | None) -> Session:
-        with self._connection_for_existing(session_id) as connection:
+        with self._connection_for_existing(session_id, write=True) as connection:
             self._assert_writable(connection)
             self._assert_not_running(connection)
             document = self._session_document(connection, session_id)
@@ -291,7 +291,7 @@ class SQLiteSessionMixin:
     def rename_session(self, session_id: str, title: str, *, title_is_custom: bool | None = None) -> Session:
         if not title.strip():
             raise ValueError("Session title cannot be empty.")
-        with self._connection_for_existing(session_id) as connection:
+        with self._connection_for_existing(session_id, write=True) as connection:
             self._assert_writable(connection)
             self._assert_not_running(connection)
             document = self._session_document(connection, session_id)
@@ -309,7 +309,7 @@ class SQLiteSessionMixin:
         return self._set_lifecycle(session_id, archived_at=utc_now())
 
     def restore_session(self, session_id: str) -> Session:
-        with self._connection_for_existing(session_id) as connection:
+        with self._connection_for_existing(session_id, write=True) as connection:
             self._assert_writable(connection)
             self._assert_not_running(connection)
             document = self._session_document(connection, session_id)
@@ -322,7 +322,7 @@ class SQLiteSessionMixin:
         return self._set_lifecycle(session_id, deleted_at=utc_now())
 
     def purge_session(self, session_id: str) -> None:
-        with self._connection_for_existing(session_id) as connection:
+        with self._connection_for_existing(session_id, write=True) as connection:
             self._assert_not_running(connection)
             document = self._session_document(connection, session_id)
             if document.get("deleted_at") is None:
@@ -332,7 +332,7 @@ class SQLiteSessionMixin:
     def _set_lifecycle(
         self, session_id: str, *, archived_at: str | None = None, deleted_at: str | None = None
     ) -> Session:
-        with self._connection_for_existing(session_id) as connection:
+        with self._connection_for_existing(session_id, write=True) as connection:
             self._assert_writable(connection)
             self._assert_not_running(connection)
             document = self._session_document(connection, session_id)
@@ -353,10 +353,10 @@ class SQLiteSessionMixin:
         return session
 
     @contextmanager
-    def _connection_for_existing(self, session_id: str) -> Iterator[sqlite3.Connection]:
+    def _connection_for_existing(self, session_id: str, *, write: bool = False) -> Iterator[sqlite3.Connection]:
         if not self.paths.session_db(session_id).exists():
             raise ValueError(f"Unknown session: {session_id}")
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=write) as connection:
             yield connection
 
     @staticmethod

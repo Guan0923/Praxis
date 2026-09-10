@@ -2,12 +2,54 @@
 
 from __future__ import annotations
 
-from backend.domain import safe_error_message
+import logging
+
+from backend.domain import TracePersistenceError, safe_error_message
 from backend.domain.runtime_state import NodeStatus, RuntimeState, TerminalErrorCategory, terminal_error_payload
 
 
 class _FinalizationMixin:
+    def _mark_persistence_failure(self) -> None:
+        self.persistence_failed = True
+        self.closed = True
+        self.terminal_error = terminal_error_payload(
+            "server",
+            "Local Item persistence failed; the Turn was stopped.",
+            retryable=False,
+            code="item_persistence_failed",
+        )
+        # Seal only the durable prefix. Never turn an unsuccessful queued write into a success checkpoint.
+        try:
+            target = self.assistant or self.last_node
+            saved = self.store.get_node(target.session_id, target.id) if target is not None else None
+            if isinstance(saved, RuntimeState) and saved.status == "running":
+                for message in saved.data[saved.current_data_idx]:
+                    for item in message.get("content", []):
+                        if item.get("status") == "running":
+                            item["status"] = "failed"
+                saved.status = "failed"
+                self.store.finalize_node(saved)
+        except Exception:
+            logging.getLogger(__name__).error(
+                "Unable to seal the interrupted durable Turn; restart recovery is required."
+            )
+
     def finish(
+        self,
+        status: NodeStatus,
+        final_answer: str = "",
+        *,
+        category: TerminalErrorCategory | None = None,
+        code: str = "",
+    ) -> RuntimeState | None:
+        try:
+            self.writer.flush()
+            return self._finish(status, final_answer, category=category, code=code)
+        except TracePersistenceError:
+            self._mark_persistence_failure()
+            return None
+
+    def _finish(
         self,
         status: NodeStatus,
         final_answer: str = "",
@@ -44,8 +86,7 @@ class _FinalizationMixin:
             self.last_node = self.writer.finalize(self.assistant, status)
             self.assistant = self.last_node
         except Exception:
-            self.persistence_failed = True
-            self.closed = True
+            self._mark_persistence_failure()
             return None
         self.closed = True
         return self.last_node

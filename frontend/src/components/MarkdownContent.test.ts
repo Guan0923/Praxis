@@ -70,6 +70,36 @@ describe("shared Markdown and LaTeX renderer", () => {
     expect(html).toContain('rel="noopener noreferrer"');
   });
 
+  it("preserves stable paragraphs and formula nodes while the tail grows", () => {
+    const text = "Stable $x^2$.\n\nTail";
+    const { container, rerender } = render(React.createElement(MarkdownContent, { text, running: true, itemId: "one" }));
+    const paragraph = container.querySelector("p");
+    const formula = container.querySelector("[data-latex-source]");
+    rerender(React.createElement(MarkdownContent, { text: `${text} grows`, running: true, itemId: "one" }));
+    expect(container.querySelector("p")).toBe(paragraph);
+    expect(container.querySelector("[data-latex-source]")).toBe(formula);
+    expect(container.textContent).toContain("Tail grows");
+  });
+
+  it("handles math split across fragments, including blank lines", () => {
+    const source = "Before\n\n$$x +\n\ny$$\n\nAfter $z$.";
+    const { container, rerender } = render(React.createElement(MarkdownContent, { text: "", running: true }));
+    for (let end = 1; end <= source.length; end += 1) {
+      const text = source.slice(0, end);
+      rerender(React.createElement(MarkdownContent, { text, running: true }));
+      expect(container.firstElementChild?.innerHTML).toBe(renderMarkdown(text));
+    }
+  });
+
+  it("updates reference links defined after their paragraphs without replacing unrelated nodes", () => {
+    const text = "Stable.\n\n[Docs][target]\n\n";
+    const { container, rerender } = render(React.createElement(MarkdownContent, { text, running: true }));
+    const stable = container.querySelector("p");
+    rerender(React.createElement(MarkdownContent, { text: `${text}[target]: https://example.com\n`, running: true }));
+    expect(container.querySelector("a")?.href).toBe("https://example.com/");
+    expect(container.querySelector("p")).toBe(stable);
+  });
+
   it("selects the complete formula when the rendered formula is clicked", () => {
     const { container } = render(React.createElement(MarkdownContent, { text: "结果是 $x^2$" }));
     const root = container.firstElementChild as HTMLElement;

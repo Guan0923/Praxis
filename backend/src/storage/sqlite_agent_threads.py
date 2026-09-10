@@ -38,7 +38,10 @@ class AgentTurnReport:
 _THREAD_NODE_SELECT = (
     "SELECT node.session_id,node.thread_id,node.root_thread_id,node.parent_thread_id,node.thread_path,"
     "node.depth,node.created_at,runtime.updated_at AS updated_at,"
-    "json_extract(turn.payload_json,'$.status') AS thread_status "
+    "COALESCE((SELECT json_extract(delta.payload_json,'$.frame.patch.status') FROM json_objects AS delta "
+    "WHERE delta.session_id=node.session_id AND delta.namespace='runtime_delta:' || runtime.current_turn_id "
+    "AND json_extract(delta.payload_json,'$.frame.patch.status') IS NOT NULL ORDER BY delta.object_id DESC LIMIT 1), "
+    "json_extract(turn.payload_json,'$.status')) AS thread_status "
     "FROM thread_nodes AS node "
     "JOIN runtime_threads AS runtime ON runtime.thread_id=node.thread_id "
     "JOIN json_objects AS turn ON turn.session_id=node.session_id "
@@ -200,7 +203,7 @@ class SQLiteAgentThreadMixin:
     def create_agent_thread(self, session_id: str, item: AgentThreadCreate) -> ThreadNode:
         if item.runtime.session_id != session_id or item.node.session_id != session_id:
             raise ValueError("Agent Thread must belong to the current Session.")
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
             self._session_document(connection, session_id)
             if item.runtime.thread_id != item.node.thread_id or item.context.thread_id != item.node.thread_id:
@@ -264,7 +267,7 @@ class SQLiteAgentThreadMixin:
 
         if node.status != "running" or node.parent_id != expected_head_id:
             raise ValueError("Idle Thread Turn must be running and continue from the expected head.")
-        with self._connection(node.session_id) as connection:
+        with self._connection(node.session_id, write=True) as connection:
             self._assert_writable(connection)
             target = connection.execute(
                 "SELECT 1 FROM thread_nodes WHERE session_id=? AND thread_id=?",
@@ -317,7 +320,7 @@ class SQLiteAgentThreadMixin:
         recipient_thread_id: str,
     ) -> AgentTurnReport:
         timestamp = utc_now()
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
             turn = self._json_object(connection, session_id, "runtime_node", turn_id)
             if turn is None or str(turn.get("thread_id") or "") != agent_thread_id:
@@ -348,7 +351,7 @@ class SQLiteAgentThreadMixin:
         if thread_status not in {"success", "failed"}:
             raise ValueError("Agent report status must be success or failed.")
         timestamp = utc_now()
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
             rows = connection.execute(
                 "SELECT * FROM agent_turn_reports WHERE session_id=? AND turn_id=? ORDER BY created_at,delivery_id",
@@ -408,7 +411,7 @@ class SQLiteAgentThreadMixin:
         if state not in {"queued", "delivered"}:
             raise ValueError("Agent report state must be queued or delivered.")
         timestamp = utc_now()
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
             row = connection.execute(
                 "SELECT * FROM agent_turn_reports WHERE session_id=? AND delivery_id=?",
@@ -439,7 +442,7 @@ class SQLiteAgentThreadMixin:
         delivery_id: str,
         reply_content: str,
     ) -> RuntimeState:
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
             runtime = connection.execute(
                 "SELECT current_turn_id FROM runtime_threads WHERE session_id=? AND thread_id=?",

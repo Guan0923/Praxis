@@ -15,6 +15,33 @@ NodeFrameType: TypeAlias = Literal["turn.snapshot", "turn.delta"]
 TurnDeltaOperation: TypeAlias = dict[str, Any]
 
 
+def _immutable(*_args, **_kwargs):
+    raise TypeError("Turn delta records are immutable.")
+
+
+class _FrozenDict(dict):
+    __setitem__ = __delitem__ = clear = pop = popitem = setdefault = update = __ior__ = _immutable
+
+    def __deepcopy__(self, memo):
+        return {key: _clone(value) for key, value in self.items()}
+
+
+class _FrozenList(list):
+    __setitem__ = __delitem__ = append = clear = extend = insert = pop = remove = reverse = sort = _immutable
+    __iadd__ = __imul__ = _immutable
+
+    def __deepcopy__(self, memo):
+        return [_clone(value) for value in self]
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, dict):
+        return _FrozenDict({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return _FrozenList(_freeze(item) for item in value)
+    return value
+
+
 _TURN_IDENTITY_FIELDS = frozenset(
     {"session_id", "id", "thread_id", "parent_session_id", "parent_id", "parent_thread_id"}
 )
@@ -149,6 +176,11 @@ class NodeFrame:
     patch: dict[str, Any] = field(default_factory=dict)
     operations: tuple[TurnDeltaOperation, ...] = ()
     event_id: str = field(default_factory=lambda: uuid4().hex, compare=False, repr=False)
+    sequence: int = field(default=0, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "patch", _freeze(self.patch))
+        object.__setattr__(self, "operations", tuple(_freeze(operation) for operation in self.operations))
 
     @classmethod
     def snapshot(cls, node: RuntimeState) -> NodeFrame:

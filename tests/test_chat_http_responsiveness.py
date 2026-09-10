@@ -21,18 +21,50 @@ import uvicorn
 from backend.api.app import create_app
 from backend.api.chat import routes as chat_routes
 from backend.api.state import WebAppState
+from backend.domain.runtime_state import NodeWriter
 from backend.planning.llm import LLMPlanner
 from backend.providers import LLMClient, ModelConfig
 from backend.runtime import build_application
 from backend.storage.message_queue import RedisMessageQueue
+from backend.storage.sqlite import SQLiteSessionStore
 
 
-def test_browser_with_real_redis_http_and_small_model_chunks(tmp_path, monkeypatch, local_sandbox_runtime):
+@pytest.mark.parametrize(
+    "benchmark", [False, True, "todo", "failure"], ids=["controls", "rich-stream", "todo", "failure"]
+)
+def test_browser_with_real_redis_http_and_small_model_chunks(tmp_path, monkeypatch, local_sandbox_runtime, benchmark):
     root = Path(__file__).resolve().parents[1]
     if not (root / "frontend/dist/index.html").exists() or not shutil.which("node"):
         pytest.skip("Build frontend and install Node before the browser integration check")
     metrics = []
     release = threading.Event()
+    if benchmark:
+        append = NodeWriter.append_text
+
+        def timed_append(self, *args, **kwargs):
+            metric = {"delta": kwargs.get("delta", ""), "backend_delta": time() * 1000}
+            metrics.append(metric)
+            result = append(self, *args, **kwargs)
+            metric["display_published"] = time() * 1000
+            return result
+
+        monkeypatch.setattr(NodeWriter, "append_text", timed_append)
+        method = (
+            "append_runtime_delta" if hasattr(SQLiteSessionStore, "append_runtime_delta") else "update_node_with_frame"
+        )
+        save = getattr(SQLiteSessionStore, method)
+
+        def timed_save(self, *args, **kwargs):
+            frame = args[0] if method == "append_runtime_delta" else args[1]
+            if benchmark == "failure" and any("part0002" in op.get("delta", "") for op in frame.operations):
+                raise OSError("Injected local SQLite write failure")
+            metric = {"db_started": time() * 1000, "delta": "".join(op.get("delta", "") for op in frame.operations)}
+            result = save(self, *args, **kwargs)
+            metric["db_finished"] = time() * 1000
+            metrics.append(metric)
+            return result
+
+        monkeypatch.setattr(SQLiteSessionStore, method, timed_save)
 
     class Model(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -58,12 +90,74 @@ def test_browser_with_real_redis_http_and_small_model_chunks(tmp_path, monkeypat
             prompt = str(users[-1]["content"]) if users else ""
             metric["prompt"] = prompt
             try:
-                for token in ["LOCAL", " small", " stream", " response"]:
+                stream_number = len([item for item in metrics if item.get("stream")])
+                if benchmark == "todo" and stream_number == 1:
+                    arguments = json.dumps(
+                        {
+                            "expected_revision": 0,
+                            "operations": [{"op": "add", "content": "unfinished", "status": "pending"}],
+                        }
+                    )
+                    chunk = {
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "todo-add",
+                                            "type": "function",
+                                            "function": {"name": "update_todo_list", "arguments": arguments},
+                                        }
+                                    ]
+                                },
+                                "finish_reason": None,
+                            }
+                        ]
+                    }
+                    self.wfile.write(
+                        f'data: {json.dumps(chunk)}\n\ndata: {{"choices":[{{"index":0,"delta":{{}},"finish_reason":"tool_calls"}}]}}\n\ndata: [DONE]\n\n'.encode()
+                    )
+                    self.wfile.flush()
+                    metric["finished"] = time() * 1000
+                    return
+                tokens = ["LOCAL", " small", " stream", " response"]
+                if benchmark == "todo":
+                    tokens = ["TODO_CANDIDATE", " still streaming", "\n"] if stream_number == 2 else ["TODO_FINAL"]
+                elif benchmark:
+                    tokens = ["# Incremental stream\n\n$x^2+y^2=z^2$\n\n"]
+                    tokens.extend(
+                        f"part{index:04d} 中文分片验证。" + "A stable paragraph with **bold** and `code`. " * 3 + "\n\n"
+                        for index in range(100)
+                    )
+                    tokens.extend(
+                        [
+                            "- first\n",
+                            "  - nested\n",
+                            "- last\n\n",
+                            "| name | value |\n",
+                            "| --- | --- |\n",
+                            "| 中文 | 42 |\n\n",
+                            "```python\n",
+                            "print('中文')\n",
+                            "```\n\n",
+                            "[forward][target]\n\n",
+                            "$$\\frac{1}{",
+                            "2} + x^2",
+                            "$$\n\n",
+                            "[target]: https://example.com\n\n",
+                            "STREAM_COMPLETE\n",
+                        ]
+                    )
+                for token in tokens:
+                    if benchmark:
+                        metrics.append({"delta": token, "model_sent": time() * 1000})
                     chunk = {"choices": [{"index": 0, "delta": {"content": token}, "finish_reason": None}]}
                     self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
                     self.wfile.flush()
                     metric.setdefault("first_output", time() * 1000)
-                    sleep(0.04)
+                    sleep(0.25 if benchmark == "todo" else 0.01 if benchmark else 0.04)
                 if "hold" in prompt:
                     deadline = perf_counter() + 30
                     while not release.is_set() and perf_counter() < deadline:
@@ -98,7 +192,10 @@ def test_browser_with_real_redis_http_and_small_model_chunks(tmp_path, monkeypat
     def local_application(_state, *, session_id, workspace=None, **_kwargs):
         metrics.append({"runtime_start": time() * 1000})
         application = build_application(
-            workspace or state.session_workspace(session_id), planner_name="rule", paths=state.paths
+            workspace or state.session_workspace(session_id),
+            planner_name="rule",
+            paths=state.paths,
+            todo_store=state.todo_store,
         )
         tools = application.runner.tools
         application.runner.planner = LLMPlanner(LLMClient(config), tools.specs(), tools.read_only_specs())
@@ -129,7 +226,25 @@ def test_browser_with_real_redis_http_and_small_model_chunks(tmp_path, monkeypat
         url = f"http://127.0.0.1:{port}"
         assert requests.get(f"{url}/api/ready", timeout=3).status_code == 200
         result = subprocess.run(
-            [shutil.which("node"), str(root / "tests/support/chat_browser_check.cjs"), url, str(tmp_path)],
+            [
+                shutil.which("node"),
+                str(
+                    root
+                    / "tests/support"
+                    / (
+                        "failure_streaming_check.cjs"
+                        if benchmark == "failure"
+                        else "todo_streaming_check.cjs"
+                        if benchmark == "todo"
+                        else "streaming_pipeline_check.cjs"
+                        if benchmark
+                        else "chat_browser_check.cjs"
+                    )
+                ),
+                url,
+                str(tmp_path),
+                "stable" if hasattr(SQLiteSessionStore, "append_runtime_delta") else "baseline",
+            ],
             cwd=root / "frontend",
             capture_output=True,
             text=True,
@@ -138,10 +253,18 @@ def test_browser_with_real_redis_http_and_small_model_chunks(tmp_path, monkeypat
         )
         print(result.stdout)
         assert result.returncode == 0, result.stderr[-6000:]
-        stopped = [item for item in metrics if "disconnected" in item]
-        assert len(stopped) >= 2, metrics
-        verify_control_races(url, state, metrics)
-        print("model_metrics=" + json.dumps(metrics))
+        if benchmark == "todo":
+            browser = json.loads((tmp_path / "todo-browser.json").read_text(encoding="utf-8"))
+            model_requests = [item for item in metrics if item.get("stream")]
+            assert len(model_requests) == 3
+            assert browser["candidateVisible"] < model_requests[1]["finished"]
+        if not benchmark:
+            stopped = [item for item in metrics if "disconnected" in item]
+            assert len(stopped) >= 2, metrics
+            verify_control_races(url, state, metrics)
+        (tmp_path / "pipeline-backend.json").write_text(json.dumps(metrics, ensure_ascii=False), encoding="utf-8")
+        if not benchmark:
+            print("model_metrics=" + json.dumps(metrics))
     finally:
         release.set()
         server.should_exit = True

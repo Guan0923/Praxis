@@ -61,10 +61,14 @@ class AgentThreadEventHub:
     def __init__(
         self,
         frame_projector: Callable[[NodeFrame, RuntimeState], dict[str, object]] | None = None,
+        frame_publisher: Callable[[NodeFrame, RuntimeState], None] | None = None,
+        terminal_publisher: Callable[[RuntimeState], None] | None = None,
     ) -> None:
         self._lock = RLock()
         self._channels: dict[tuple[str, str], _ThreadChannel] = {}
         self._frame_projector = frame_projector or (lambda frame, _current: frame.to_dict())
+        self._frame_publisher = frame_publisher
+        self._terminal_publisher = terminal_publisher
 
     def subscribe(self, session_id: str, thread_id: str) -> AgentThreadSubscription:
         key = (session_id, thread_id)
@@ -99,8 +103,10 @@ class AgentThreadEventHub:
         turn_key = (frame.session_id, frame.turn_id)
         with self._lock:
             channel = self._channels.setdefault(channel_key, _ThreadChannel())
-            channel.latest = current.clone()
+            channel.latest = current
             channel.latest_source_revision = frame.revision
+            if frame.sequence and self._frame_publisher is not None:
+                self._frame_publisher(frame, current)
             for subscription in channel.subscribers.values():
                 if frame.type == "turn.snapshot":
                     snapshot = NodeFrame.snapshot(current)
@@ -127,6 +133,8 @@ class AgentThreadEventHub:
                 subscription.events.put(self._frame_projector(local_frame, current))
 
     def finish_turn(self, thread_id: str, turn: RuntimeState) -> None:
+        if self._terminal_publisher is not None:
+            self._terminal_publisher(turn)
         key = (turn.session_id, thread_id)
         terminal = {
             "type": "turn.terminal",

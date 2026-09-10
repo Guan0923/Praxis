@@ -9,6 +9,7 @@ from backend.domain import (
     CHECKPOINT_PREAMBLE,
     SystemMessage,
     ThreadNode,
+    TracePersistenceError,
     safe_error_message,
 )
 from backend.domain.runtime_state import (
@@ -26,12 +27,21 @@ from ..core.context import AgentRuntime
 from ..core.context.exchange import _chat_messages_from_nodes
 from ..core.contracts import InterruptRequest
 from ..node_bridge import RuntimeEventNodeBridge
+from ..persistence.streaming import RuntimeFramePersistence
 from .contracts import ChildRunner, _CanonicalRuntimeStore, _SessionBinding
 from .tool_executor import LockedToolExecutor
 
 
 class _SubagentExecutionMixin:
     """Own background Turn workers while SQLite remains canonical."""
+
+    def live_turn_snapshot(self, session_id: str, turn_id: str):
+        with self._state_lock:
+            bridges = list(self._active_bridges.values())
+        for bridge in bridges:
+            if bridge.session_id == session_id and bridge.turn_id == turn_id and not bridge.closed:
+                return bridge.writer.live_snapshot(session_id, turn_id)
+        return None
 
     def apply_runtime_config(
         self,
@@ -213,6 +223,7 @@ class _SubagentExecutionMixin:
             turn = stored_turn
         runner: ChildRunner | None = None
         mailbox = None
+        persistence = None
 
         def emit(frame: NodeFrame) -> None:
             if self._thread_events is None:
@@ -220,8 +231,13 @@ class _SubagentExecutionMixin:
             self._thread_events.publish_frame(
                 node.thread_id,
                 frame,
-                bridge.writer.current(frame.session_id, frame.turn_id),
+                bridge.writer.view(frame.session_id, frame.turn_id),
             )
+
+        def status_requested(status: str) -> bool:
+            if persistence is not None:
+                persistence.check()
+            return self._status_requested(node.thread_id, status)
 
         try:
             runner = binding.runner_factory()
@@ -232,6 +248,8 @@ class _SubagentExecutionMixin:
                 binding.workspace,
                 binding.project_workspace,
             )
+            if hasattr(self._store, "append_runtime_delta"):
+                persistence = RuntimeFramePersistence(self._store)
             bridge = RuntimeEventNodeBridge(
                 self._store,
                 session_id=node.session_id,
@@ -248,8 +266,12 @@ class _SubagentExecutionMixin:
                 project_cwd=turn.project_cwd,
                 isolated_thread_context=True,
                 emit=emit,
+                persist_delta=persistence.submit if persistence is not None else None,
+                flush_persistence=persistence.flush if persistence is not None else None,
             )
         except Exception as exc:
+            if persistence is not None:
+                persistence.close()
             self._fail_preallocated(turn, self._safe_error(exc))
             close = getattr(runner, "close", None)
             if callable(close):
@@ -278,8 +300,8 @@ class _SubagentExecutionMixin:
                 f"agent-{node.thread_id}-{uuid4().hex}",
             )
             runtime.services.steering = mailbox.take
-            runtime.services.suspend_requested = lambda: self._status_requested(node.thread_id, "paused")
-            runtime.services.complete_requested = lambda: self._status_requested(node.thread_id, "success")
+            runtime.services.suspend_requested = lambda: status_requested("paused")
+            runtime.services.complete_requested = lambda: status_requested("success")
             runtime.services.interrupt = self._approval_handler(creator_thread_id, node.thread_id)
             if initial_delivery_id:
                 claim_method = "claim_thread_recovery" if recover_delivery else "claim_thread"
@@ -304,7 +326,16 @@ class _SubagentExecutionMixin:
         except Exception as exc:
             bridge.finish_exception(exc)
         finally:
+            if persistence is not None:
+                try:
+                    persistence.close()
+                except TracePersistenceError:
+                    pass  # The bridge already reports the persistence failure.
             current_turn = getattr(self._store, "get_node")(node.session_id, turn.id)
+            if bridge.persistence_failed and self._thread_events is not None:
+                failed = turn.clone()
+                failed.status = "failed"
+                self._thread_events.finish_turn(node.thread_id, failed)
             if isinstance(current_turn, RuntimeState) and current_turn.status in {"success", "failed"}:
                 self._publish_turn_reports(node, current_turn)
             if (

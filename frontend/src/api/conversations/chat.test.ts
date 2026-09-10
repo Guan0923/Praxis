@@ -99,6 +99,16 @@ describe("Turn SSE contract", () => {
     })).resolves.toBe("completed");
   });
 
+  it("surfaces a failed terminal when the durable Turn could not be finalized", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(accepted()).mockResolvedValueOnce(response([
+      JSON.stringify({ type: "turn.snapshot", revision: 0, turn: turn() }),
+      '<SSE id="turn_1" type="failed">Item persistence failed</SSE>',
+    ])));
+    await expect(streamChat("hello", () => undefined, new AbortController().signal, {
+      sessionId: "session_1", turnId: "turn_1",
+    })).rejects.toMatchObject({ name: "SseExecutionError", message: "Item persistence failed" });
+  });
+
   it("reconnects an interrupted stream with Last-Event-ID and accepts the rebased snapshot", async () => {
     const first = new Response([
       "id: 10-0",

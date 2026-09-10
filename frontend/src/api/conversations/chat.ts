@@ -30,6 +30,13 @@ export class SseProtocolError extends Error {
   }
 }
 
+export class SseExecutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SseExecutionError";
+  }
+}
+
 function executionConfig(options: StreamOptions): Record<string, unknown> {
   return {
     permission_mode: options.permissionMode ?? "read_only",
@@ -49,6 +56,7 @@ async function streamEndpoint(
 ): Promise<StreamResult> {
   let lastEventId = "";
   let reconnects = 0;
+  let latestStatus: string | undefined;
 
   const waitToReconnect = async (): Promise<boolean> => {
     if (signal.aborted) return false;
@@ -138,6 +146,7 @@ async function streamEndpoint(
               }
             }
             receivedFrame = true;
+            latestStatus = frame.type === "turn.snapshot" ? frame.turn.status : frame.patch?.status ?? latestStatus;
             onMessage(frame);
           }
           if (blockEventId) lastEventId = blockEventId;
@@ -168,6 +177,9 @@ async function streamEndpoint(
       throw new SseProtocolError("SSE stream completed without a Turn baseline");
     }
     if (terminal[2] === "network") throw new Error("network");
+    if (terminal[2] === "failed" && latestStatus === "running") {
+      throw new SseExecutionError(terminal[3] || "Execution stopped before its final state could be saved.");
+    }
     return "completed";
   }
 }

@@ -1,4 +1,4 @@
-import { pauseTurn, SseProtocolError, streamAttachedTurn, streamChat, streamResume, streamRewind } from "../api";
+import { pauseTurn, SseExecutionError, SseProtocolError, streamAttachedTurn, streamChat, streamResume, streamRewind } from "../api";
 import type { ChatMessage, RuntimeStateNode, StreamMessage } from "../types";
 import type { ActiveRun, ChatRunRequest } from "./types";
 import { integrateRuntimeNodeUpdates, projectRuntimeNode } from "./runtime/runtimeDetailProjection";
@@ -215,6 +215,23 @@ export function createRunController(callbacks: RunControllerCallbacks) {
         await callbacks.checkSandboxHealth?.().catch(() => undefined);
       }
       const protocolError = error instanceof SseProtocolError;
+      if (error instanceof SseExecutionError) {
+        if (finalTurn) {
+          const stopped: RuntimeStateNode = {
+            ...finalTurn, status: "failed",
+            data: finalTurn.data.map((version) => version.map((message) => ({
+              ...message, content: message.content.map((item) => item.status === "running" ? { ...item, status: "failed" as const } : item),
+            }))),
+          };
+          callbacks.updateConversation?.(request.conversationId, (conversation) =>
+            integrateRuntimeNodeUpdates(conversation, [stopped], stopped.id, true));
+        }
+        callbacks.updateLastMessage(request.conversationId, (item) => ({
+          ...item, error: error.message, status: "failed", running: false, decision: undefined,
+          items: item.items?.map((entry) => entry.status === "running" ? { ...entry, status: "failed" } : entry),
+        }));
+        return;
+      }
       if (protocolError) {
         controller.abort();
         const recoveryTurnId = active.turnId ?? request.turnId ?? request.sourceNodeId;

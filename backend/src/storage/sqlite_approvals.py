@@ -19,7 +19,7 @@ class SQLiteApprovalMixin:
         command_summary: str,
         cwd_summary: str,
     ) -> None:
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
             meta = connection.execute(
                 "SELECT 1 FROM json_objects WHERE session_id=? AND namespace='session' AND object_id=?",

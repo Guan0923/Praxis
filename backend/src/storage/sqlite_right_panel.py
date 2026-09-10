@@ -35,7 +35,7 @@ class SQLiteRightPanelMixin:
             changes["active_window_id"] = active_window_id
         result = replace(current, **changes)
         now = utc_now()
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
             self._session_document(connection, session_id)
             self._put_json_object(
@@ -72,7 +72,7 @@ class SQLiteRightPanelMixin:
         )
 
     def create_right_panel_window(self, item: RightPanelWindow) -> RightPanelWindow:
-        with self._connection(item.session_id) as connection:
+        with self._connection(item.session_id, write=True) as connection:
             self._assert_writable(connection)
             self._session_document(connection, item.session_id)
             if self._json_object(connection, item.session_id, "right_panel_window", item.id) is not None:
@@ -92,7 +92,7 @@ class SQLiteRightPanelMixin:
             raise ValueError("Side-chat window and anchor identities do not match.")
         if item.session_id != anchor.session_id or anchor.status == "running":
             raise ValueError("Side-chat anchor must be a terminal Turn in the window Session.")
-        with self._connection(item.session_id) as connection:
+        with self._connection(item.session_id, write=True) as connection:
             self._assert_writable(connection)
             self._session_document(connection, item.session_id)
             if self._json_object(connection, item.session_id, "right_panel_window", item.id) is not None:
@@ -156,7 +156,7 @@ class SQLiteRightPanelMixin:
         if "title" in changes:
             changes["title"] = str(changes["title"]).strip()
         result = replace(current, **changes, updated_at=utc_now())
-        with self._connection(session_id) as connection:
+        with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
             self._put_json_object(
                 connection,

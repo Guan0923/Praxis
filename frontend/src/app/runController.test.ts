@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { pauseTurn, streamAttachedTurn, streamChat } from "../api";
+import { pauseTurn, SseExecutionError, streamAttachedTurn, streamChat } from "../api";
 import type { Conversation, RuntimeStateNode } from "../types";
 import { createRunController } from "./runController";
 import { TURN_PROTOCOL_VERSION } from "./runtime/runtimeNodeNormalization";
@@ -66,6 +66,26 @@ afterEach(() => {
 });
 
 describe("run controller incremental batching", () => {
+  it("stops displaying running after persistence failure without withdrawing visible text", async () => {
+    vi.mocked(streamChat).mockImplementationOnce(async (_prompt, onMessage) => {
+      onMessage({ type: "turn.snapshot", revision: 0, turn: turn() });
+      throw new SseExecutionError("Item persistence failed");
+    });
+    const updateLastMessage = vi.fn();
+    const controller = createRunController({
+      activeRuns: new Map(), updateLastMessage,
+      rebindRunSession: vi.fn().mockResolvedValue(undefined),
+      refreshSessions: vi.fn().mockResolvedValue(undefined),
+      recoverConversation: vi.fn().mockResolvedValue(undefined),
+    });
+    await controller.runConversation(request());
+    const updater = updateLastMessage.mock.calls.at(-1)![1];
+    expect(updater({ content: "already visible", running: true, items: [{ type: "text", text: "already visible", status: "running" }] })).toMatchObject({
+      content: "already visible", status: "failed", running: false, error: "Item persistence failed",
+      items: [{ text: "already visible", status: "failed" }],
+    });
+  });
+
   it("defers an early pause until the Turn exists and allows retry after a failed pause", async () => {
     let finish!: () => void;
     let snapshot!: () => void;

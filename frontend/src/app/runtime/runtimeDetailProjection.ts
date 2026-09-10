@@ -83,7 +83,7 @@ function displayAssistantItems(turn: RuntimeStateNode, items: TurnItem[]): TurnI
     if (!isToolApproval(item)) {
       const deliveryId = typeof item.delivery_id === "string" ? item.delivery_id : "";
       const reportStatus = deliveryId ? turn.agent_report_statuses?.[deliveryId] : undefined;
-      displayed.push(reportStatus ? { ...item, report_status: reportStatus } : { ...item });
+      displayed.push(reportStatus ? { ...item, report_status: reportStatus } : item);
       index += 1;
       continue;
     }

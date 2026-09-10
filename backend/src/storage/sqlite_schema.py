@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 16
-UNSUPPORTED_SCHEMA_MESSAGE = "Unsupported state.db schema; Praxis requires v16 and left the database untouched."
+SCHEMA_VERSION = 17
+UNSUPPORTED_SCHEMA_MESSAGE = "Unsupported state.db schema; Praxis requires v17 and left the database untouched."
 
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS store_metadata (

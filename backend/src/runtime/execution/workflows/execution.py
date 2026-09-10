@@ -14,7 +14,6 @@ from ..steps import ToolStepExecutor
 from ..todo_finalization import (
     check_todo_finalization,
     refresh_todo_finalization_context,
-    should_defer_todo_content,
 )
 from ..tool_batch import ToolBatchExecutor
 from .budgets import _claim_model_turn, _ensure_tool_budget, _reject_over_budget_tools, _tool_batch_fits
@@ -57,16 +56,11 @@ class ExecutionWorkflow:
                 return runtime.run
             if not _claim_model_turn(runtime, "decision"):
                 return runtime.run
-            defer_todo_content = should_defer_todo_content(runtime)
-            close = _model_text_stream(
-                runtime,
-                stream_content=True,
-                defer_content=defer_todo_content,
-            )
+            close = _model_text_stream(runtime, stream_content=True)
             try:
                 response = planner.decide(runtime)
             except PlanningError as exc:
-                close(publish_deferred_content=False)
+                close()
                 _publish_repairs(runtime, capabilities)
                 if cancel_if_requested(runtime):
                     return runtime.run
@@ -76,10 +70,10 @@ class ExecutionWorkflow:
                 fail_run(runtime, exc, **planning_failure_data(exc, capabilities.name))
                 return runtime.run
             except BaseException:
-                close(publish_deferred_content=False)
+                close()
                 raise
             else:
-                streamed = close(publish_deferred_content=bool(response.tool_messages) or not defer_todo_content)
+                streamed = close()
             self._tool_batches.prepare(response)
             _publish_repairs(runtime, capabilities)
             incomplete = runtime.exchange.continuation_pending
