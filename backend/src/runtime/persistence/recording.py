@@ -23,6 +23,7 @@ _IDENTIFIER_KEYS = frozenset(
         "exchange_id",
         "error_type",
         "finish_reason",
+        "incomplete_reason",
         "hook",
         "kind",
         "mode",
@@ -106,6 +107,7 @@ def model_response_data(state: RuntimeState, exchange: RuntimeExchange, response
         "response_id": response.response_id,
         "response_model": response.model,
         "finish_reason": response.finish_reason,
+        "incomplete_reason": response.incomplete_reason,
         "usage": response.usage,
         "message": _message_to_record(response.message),
     }

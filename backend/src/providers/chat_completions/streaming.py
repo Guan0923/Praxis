@@ -8,7 +8,7 @@ from typing import Any
 
 from backend.runtime.core.context import AgentRuntime
 
-from ..errors import ModelRequestError
+from ..errors import ModelRequestError, ModelResponseError
 from .models import ChatCompletion
 from .responses import _parse_response
 
@@ -54,6 +54,13 @@ def _parse_stream(runtime: AgentRuntime, events: Iterable[dict[str, Any]]) -> Ch
         if not isinstance(raw_event, Mapping):
             raise ModelRequestError("Chat Completions stream events must be objects.")
         event = dict(raw_event)
+        error = event.get("error")
+        if error:
+            detail = error.get("message") if isinstance(error, Mapping) else error
+            raise ModelResponseError(
+                str(detail or "Chat Completions stream returned an error."),
+                diagnostics={"error": error},
+            )
         for key in ("id", "model", "object", "system_fingerprint", "created"):
             if key in event and event[key] is not None:
                 top[key] = event[key]

@@ -42,6 +42,7 @@ class PreparedResponse:
     model: str | None = None
     finish_reason: str | None = None
     provider_metadata: dict[str, Any] = field(default_factory=dict)
+    incomplete_reason: Literal["output_limit"] | None = None
 
 
 @dataclass
@@ -65,6 +66,7 @@ class RuntimeExchange:
     on_reasoning: Callable[[str], None] | None = None
     on_content: Callable[[str], None] | None = None
     required_tool_name: str | None = None
+    continuation_pending: bool = False
 
     def reset(self) -> None:
         self.operation = None
@@ -84,6 +86,7 @@ class RuntimeExchange:
         self.on_reasoning = None
         self.on_content = None
         self.required_tool_name = None
+        self.continuation_pending = False
 
 
 def new_tool_call_id() -> str:

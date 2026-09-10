@@ -10,7 +10,13 @@ from backend.domain import AssistantMessage, ChatMessage, ToolSpec, safe_error_m
 from backend.runtime.core.context import AgentRuntime, PreparedResponse
 
 from ..config import ModelConfig
-from ..errors import ModelConfigurationError, ModelRequestError, ModelTransportError, ProviderOutputError
+from ..errors import (
+    ModelConfigurationError,
+    ModelRequestError,
+    ModelResponseError,
+    ModelTransportError,
+    ProviderOutputError,
+)
 from .messages import _tool_definition, _wire_messages_from
 from .requests import _prepare_request
 from .responses import _parse_response
@@ -25,7 +31,7 @@ def _prepare_response(runtime: AgentRuntime) -> PreparedResponse:
         raise ModelRequestError("Chat Completions response is missing from runtime.exchange.raw_response.")
     try:
         prepared = _parse_response(raw) if isinstance(raw, Mapping) else _parse_stream(runtime, raw)
-    except ModelTransportError:
+    except (ModelTransportError, ModelResponseError):
         raise
     except ModelRequestError as exc:
         invalid_output = ""

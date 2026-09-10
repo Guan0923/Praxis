@@ -91,6 +91,7 @@ class PlanProposalWorkflow(PlanControlMixin):
             else:
                 streamed = close()
             self._tool_batches.prepare(response)
+            incomplete = runtime.exchange.continuation_pending
             _publish_repairs(runtime, capabilities)
             _publish_assistant_message(runtime, response, streamed)
             if cancel_if_requested(runtime):
@@ -105,6 +106,8 @@ class PlanProposalWorkflow(PlanControlMixin):
             if not response.tool_messages:
                 _start_assistant(runtime, response)
                 _finish_assistant(runtime)
+                if incomplete:
+                    continue
                 return PlanProposalResult(response, content_streamed=streamed.content)
             if not _tool_batch_fits(runtime, response):
                 _reject_over_budget_tools(runtime, response)
@@ -146,5 +149,5 @@ class PlanProposalWorkflow(PlanControlMixin):
                     record_plan_feedback(runtime, interrupt.supplement)
                 return None
             _finish_assistant(runtime)
-            if self._submitted_plan is not None:
+            if self._submitted_plan is not None and not incomplete:
                 return PlanProposalResult(response, self._submitted_plan, streamed.content)

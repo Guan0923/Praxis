@@ -36,6 +36,10 @@ class ModelTransportError(ModelRequestError):
         self.stream_started = stream_started
 
 
+class ModelResponseError(ModelRequestError):
+    """A terminal provider failure that must not enter output repair."""
+
+
 class ProviderOutputError(ModelOutputError, ModelRequestError):
     """Provider response validation failed while preserving request-error compatibility."""
 

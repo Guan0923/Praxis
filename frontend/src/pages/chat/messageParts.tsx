@@ -147,19 +147,6 @@ export function ToolLine({ ev, display, active = false }: { ev: ToolEvent; displ
       </div>
     );
   }
-  if (ev.kind === "tool_failed") {
-    const tool = String(ev.data?.tool ?? "工具");
-    return (
-      <div className="tool-line failed">
-        <ToolOutlined aria-hidden="true" />
-        <b>{tool}</b>
-        <span className="tool-status failed">失败</span>
-        {display === "developer" && callId(ev) ? <span className="tool-call-id">call ID: {callId(ev)}</span> : null}
-        {display !== "minimal" ? <pre className="tool-result error-text">{jsonText(ev.data?.result ?? ev.message)}</pre> : null}
-        {display === "developer" ? <pre className="tool-payload">{jsonText(ev.data)}</pre> : null}
-      </div>
-    );
-  }
   if (ev.kind === "tool_call") {
     const tool = String(ev.data?.tool ?? ev.message ?? "工具") || "工具";
     return (
@@ -172,7 +159,7 @@ export function ToolLine({ ev, display, active = false }: { ev: ToolEvent; displ
       </div>
     );
   }
-  if (ev.kind === "tool_result") {
+  if (ev.kind === "tool_result" || ev.kind === "tool_failed") {
     const result = ev.data?.result ?? ev.message;
     return (
       <div className="tool-result">
