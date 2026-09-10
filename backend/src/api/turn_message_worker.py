@@ -71,16 +71,11 @@ class TurnMessageWorker:
             self._reject_permanently(claimed)
             return
         if operation == "rewind":
-            item: dict[str, object] = {"type": "text", "text": envelope.content, "status": "success"}
-            if envelope.references:
-                item["references"] = list(envelope.references)
-            try:
-                rewound = store.append_turn_version(
-                    envelope.target_id,
-                    item,
-                    delivery_id=envelope.delivery_id,
-                )
-            except (KeyError, RuntimeError, ValueError):
+            if (
+                not isinstance(existing, RuntimeState)
+                or existing.session_id != envelope.session_id
+                or existing.thread_id != envelope.thread_id
+            ):
                 self._reject_permanently(claimed)
                 return
             _stream_turn(
@@ -89,7 +84,7 @@ class TurnMessageWorker:
                 thread_id=envelope.thread_id,
                 turn_id=envelope.target_id,
                 prompt=envelope.content,
-                source_id=rewound.id,
+                source_id=envelope.target_id,
                 config=config,
                 references=list(envelope.references),
                 adopt_existing=True,

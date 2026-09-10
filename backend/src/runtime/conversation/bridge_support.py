@@ -26,6 +26,10 @@ class ConversationNodeBridgeMixin:
         ownership prevents the Web sink from receiving the same event twice.
         """
 
+        if self.runtime is not None and (
+            self.runtime.state.session_id != bridge.session_id or self.runtime.state.thread_id != bridge.thread_id
+        ):
+            raise ValueError("The Turn bridge does not belong to this conversation Thread.")
         self.runtime_node_bridge = bridge
         self._node_bridge_events_external = events_external
 
@@ -134,9 +138,15 @@ class ConversationNodeBridgeMixin:
                 raise ValueError("Unknown source Turn.")
             if not isinstance(latest, RuntimeStateNode):
                 raise ValueError("A root Turn is only an ancestry anchor.")
+            if latest.thread_id != self.runtime.state.thread_id:
+                raise ValueError("The source Turn does not belong to this conversation Thread.")
         loader = getattr(store, "load_nodes", None)
         if latest is None and callable(loader):
-            nodes = [node for node in loader(session.session_id) if isinstance(node, RuntimeStateNode)]
+            nodes = [
+                node
+                for node in loader(session.session_id)
+                if isinstance(node, RuntimeStateNode) and node.thread_id == self.runtime.state.thread_id
+            ]
             if nodes:
                 parent_keys = {(node.parent_session_id, node.parent_id) for node in nodes if node.parent_id}
                 leaves = [node for node in nodes if (node.session_id, node.id) not in parent_keys]
@@ -166,7 +176,7 @@ class ConversationNodeBridgeMixin:
         return RuntimeEventNodeBridge(
             store,
             session_id=session.session_id,
-            thread_id=latest.thread_id if latest is not None else session.session_id,
+            thread_id=self.runtime.state.thread_id,
             source_node_id=latest.id if source_node_id and latest is not None else None,
             compaction_turn_id=compaction_turn_id,
             adopt_existing=adopt_existing,

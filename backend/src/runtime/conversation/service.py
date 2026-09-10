@@ -48,8 +48,10 @@ class ConversationService(ConversationNodeBridgeMixin, ConversationSessionContro
         default_timezone: str = "Asia/Shanghai",
         session_provisioner: Callable[[SessionStore, str, Session], Session | None] | None = None,
         session_provisioner_cleanup: Callable[[str], None] | None = None,
+        *,
+        thread_id: str | None = None,
     ) -> None:
-        super().__init__(runner, session_store, session_id, default_timezone=default_timezone)
+        super().__init__(runner, session_store, session_id, default_timezone=default_timezone, thread_id=thread_id)
         self._session_provisioner = session_provisioner
         self._session_provisioner_cleanup = session_provisioner_cleanup
         # Web streaming installs its bridge before invoking this service so it
@@ -199,11 +201,13 @@ class ConversationService(ConversationNodeBridgeMixin, ConversationSessionContro
                 prepared,
                 provenance,
                 delivery_id=delivery_id,
+                thread_id=self.runtime.state.thread_id,
             )
         else:
             if self.runtime is None:
                 self.runtime = self.runner.empty_runtime(session_id=new_session_id())
                 self.runtime.state.timezone = self.default_timezone
+                self.runtime.state.thread_id = self.thread_id or self.runtime.state.session_id
             if self.runtime.state.status == "running":
                 raise RuntimeError("The active session already has a running turn; resume or terminate it first.")
             run_id = new_run_id()
@@ -215,6 +219,7 @@ class ConversationService(ConversationNodeBridgeMixin, ConversationSessionContro
             mode=mode,
             run_id=run_id,
             turn_start_index=turn_start_index,
+            thread_id=self.runtime.state.thread_id,
             history=self.runtime.state.messages,
             active_skills=list(active_skills),
             provenance=provenance,
@@ -290,8 +295,8 @@ class ConversationService(ConversationNodeBridgeMixin, ConversationSessionContro
             self._node_bridge_events_external = False
         return state
 
-    def prepare_resume(self, session_id: str | None = None) -> ResumePreview:
-        return prepare_resume(self, session_id)
+    def prepare_resume(self, session_id: str | None = None, *, turn_id: str | None = None) -> ResumePreview:
+        return prepare_resume(self, session_id, turn_id=turn_id)
 
     def resume_session(
         self,
@@ -304,6 +309,7 @@ class ConversationService(ConversationNodeBridgeMixin, ConversationSessionContro
         suspend_requested: CancellationHandler | None = None,
         request_parameters: Mapping[str, Any] | None = None,
         resume_confirmed: bool = False,
+        turn_id: str | None = None,
     ) -> RunState | None:
         state = resume_conversation(
             self,
@@ -315,6 +321,7 @@ class ConversationService(ConversationNodeBridgeMixin, ConversationSessionContro
             suspend_requested=suspend_requested,
             request_parameters=request_parameters,
             resume_confirmed=resume_confirmed,
+            turn_id=turn_id,
         )
         if state is None:
             return None

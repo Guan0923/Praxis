@@ -279,6 +279,7 @@ class _SubagentExecutionMixin:
             return
         try:
             runtime = runner.new_runtime(task=self._turn_prompt(turn), session_id=node.session_id)
+            runtime.state.thread_id = node.thread_id
             runtime.state.permission_mode = turn.permission_mode
             runtime.state.running_mode = turn.running_mode
             runtime.services.runtime_store = _CanonicalRuntimeStore(self._store, node.session_id)

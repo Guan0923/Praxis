@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 from pathlib import Path
 from time import monotonic, sleep
 from uuid import uuid4
@@ -11,13 +12,18 @@ from fastapi.testclient import TestClient
 from redis import Redis
 
 from backend.api.app import create_app
+from backend.api.chat import routes as chat_routes
+from backend.api.chat import streaming as chat_streaming
 from backend.api.session_store import session_store
 from backend.api.state import WebAppState
 from backend.configuration import ClientPaths
-from backend.domain import DeliveryConflict, MessageEnvelope, QueuedMessage
+from backend.domain import AssistantMessage, DeliveryConflict, MessageEnvelope, QueuedMessage
 from backend.domain.runtime_state import RuntimeState
+from backend.providers import ModelConfig
+from backend.runtime import AgentApplication, AgentRunner
 from backend.storage.message_queue import STALE_CLAIM_MS, RedisMessageQueue
 from backend.storage.sqlite import SQLiteSessionStore
+from backend.tools import ToolRegistry
 
 
 def test_queued_message_api_is_ordered_idempotent_and_restricts_dispatched_mutations(tmp_path: Path) -> None:
@@ -232,7 +238,8 @@ def test_create_turn_keeps_accepted_delivery_pending_until_worker_admission(tmp_
     assert claimed is not None and claimed.envelope.delivery_id == "delivery-stream-failure"
 
 
-def test_turn_start_worker_acknowledges_permanent_invalid_command(tmp_path: Path) -> None:
+@pytest.mark.parametrize("operation", ["unsupported", "rewind"])
+def test_turn_start_worker_acknowledges_permanent_invalid_command(tmp_path: Path, operation: str) -> None:
     from backend.storage.message_queue import MemoryMessageQueue
 
     queue = MemoryMessageQueue()
@@ -253,7 +260,7 @@ def test_turn_start_worker_acknowledges_permanent_invalid_command(tmp_path: Path
                     "content": "invalid command",
                     "references": [],
                     "version": 1,
-                    "operation": "unsupported",
+                    "operation": operation,
                     "parent_id": "",
                     "config": {},
                 },
@@ -314,6 +321,152 @@ def redis_queue() -> RedisMessageQueue:
     if keys:
         client.delete(*keys)
     client.close()
+
+
+def test_real_redis_side_chat_runs_while_main_turn_is_running(
+    tmp_path: Path, monkeypatch, redis_queue: RedisMessageQueue
+) -> None:
+    main_started = threading.Event()
+    release_main = threading.Event()
+    side_started = threading.Event()
+    completions: list[tuple[str, str, str]] = []
+    closed_applications: list[object] = []
+    terminal_observations: list[tuple[bool, bool, bool]] = []
+    executions: list[str] = []
+
+    class LocalPlanner:
+        name = "thread-isolation-test"
+
+        def decide(self, runtime):
+            executions.append(runtime.run.task)
+            if runtime.run.task == "main":
+                main_started.set()
+                if not release_main.wait(90):
+                    raise TimeoutError("Main test turn was not released.")
+            if runtime.run.task == "pause side" and runtime.run.provenance.trigger != "resume":
+                side_started.set()
+                while not runtime.services.suspend_requested() and not release_main.is_set():
+                    sleep(0.01)
+            if runtime.run.task == "fail side":
+                raise RuntimeError("Expected local test failure.")
+            return AssistantMessage(content=f"done: {runtime.run.task}")
+
+    state = WebAppState(tmp_path / "web", message_queue=redis_queue)
+    state.model_config = lambda provider_name=None: ModelConfig(
+        api_key="local-test-only", base_url="http://127.0.0.1:1", model="local-test"
+    )
+
+    class LocalApplication(AgentApplication):
+        def close(self):
+            super().close()
+            closed_applications.append(self)
+
+    def application(_state, **kwargs):
+        store = session_store(state)
+        return LocalApplication(
+            AgentRunner(LocalPlanner(), ToolRegistry(kwargs["workspace"]), checkpoints=store), store
+        )
+
+    monkeypatch.setattr(chat_routes, "build_local_application", application)
+    publish_terminal = chat_streaming.publish_runtime_terminal
+
+    def observe_terminal(web, **kwargs):
+        runtime = session_store(web).load_runtime(kwargs["session_id"], thread_id=kwargs["thread_id"])
+        terminal_observations.append(
+            (
+                runtime.status == "idle",
+                kwargs["thread_id"] not in web.active_runtime_stream_locks["keys"],
+                len(closed_applications) > len(completions),
+            )
+        )
+        publish_terminal(web, **kwargs)
+        completions.append((kwargs["turn_id"], kwargs["terminal_type"], kwargs["message"]))
+
+    monkeypatch.setattr(chat_streaming, "publish_runtime_terminal", observe_terminal)
+
+    def send(client, sidebar, turn_id, prompt, parent_id="", thread_id=None):
+        response = client.post(
+            "/api/turns",
+            json={
+                "id": turn_id,
+                "session_id": sidebar["session_id"],
+                "thread_id": thread_id or sidebar["thread_id"],
+                "parent_id": parent_id,
+                "message": {"role": "user", "content": [{"type": "text", "text": prompt}]},
+            },
+        )
+        assert response.status_code == 202, response.text
+
+    def finished(store, turn_id, status="success", *, after=0):
+        deadline = monotonic() + 10
+        while monotonic() < deadline:
+            turn = store.find_node(turn_id)
+            if isinstance(turn, RuntimeState) and any(item[0] == turn_id for item in completions[after:]):
+                assert turn.status == status, turn.data
+                return turn
+            sleep(0.02)
+        pytest.fail(f"Turn did not finish: {turn_id}")
+
+    with TestClient(create_app(state)) as client:
+        try:
+            sidebar = client.post("/api/sidebar-threads", json={}).json()
+            store = session_store(state)
+            send(client, sidebar, "turn_seed", "seed")
+            finished(store, "turn_seed")
+            send(client, sidebar, "turn_main", "main", "turn_seed")
+            assert main_started.wait(10)
+            response = client.post(
+                f"/api/right-panel/{sidebar['session_id']}/side-chats",
+                json={"source_turn_id": "turn_main"},
+            )
+            assert response.status_code == 201, response.text
+            window = response.json()["window"]
+            send(client, sidebar, "turn_side", "side", window["anchor_turn_id"], window["thread_id"])
+            finished(store, "turn_side")
+            assert store.find_node("turn_main").status == "running"
+            send(client, sidebar, "turn_side_next", "side next", "turn_side", window["thread_id"])
+            finished(store, "turn_side_next")
+
+            # Replay the same delivery without executing another turn.
+            send(client, sidebar, "turn_side_next", "side next", "turn_side", window["thread_id"])
+            assert executions.count("side next") == 1
+
+            before = len(completions)
+            rewound = client.post(
+                "/api/turns/turn_side_next/rewind",
+                json={
+                    "message": {"role": "user", "content": [{"type": "text", "text": "edited side"}]},
+                },
+            )
+            assert rewound.status_code == 202, rewound.text
+            assert len(finished(store, "turn_side_next", after=before).data) == 2
+
+            send(client, sidebar, "turn_side_pause", "pause side", "turn_side_next", window["thread_id"])
+            assert side_started.wait(10)
+            assert client.post("/api/turns/turn_side_pause/pause").status_code == 200
+            finished(store, "turn_side_pause", "paused")
+            before = len(completions)
+            resumed = client.post("/api/turns/turn_side_pause/resume", json={})
+            assert resumed.status_code == 202, resumed.text
+            finished(store, "turn_side_pause", after=before)
+
+            send(client, sidebar, "turn_side_fail", "fail side", "turn_side_pause", window["thread_id"])
+            finished(store, "turn_side_fail", "failed")
+            assert store.load_runtime(sidebar["session_id"]).status == "running"
+            assert store.load_runtime(sidebar["session_id"], thread_id=window["thread_id"]).status == "idle"
+
+            forked = client.post("/api/turns/turn_seed/fork", json={"id": "turn_fork_anchor"})
+            assert forked.status_code == 201, forked.text
+            branch = forked.json()["sidebar_thread"]
+            send(client, sidebar, "turn_fork_next", "fork next", "turn_fork_anchor", branch["thread_id"])
+            finished(store, "turn_fork_next")
+            assert store.load_runtime(sidebar["session_id"]).current_run.task == "main"
+        finally:
+            release_main.set()
+        finished(store, "turn_main")
+        send(client, sidebar, "turn_main_next", "main next", "turn_main")
+        finished(store, "turn_main_next")
+        assert all(all(observation) for observation in terminal_observations), terminal_observations
 
 
 def test_real_redis_dispatch_claim_ack_and_receipt_replay(redis_queue: RedisMessageQueue) -> None:

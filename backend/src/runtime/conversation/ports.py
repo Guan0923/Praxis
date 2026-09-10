@@ -40,7 +40,7 @@ class SessionStore(RuntimeStore, Protocol):
         self, session_id: str, *, before_id: int | None = None, limit: int = 100
     ) -> tuple[list[dict[str, str]], int | None]: ...
 
-    def load_runtime(self, session_id: str) -> RuntimeState | None: ...
+    def load_runtime(self, session_id: str, *, thread_id: str | None = None) -> RuntimeState | None: ...
 
     def resume_runtime(self, source: RuntimeState, resumed: RuntimeState) -> None: ...
 
@@ -53,6 +53,7 @@ class SessionStore(RuntimeStore, Protocol):
         *,
         append_user_message: bool = True,
         delivery_id: str | None = None,
+        thread_id: str | None = None,
     ) -> None: ...
 
     def append_turn_input(

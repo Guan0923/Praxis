@@ -54,7 +54,7 @@ def reconcile_todo_receipts(store, todo_store: TodoListStore | None, node: Runti
 
     repaired = RuntimeStateNode.from_dict(node.to_dict())
     store.update_node(repaired)
-    runtime = store.load_runtime(node.session_id)
+    runtime = store.load_runtime(node.session_id, thread_id=node.thread_id)
     if runtime is not None and runtime.current_run is not None and runtime.current_run.turn_id == node.id:
         candidates = []
         if runtime.active_message is not None:

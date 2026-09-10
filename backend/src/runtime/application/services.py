@@ -26,7 +26,7 @@ class AgentApplication:
         if callable(runner_close):
             runner_close()
 
-    def open_conversation(self, session_id: str | None = None) -> ConversationService:
+    def open_conversation(self, session_id: str | None = None, *, thread_id: str | None = None) -> ConversationService:
         return ConversationService(
             self.runner,
             self.session_store,
@@ -34,4 +34,5 @@ class AgentApplication:
             self.default_timezone,
             session_provisioner=self.session_provisioner,
             session_provisioner_cleanup=self.session_provisioner_cleanup,
+            thread_id=thread_id,
         )

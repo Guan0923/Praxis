@@ -172,11 +172,11 @@ class WebAppState:
         store.finalize_node(RuntimeState.from_dict(node.to_dict()))
 
     @staticmethod
-    def _fail_interrupted_run(store, session_id: str) -> None:
-        run_id = store.running_run_id(session_id)
+    def _fail_interrupted_run(store, session_id: str, thread_id: str) -> None:
+        run_id = store.running_run_id(session_id, thread_id=thread_id)
         if run_id is None:
             return
-        runtime = store.load_runtime(session_id)
+        runtime = store.load_runtime(session_id, thread_id=thread_id)
         if runtime is not None and runtime.current_run is not None and runtime.current_run.run_id == run_id:
             run = runtime.current_run
             run.status = "failed"
@@ -255,7 +255,7 @@ class WebAppState:
                 and isinstance(node, RuntimeState)
                 and node.status == "running"
             ):
-                run_id = store.running_run_id(envelope.session_id)
+                run_id = store.running_run_id(envelope.session_id, thread_id=envelope.thread_id)
                 if run_id is not None:
                     store.append_turn_input(
                         envelope.session_id,
@@ -274,8 +274,8 @@ class WebAppState:
                 continue
             released_turns.add(envelope.target_id)
 
-        for session_id in {node.session_id for node in running_nodes}:
-            self._fail_interrupted_run(store, session_id)
+        for session_id, thread_id in {(node.session_id, node.thread_id) for node in running_nodes}:
+            self._fail_interrupted_run(store, session_id, thread_id)
         for node in running_nodes:
             current = store.find_node(node.id)
             runtime_thread = store.get_runtime_thread(node.session_id, node.thread_id)

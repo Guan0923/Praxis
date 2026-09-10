@@ -124,7 +124,7 @@ def _stream(
     if not isinstance(active_runtime_bridges, dict):
         active_runtime_bridges = {}
         setattr(state, "active_runtime_bridges", active_runtime_bridges)
-    # Reserve the session before creating the Job object.  Endpoint-level
+    # Reserve the Thread before creating the Job object.  Endpoint-level
     # summary checks are advisory; this lock closes the two-window race where
     # both requests otherwise pass validation and create two running leaves.
     stream_locks = _runtime_stream_lock_registry(state)
@@ -178,6 +178,7 @@ def _stream(
     job_holder: dict[str, ThreadJob | None] = {"job": None}
     bridge_ref: dict[str, RuntimeEventNodeBridge | None] = {"bridge": None}
     persistence_ref: dict[str, RuntimeFramePersistence | None] = {"worker": None}
+    pending_terminal: tuple[str, str, str] | None = None
     initial_user_activity_recorded = False
 
     def record_sidebar_activity(active_thread_id: str) -> None:
@@ -282,6 +283,10 @@ def _stream(
             active_stream.publish_frame(frame, current)
 
     def enqueue_terminal(terminal_type: str, terminal_id: str, message: str = "") -> None:
+        nonlocal pending_terminal
+        pending_terminal = (terminal_type, terminal_id, message)
+
+    def publish_terminal(terminal_type: str, terminal_id: str, message: str) -> None:
         bridge = bridge_ref["bridge"]
         current = bridge._current() if bridge is not None else None
         if current is not None and current.status in {"success", "paused", "failed"}:
@@ -340,11 +345,16 @@ def _stream(
                 job_registry=job_registry,
                 job_parent_id=job_parent_id,
             )
-            conversation = app.open_conversation(session_id)
+            conversation = app.open_conversation(session_id, thread_id=thread_id)
             # The node id is the optimistic-concurrency boundary for the new
             # tree protocol.  Legacy conversations do not expose nodes yet,
             # so validation is delegated to the node store when available.
             node_store = getattr(app, "session_store", None) or getattr(app, "store", None)
+            if initial_delivery is not None and initial_delivery.envelope.payload.get("operation") == "rewind":
+                item: dict[str, object] = {"type": "text", "text": prompt, "status": "success"}
+                if references:
+                    item["references"] = references
+                node_store.append_turn_version(turn_id, item, delivery_id=initial_delivery.envelope.delivery_id)
             if callable(getattr(node_store, "create_node", None)):
                 if getattr(conversation, "active_session", None) is None:
                     conversation.ensure_session(prompt or None)
@@ -418,11 +428,6 @@ def _stream(
                         runtime_for_bridge.services.steering = take_steering
                         runtime_for_bridge.services.register_operation_abort = pause_controller.register_abort
                         runtime_for_bridge.services.operation_interrupted = pause_controller.operation_interrupted
-                    if operation is not None:
-                        # Resume keeps the immediate bridge start: there is no
-                        # new user text and the bridge must adopt the paused
-                        # leaf before the stream begins.
-                        bridge_ref["bridge"].start()
                     attach_bridge = getattr(conversation, "attach_runtime_node_bridge", None)
                     if callable(attach_bridge):
                         # The SSE sink already forwards every RuntimeEvent to
@@ -575,15 +580,21 @@ def _stream(
                     app.close()
                 except Exception:
                     pass
-            if reserved_stream_keys:
-                with stream_lock:
-                    stream_locks["keys"].difference_update(reserved_stream_keys)
             active_turn_cancellations.pop(cancellation_key, None)
             steering_inbox.close()
-            with active_turn_streams_lock:
-                for alias in active_stream_aliases:
-                    if active_turn_streams.get(alias) is active_stream:
-                        active_turn_streams.pop(alias, None)
+            # Publish completion only after teardown. Hold admission until the
+            # terminal is delivered so a rewind cannot replace this Turn's
+            # persisted version while its previous terminal is being emitted.
+            with stream_lock:
+                stream_locks["keys"].difference_update(reserved_stream_keys)
+                try:
+                    if pending_terminal is not None:
+                        publish_terminal(*pending_terminal)
+                finally:
+                    with active_turn_streams_lock:
+                        for alias in active_stream_aliases:
+                            if active_turn_streams.get(alias) is active_stream:
+                                active_turn_streams.pop(alias, None)
 
     if job_registry is not None:
         parent_scope = getattr(state, "system_job_scope", job_registry.root_scope())
