@@ -51,7 +51,23 @@ SWE_PREFIXES = (
 
 
 def check_revision(root: Path, revision: str) -> None:
-    actual = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    if not root.is_dir():
+        raise RuntimeError(f"Benchmark source directory is missing: {root}. Download task resources first.")
+    if not (root / ".git").exists():
+        raise RuntimeError(f"Benchmark source is not a Git repository: {root}")
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("Git is not installed or is unavailable to the backend.") from exc
+    if result.returncode:
+        raise RuntimeError(f"Cannot read benchmark source revision: {result.stderr.strip()[:2000]}")
+    actual = result.stdout.strip()
     if actual != revision:
         raise ValueError(f"Expected pinned revision {revision}, got {actual}")
 

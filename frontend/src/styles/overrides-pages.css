@@ -246,3 +246,15 @@
   .benchmark-page .task-name { width: 100%; }
   .benchmark-page .task-badges { flex-wrap: wrap; }
 }
+.retained-page {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+}
+.retained-page[hidden] { display: none !important; }
+.retained-page--chat { overflow: hidden; }
+.benchmark-page .task-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.benchmark-resource-status { margin-bottom: 12px; overflow-wrap: anywhere; }
+.right-panel-shell[hidden] { display: none !important; }

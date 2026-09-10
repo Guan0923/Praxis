@@ -92,7 +92,7 @@ export function createRunController(callbacks: RunControllerCallbacks) {
           flushPendingFrames();
         });
       } else {
-        scheduledFrame = globalThis.setTimeout(() => {
+        scheduledFrame = window.setTimeout(() => {
           scheduledFrame = undefined;
           flushPendingFrames();
         }, 0);

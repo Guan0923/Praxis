@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -77,8 +77,15 @@ export default function MemorySettingsSection() {
   const [evidenceItem, setEvidenceItem] = useState<MemoryItem | null>(null);
   const [clearOpen, setClearOpen] = useState(false);
   const [clearText, setClearText] = useState("");
+  const [modelRefresh, setModelRefresh] = useState(0);
+  const refreshGeneration = useRef(0);
+  const providerId = provider?.id;
+  const providerName = provider?.provider_name;
+  const providerProtocol = provider?.protocol;
+  const providerBaseUrl = provider?.base_url;
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (reloadModels = false) => {
+    const generation = ++refreshGeneration.current;
     setLoading(true);
     setError(null);
     try {
@@ -89,32 +96,39 @@ export default function MemorySettingsSection() {
         listSidebarThreads("active"),
         listMemoryInjectionHistory(),
       ]);
+      if (generation !== refreshGeneration.current) return;
       setConfig(settings.memory_config);
       setProvider(settings.provider_config);
+      if (reloadModels) setModelRefresh((value) => value + 1);
       setItems(memoryItems);
       setJobs(memoryJobs.slice().reverse());
       setThreads(sessionItems.filter((value) => !value.archived_at && !value.deleted_at));
       setInjections(records);
     } catch (value) {
-      setError(value instanceof Error ? value.message : String(value));
+      if (generation === refreshGeneration.current) setError(value instanceof Error ? value.message : String(value));
     } finally {
-      setLoading(false);
+      if (generation === refreshGeneration.current) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { void refresh(); return () => { refreshGeneration.current += 1; }; }, [refresh]);
 
   useEffect(() => {
-    if (!provider) return;
+    if (!providerName || !providerProtocol || !providerBaseUrl) {
+      setModels([]);
+      setModelsLoading(false);
+      setModelsError(null);
+      return;
+    }
     let cancelled = false;
     setModels([]);
     setModelsLoading(true);
     setModelsError(null);
     void discoverProviderModels({
-      config_id: provider.id,
-      provider_name: provider.provider_name,
-      protocol: provider.protocol,
-      base_url: provider.base_url,
+      config_id: providerId,
+      provider_name: providerName,
+      protocol: providerProtocol,
+      base_url: providerBaseUrl,
     }).then((result) => {
       if (!cancelled) setModels(result.models);
     }).catch((value: unknown) => {
@@ -123,7 +137,7 @@ export default function MemorySettingsSection() {
       if (!cancelled) setModelsLoading(false);
     });
     return () => { cancelled = true; };
-  }, [provider]);
+  }, [providerId, providerName, providerProtocol, providerBaseUrl, modelRefresh]);
 
   const modelOptions = [
     { value: "", label: provider?.model ? `使用当前模型（${provider.model}）` : "使用当前模型" },
@@ -193,7 +207,7 @@ export default function MemorySettingsSection() {
           <div>
             <Typography.Title level={4} style={{ margin: 0 }}>记忆</Typography.Title>
           </div>
-          <Button icon={<ReloadOutlined />} onClick={() => void refresh()} loading={loading}>刷新</Button>
+          <Button icon={<ReloadOutlined />} onClick={() => void refresh(true)} loading={loading}>刷新</Button>
         </div>
         {error ? <Alert type="error" showIcon title={error} closable onClose={() => setError(null)} /> : null}
         {notice ? <Alert type="success" showIcon title={notice} closable onClose={() => setNotice(null)} /> : null}

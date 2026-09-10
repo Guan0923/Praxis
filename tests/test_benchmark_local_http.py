@@ -31,6 +31,7 @@ def test_real_http_runtime_file_tool_and_grading(tmp_path_factory, monkeypatch, 
                 assert response.status_code == 202
                 batch = response.json()
                 assert batch["finished"] == 0
+                assert client.delete(f"/benchmark/tasks/{tasks[0].name}/resources").status_code == 409
                 until(lambda: client.get(f"/benchmark/runs/{batch['id']}").json()["finished"] == 1, timeout=30)
                 finished = client.get(f"/benchmark/runs/{batch['id']}").json()
                 result = finished["tasks"][0]["result"]

@@ -7,7 +7,7 @@ function isAtBottom(scrollContainer: HTMLDivElement): boolean {
   return scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight <= BOTTOM_THRESHOLD_PX;
 }
 
-export function useChatScroll(conversationId: string | undefined, messages: ChatMessage[]) {
+export function useChatScroll(conversationId: string | undefined, messages: ChatMessage[], active = true) {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const scrollConversationIdRef = useRef<string | undefined>(undefined);
@@ -20,6 +20,7 @@ export function useChatScroll(conversationId: string | undefined, messages: Chat
   }, []);
 
   useLayoutEffect(() => {
+    if (!active) return;
     const scrollContainer = chatScrollRef.current;
     if (!scrollContainer) return;
     const conversationChanged = scrollConversationIdRef.current !== conversationId;
@@ -28,25 +29,27 @@ export function useChatScroll(conversationId: string | undefined, messages: Chat
     if (!shouldStickToBottomRef.current) return;
     scrollContainer.scrollTop = scrollContainer.scrollHeight;
     syncBottomState(scrollContainer);
-  }, [conversationId, messages, syncBottomState]);
+  }, [conversationId, messages, syncBottomState, active]);
 
   useEffect(() => {
+    if (!active) return;
     const scrollContainer = chatScrollRef.current;
     const scrollContent = scrollContainer?.querySelector<HTMLElement>(".chat-scroll-content");
     if (!scrollContainer || !scrollContent || typeof ResizeObserver !== "function") return;
     const observer = new ResizeObserver(() => {
+      if (scrollContainer.clientHeight === 0) return;
       if (shouldStickToBottomRef.current) scrollContainer.scrollTop = scrollContainer.scrollHeight;
       syncBottomState(scrollContainer);
     });
     observer.observe(scrollContainer);
     observer.observe(scrollContent);
     return () => observer.disconnect();
-  }, [conversationId, syncBottomState]);
+  }, [conversationId, syncBottomState, active]);
 
   const handleScroll = useCallback(() => {
     const scrollContainer = chatScrollRef.current;
-    if (scrollContainer) syncBottomState(scrollContainer);
-  }, [syncBottomState]);
+    if (active && scrollContainer) syncBottomState(scrollContainer);
+  }, [syncBottomState, active]);
 
   const scrollToBottom = useCallback(() => {
     const scrollContainer = chatScrollRef.current;

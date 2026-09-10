@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Card, Col, Collapse, Row, Select, Spin, Statistic, Tag, Typography } from "antd";
+import { Alert, App, Button, Card, Col, Collapse, Modal, Row, Select, Spin, Statistic, Tag, Typography } from "antd";
 import {
   ApiOutlined,
   BarChartOutlined,
@@ -8,6 +8,8 @@ import {
   StopOutlined,
   TeamOutlined,
   ToolOutlined,
+  DownloadOutlined,
+  DeleteOutlined,
 } from "@ant-design/icons";
 import { getBenchmarkTrace, listTasks } from "../api";
 import type { BenchmarkResult, BenchmarkTaskRun, BenchmarkTraceEvent, TaskInfo } from "../types";
@@ -15,6 +17,13 @@ import { isActive, useBenchmarkRuns } from "./benchmark/useBenchmarkRuns";
 
 const STATUS_LABEL: Record<string, string> = {
   queued: "排队中", running: "运行中", stopping: "正在停止", completed: "已完成", failed: "执行失败", cancelled: "已停止",
+};
+const RESOURCE_STATUS: Record<string, string> = {
+  not_prepared: "未准备", preparing: "准备中", ready: "已就绪", deleting: "删除中", error: "失败",
+};
+const RESOURCE_PHASE: Record<string, string> = {
+  queued: "等待处理", sources: "下载源码", data: "准备数据及独立依赖", image: "下载镜像", environment: "准备容器", cleanup: "清理任务资源",
+  validation: "检查资源", interrupted: "操作中断", prepare: "准备资源", delete: "删除资源",
 };
 const PHASE_LABEL: Record<string, string> = {
   environment: "准备容器", timeout: "执行超时",
@@ -136,13 +145,14 @@ function ResultCard({ result, runId, taskRun }: { result: BenchmarkResult; runId
   );
 }
 
-export default function BenchmarkPage() {
+export default function BenchmarkPage({ active = true }: { active?: boolean }) {
+  const { modal } = App.useApp();
   const [tasks, setTasks] = useState<TaskInfo[]>([]);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [sourceFilter, setSourceFilter] = useState("all");
   const [capabilityFilter, setCapabilityFilter] = useState("all");
   const planner = "llm" as const;
-  const benchmark = useBenchmarkRuns();
+  const benchmark = useBenchmarkRuns(active);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -160,6 +170,18 @@ export default function BenchmarkPage() {
   const anyActive = benchmark.runs.some((batch) => isActive(batch.status));
   const batch = [...benchmark.runs].reverse().find((item) => item.total > 1);
   const unavailable = !benchmark.ready || Boolean(benchmark.connectionError);
+  const resources = new Map(benchmark.resources.map((item) => [item.task_name, item]));
+  const allPrepared = tasks.length > 0 && tasks.every((task) => resources.get(task.name)?.status === "ready");
+  const resourceBusy = benchmark.resources.some((item) => item.status === "preparing" || item.status === "deleting");
+  const deleteResources = (task: TaskInfo) => {
+    const confirm = modal?.confirm ?? Modal.confirm;
+    confirm({
+      title: `删除“${task.name}”的资源？`,
+      content: "历史成绩和运行记录会保留。其他任务仍在使用的共享资源不会删除。",
+      okText: "删除资源", cancelText: "取消", okButtonProps: { danger: true },
+      onOk: () => benchmark.resourceAction(task.name, "delete"),
+    });
+  };
   const sources = [...new Set(tasks.map((task) => task.source.benchmark))];
   const visibleTasks = tasks.filter((task) =>
     (sourceFilter === "all" || task.source.benchmark === sourceFilter) &&
@@ -174,7 +196,7 @@ export default function BenchmarkPage() {
             <label>运行方式</label>
             <span className="muted">真实模型 · 并发上限 3</span>
           </div>
-          <Button className="run-all" type="primary" icon={<PlayCircleOutlined />} onClick={() => void benchmark.start()} loading={benchmark.pending.has("all")} disabled={unavailable || anyActive || benchmark.pending.size > 0}>
+          <Button className="run-all" type="primary" icon={<PlayCircleOutlined />} onClick={() => void benchmark.start()} loading={benchmark.pending.has("all")} disabled={unavailable || anyActive || resourceBusy || !allPrepared || benchmark.pending.size > 0}>
             全部运行
           </Button>
         </div>
@@ -218,6 +240,9 @@ export default function BenchmarkPage() {
             const entry = latest.get(task.name);
             const run = entry?.task;
             const active = run ? isActive(run.status) : false;
+            const resource = resources.get(task.name);
+            const resourcePending = benchmark.pending.has(`resources:${task.name}`);
+            const busy = resourcePending || resource?.status === "preparing" || resource?.status === "deleting";
             return (
               <Col xs={24} lg={12} key={task.name}>
                 <Card className="task-card">
@@ -235,8 +260,15 @@ export default function BenchmarkPage() {
                     </a>
                   </p>
                   <Typography.Paragraph type="secondary">
-                    {task.environment.kind === "docker" ? "Docker" : "本地"} · 环境：{({ verified: "已验收", downloaded: "已下载，待验收", not_prepared: "待准备", local: "本地测试" } as Record<string, string>)[task.environment.status] ?? task.environment.status}
+                    {task.environment.kind === "docker" ? "Docker" : "本地"}
                   </Typography.Paragraph>
+                  <div className="benchmark-resource-status" aria-live="polite">
+                    <Tag color={resource?.status === "ready" ? "success" : resource?.status === "error" ? "error" : "default"}>
+                      资源：{RESOURCE_STATUS[resource?.status ?? "not_prepared"]}
+                    </Tag>
+                    {(busy || resource?.status === "error") && resource ? <span>{RESOURCE_PHASE[resource.phase] ?? "处理中"}</span> : null}
+                    {resource?.error ? <Alert type="error" showIcon title={resource.error} /> : null}
+                  </div>
                   <Collapse
                     className="task-source"
                     size="small"
@@ -269,12 +301,20 @@ export default function BenchmarkPage() {
                   />
                   <div className="task-actions">
                     {task.planner_modes.includes(planner) ? (
-                      <Button className="send-btn" type="primary" icon={<PlayCircleOutlined />} onClick={() => void benchmark.start(task.name)} loading={benchmark.pending.has(task.name)} disabled={unavailable || active || benchmark.pending.has("all")}>
+                      <Button className="send-btn" type="primary" icon={<PlayCircleOutlined />} onClick={() => void benchmark.start(task.name)} loading={benchmark.pending.has(task.name)} disabled={unavailable || active || busy || resource?.status !== "ready" || benchmark.pending.has("all")}>
                         运行
                       </Button>
                     ) : (
                       <span className="muted">该任务不支持 {planner} 模式</span>
                     )}
+                    <Button icon={<DownloadOutlined />} onClick={() => void benchmark.resourceAction(task.name, "prepare")}
+                      loading={resource?.status === "preparing"} disabled={unavailable || active || busy || resource?.status === "ready" || benchmark.pending.has(task.name) || benchmark.pending.has("all")}>
+                      下载资源
+                    </Button>
+                    <Button danger icon={<DeleteOutlined />} onClick={() => deleteResources(task)}
+                      loading={resource?.status === "deleting"} disabled={unavailable || active || busy || resource?.in_use || !resource?.has_resources || benchmark.pending.has(task.name) || benchmark.pending.has("all")}>
+                      删除资源
+                    </Button>
                   </div>
                   {run && entry ? <div className="benchmark-run-status" aria-live="polite">
                     <Tag color={run.status === "failed" ? "error" : run.status === "completed" ? "success" : "default"}>状态：{STATUS_LABEL[run.status]}</Tag>

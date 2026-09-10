@@ -42,15 +42,23 @@ def _service(request: Request) -> BenchmarkService:
 
 
 def _start(request: Request, tasks: Sequence[BenchmarkTask], planner: str) -> dict:
+    from benchmarks.resources import ResourceConflict
     from benchmarks.service import BenchmarkConflict
 
+    if not tasks or any(planner not in task.planner_modes for task in tasks):
+        raise HTTPException(status_code=422, detail="No tasks support the requested planner.")
+    service = _service(request)
+    try:
+        service.resources.ensure_ready(tasks)
+    except ResourceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     try:
         model_config = request.app.state.web.model_config()
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"模型未配置：{safe_error_message(exc)}") from exc
     try:
-        return _service(request).start(tasks, planner, model_config)
-    except BenchmarkConflict as exc:
+        return service.start(tasks, planner, model_config)
+    except (BenchmarkConflict, ResourceConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -58,6 +66,37 @@ def _start(request: Request, tasks: Sequence[BenchmarkTask], planner: str) -> di
 
 # Mounted at /benchmark by the main app, so the router carries no prefix.
 router = APIRouter()
+
+
+@router.get("/resources")
+def list_resources(request: Request) -> list[dict]:
+    from benchmarks.tasks import ALL_TASKS
+
+    return _service(request).resources.snapshot(ALL_TASKS)
+
+
+def _resource_operation(name: str, action: str, request: Request) -> dict:
+    from benchmarks.resources import ResourceConflict
+    from benchmarks.service import BenchmarkConflict
+    from benchmarks.tasks import TASKS_BY_NAME
+
+    task = TASKS_BY_NAME.get(name)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Unknown benchmark task: {name}")
+    try:
+        return _service(request).resource_operation(task, action)
+    except (ResourceConflict, BenchmarkConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/tasks/{name}/resources", status_code=202)
+def prepare_resources(name: str, request: Request) -> dict:
+    return _resource_operation(name, "prepare", request)
+
+
+@router.delete("/tasks/{name}/resources", status_code=202)
+def delete_resources(name: str, request: Request) -> dict:
+    return _resource_operation(name, "delete", request)
 
 
 @router.get("/tasks")

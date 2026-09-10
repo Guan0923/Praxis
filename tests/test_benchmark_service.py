@@ -45,12 +45,17 @@ def until(check, timeout=8):
 
 
 @pytest.fixture
-def service_factory(tmp_path):
+def service_factory(tmp_path, monkeypatch):
     resources = []
 
     def create(execute):
+        from benchmarks.resources import ResourceStore
+
+        store = ResourceStore(tmp_path / f"cache-{len(resources)}")
+        monkeypatch.setattr(store, "ensure_ready", lambda tasks: None)
+        monkeypatch.setattr(store, "reserve", lambda tasks: None)
         registry = JobRegistry()
-        service = BenchmarkService(registry, tmp_path / str(len(resources)), execute=execute)
+        service = BenchmarkService(registry, tmp_path / str(len(resources)), execute=execute, resources=store)
         resources.append((service, registry))
         return service
 

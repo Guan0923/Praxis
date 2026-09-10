@@ -20,11 +20,15 @@
 
 ```powershell
 conda activate dev
-uv run --with pyarrow==25.0.1 python -m benchmarks.prepare --sources
+uv run python -m benchmarks.prepare --task tb2-log-summary-date-ranges
 uv run python -m benchmarks.prepare --verify
 ```
 
-`--sources` 下载固定版本源码和数据；`--verify` 逐题运行未修改状态和官方参考答案，不调用模型。也可用 `--task NAME` 指定单题。只有未修改状态不通过、参考答案通过的题，才标为已验收。详细记录位于缓存的 `prepared/`。
+默认只准备资源，不调用模型或评分；`--sources` 只下载固定版本源码和数据，`--verify` 才会运行未修改状态和官方参考答案。用 `--task NAME` 指定单题；未指定时准备全部任务。SWE 数据读取依赖安装到缓存下独立的 `swe-data-env`，不改动后端环境。详细记录位于缓存的 `prepared/`。
+
+网页每题提供下载、删除资源按钮。必须先下载成功才能运行；全部运行要求全部题目已就绪，运行时不会自动下载。离开页面不停止资源操作，返回时重新同步状态。
+
+`resources.json` 记录资源归属和任务引用。删除仅清理本任务拥有且不再被其他任务引用的资源；历史运行和成绩保留。已有的外部文件或镜像不会被接管后删除，Docker 镜像被容器使用时也不强制删除。部分失败保留剩余资源清单供重试。
 
 本轮 30 题验收与浏览器验证见 [`VALIDATION.md`](VALIDATION.md)。真实容器接入测试使用独立本地模型响应服务：
 
@@ -51,6 +55,9 @@ Windows 下评分脚本直接从固定 Git 对象导出，避免 CRLF 转换。�
 
 | 接口 | 返回 |
 | --- | --- |
+| `GET /benchmark/resources` | 各任务资源状态、阶段、错误和占用情况 |
+| `POST /benchmark/tasks/{name}/resources` | `202`，提交资源准备，不需要模型配置 |
+| `DELETE /benchmark/tasks/{name}/resources` | `202`，提交资源删除；任务占用时 `409` |
 | `POST /benchmark/run`、`POST /benchmark/run-all` | `202`，运行编号和初始状态 |
 | `GET /benchmark/runs` | 后端实例编号、运行列表及逐项状态，不含完整 Trace |
 | `GET /benchmark/runs/{run_id}` | 单次运行详情 |

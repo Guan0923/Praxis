@@ -44,7 +44,7 @@ def task_source(container: TaskContainer) -> Path:
 
 
 def swe_row(container: TaskContainer) -> dict:
-    path = container.cache / "swe-selected.json"
+    path = container.cache / "swe-rows" / f"{container.task.name}.json"
     if not path.exists():
         raise RuntimeError("Public dataset cache is missing. Run python -m benchmarks.prepare --sources first.")
     return json.loads(path.read_text(encoding="utf-8"))[container.task.source.task_id]
@@ -54,10 +54,13 @@ def prepare_environment(container: TaskContainer) -> None:
     source = task_source(container)
     if not source.is_dir():
         raise RuntimeError("Pinned upstream task files are missing. Run python -m benchmarks.prepare --sources.")
-    from .prepare import prepare_task
-
-    prepare_task(container.task, container.cache, container.cancelled)
-    container.start()
+    receipt = container.cache / "prepared" / f"{container.task.name}.json"
+    if not receipt.is_file():
+        raise RuntimeError("Benchmark environment is missing. Download task resources first.")
+    prepared = json.loads(receipt.read_text(encoding="utf-8"))
+    if not prepared.get("prepared") or prepared.get("suite_version") != container.task.suite_version:
+        raise RuntimeError("Benchmark environment is not ready. Download task resources first.")
+    container.start(allow_download=False)
     container.exec("mkdir -p /logs/verifier /logs/agent")
     if container.spec["kind"] == "swe_bench_pro":
         base = shlex.quote(container.spec["base_commit"])

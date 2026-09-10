@@ -44,6 +44,7 @@ export { composerAction } from "./contracts";
 export { CHAT_COMPACT_WIDTH } from "./useResponsiveChatLayout";
 
 export default function ChatPage({
+  active = true,
   showButtonTooltips = true,
   conversation: canonicalConversation,
   agentThreadNavigation = false,
@@ -100,7 +101,7 @@ export default function ChatPage({
     }
     onModeChange(value);
   }, [agentThreadView.isSubagent, agentThreadView.selectedThreadId, onModeChange]);
-  const { chatPageRef, compact, isMobile } = useResponsiveChatLayout();
+  const { chatPageRef, compact, isMobile } = useResponsiveChatLayout(active);
   const [queueSubmitting, setQueueSubmitting] = useState(false);
   const [compactionPending, setCompactionPending] = useState(false);
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
@@ -117,6 +118,7 @@ export default function ChatPage({
   const { chatScrollRef, handleScroll: handleChatScroll, isAtBottom, scrollToBottom } = useChatScroll(
     conversation?.id,
     messages,
+    active,
   );
   // A queue flush has no optimistic assistant message by design. Keep the
   // composer in its running interaction mode from the moment the flush

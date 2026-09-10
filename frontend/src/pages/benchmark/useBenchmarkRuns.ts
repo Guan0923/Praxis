@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { cancelBenchmark, listBenchmarkRuns, runAllBenchmark, runBenchmark } from "../../api";
+import { cancelBenchmark, listBenchmarkRuns, runAllBenchmark, runBenchmark, listBenchmarkResources, changeBenchmarkResources, type BenchmarkResource } from "../../api";
 import type { BenchmarkRun, BenchmarkStatus } from "../../types";
 
 const INSTANCE_KEY = "praxis:benchmark-instance";
@@ -12,8 +12,10 @@ function rememberedInstance(): string | null {
   try { return sessionStorage.getItem(INSTANCE_KEY); } catch { return null; }
 }
 
-export function useBenchmarkRuns() {
+export function useBenchmarkRuns(active = true) {
+  const [visible, setVisible] = useState(() => document.visibilityState !== "hidden");
   const [runs, setRuns] = useState<BenchmarkRun[]>([]);
+  const [resources, setResources] = useState<BenchmarkResource[]>([]);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [expired, setExpired] = useState(false);
@@ -34,6 +36,17 @@ export function useBenchmarkRuns() {
 
   useEffect(() => {
     mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  useEffect(() => {
+    const synchronize = () => setVisible(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", synchronize);
+    return () => document.removeEventListener("visibilitychange", synchronize);
+  }, []);
+
+  useEffect(() => {
+    if (!active || !visible) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     let controller: AbortController | undefined;
@@ -47,10 +60,13 @@ export function useBenchmarkRuns() {
         requestController.abort();
       }, 10_000);
       try {
-        const data = await listBenchmarkRuns(requestController.signal);
+        const [data, resourceData] = await Promise.all([
+          listBenchmarkRuns(requestController.signal), listBenchmarkResources(requestController.signal),
+        ]);
         if (stopped || startedRevision !== revision.current) return;
         acceptInstance(data.instance_id);
         setRuns(data.runs);
+        setResources(resourceData);
         setConnectionError(null);
         setReady(true);
       } catch (error) {
@@ -65,11 +81,29 @@ export function useBenchmarkRuns() {
     void poll();
     return () => {
       stopped = true;
-      mounted.current = false;
       controller?.abort();
       clearTimeout(timer);
     };
-  }, []);
+  }, [active, visible]);
+
+  async function resourceAction(name: string, operation: "prepare" | "delete") {
+    const key = `resources:${name}`;
+    if (pendingRef.current.has(key)) return;
+    pendingRef.current.add(key);
+    setPending(new Set(pendingRef.current));
+    setActionError(null);
+    try {
+      const resource = await changeBenchmarkResources(name, operation);
+      if (!mounted.current) return;
+      revision.current += 1;
+      setResources((previous) => [...previous.filter((item) => item.task_name !== name), resource]);
+    } catch (error) {
+      if (mounted.current) setActionError(String((error as Error).message ?? error));
+    } finally {
+      pendingRef.current.delete(key);
+      if (mounted.current) setPending(new Set(pendingRef.current));
+    }
+  }
 
   async function action(key: string, request: () => Promise<BenchmarkRun>) {
     if (pendingRef.current.has(key)) return;
@@ -91,7 +125,7 @@ export function useBenchmarkRuns() {
   }
 
   return {
-    runs, connectionError, actionError, expired, ready, pending,
+    runs, resources, resourceAction, connectionError, actionError, expired, ready, pending,
     start: (name?: string) => action(name ?? "all", () => name ? runBenchmark(name, "llm") : runAllBenchmark("llm")),
     stop: (runId: string, taskId?: string) => action(`stop:${taskId ?? runId}`, () => cancelBenchmark(runId, taskId)),
   };
