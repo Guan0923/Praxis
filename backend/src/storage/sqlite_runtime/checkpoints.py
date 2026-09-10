@@ -22,6 +22,7 @@ class SQLiteCheckpointMixin:
         *,
         append_user_message: bool = True,
         delivery_id: str | None = None,
+        thread_id: str | None = None,
     ) -> None:
         timestamp = utc_now()
         origin = provenance or RunProvenance(workflow_id=run_id, trigger="legacy")
@@ -32,6 +33,7 @@ class SQLiteCheckpointMixin:
                 document["title"] = normalize_session_title(task)
             run = {
                 "run_id": run_id,
+                "thread_id": thread_id or session_id,
                 "task": task,
                 "status": "running",
                 "workflow_id": origin.workflow_id,
@@ -111,13 +113,19 @@ class SQLiteCheckpointMixin:
             self._assert_writable(connection)
             self._session_document(connection, state.session_id)
             self._put_json_object(
-                connection, state.session_id, "runtime_state", state.session_id, full_payload, timestamp
+                connection, state.session_id, "runtime_state", state.thread_id, full_payload, timestamp
             )
             run = state.current_run
             if run is not None:
                 run_payload = run.to_dict()
                 run_payload.update(
-                    {"run_id": run.run_id, "task": run.task, "status": run.status, "updated_at": timestamp}
+                    {
+                        "run_id": run.run_id,
+                        "thread_id": state.thread_id,
+                        "task": run.task,
+                        "status": run.status,
+                        "updated_at": timestamp,
+                    }
                 )
                 self._put_json_object(connection, state.session_id, "run", run.run_id, run_payload, timestamp)
             self._touch_session(connection, state.session_id, timestamp)
@@ -132,9 +140,9 @@ class SQLiteCheckpointMixin:
                     timestamp,
                 )
 
-    def load_runtime(self, session_id: str) -> RuntimeState | None:
+    def load_runtime(self, session_id: str, *, thread_id: str | None = None) -> RuntimeState | None:
         with self._connection(session_id) as connection:
-            payload = self._json_object(connection, session_id, "runtime_state", session_id)
+            payload = self._json_object(connection, session_id, "runtime_state", thread_id or session_id)
         if payload is None:
             return None
         return decode_runtime_state(json.dumps(payload, ensure_ascii=False))
@@ -220,13 +228,13 @@ class SQLiteCheckpointMixin:
                 for item in self._json_values(connection, session_id, "turn_message")
             )
 
-    def running_run_id(self, session_id: str) -> str | None:
-        """Return the sole running legacy Run when crash repair is unambiguous."""
+    def running_run_id(self, session_id: str, *, thread_id: str) -> str | None:
+        """Find this Thread's running attempt, including pre-checkpoint startup."""
 
         with self._connection(session_id) as connection:
             matches = [
-                str(item.get("run_id") or "")
+                str(item["run_id"])
                 for item in self._json_values(connection, session_id, "run")
-                if item.get("status") == "running" and item.get("run_id")
+                if item.get("thread_id") == thread_id and item.get("status") == "running" and item.get("run_id")
             ]
         return matches[0] if len(matches) == 1 else None

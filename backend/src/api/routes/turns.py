@@ -255,6 +255,10 @@ def resume_turn(turn_id: str, body: TurnExecutionConfig, request: Request) -> di
     source = _turn(store, turn_id)
     if source.status != "paused":
         raise HTTPException(status_code=409, detail="只有 paused Turn 可以恢复。")
+    runtime = store.load_runtime(source.session_id, thread_id=source.thread_id)
+    run = runtime.current_run if runtime is not None else None
+    if run is None or run.turn_id != source.id or run.thread_id != source.thread_id:
+        raise HTTPException(status_code=409, detail="当前 Turn 没有对应的可恢复运行状态。")
     try:
         state.message_queue.ping()
     except Exception as exc:
@@ -278,6 +282,7 @@ def resume_turn(turn_id: str, body: TurnExecutionConfig, request: Request) -> di
             request_parameters=request_parameters,
             steering=steering,
             resume_confirmed=True,
+            turn_id=source.id,
         )
 
     _stream_turn(
@@ -409,7 +414,7 @@ def compact_turn(
             project_cwd=project_cwd,
             job_registry=state.job_registry,
         )
-        conversation = app.open_conversation(source.session_id)
+        conversation = app.open_conversation(source.session_id, thread_id=source.thread_id)
         compacted = conversation.compact_turn(source.id, new_node_id())
         return compacted.to_dict()
     except HTTPException:

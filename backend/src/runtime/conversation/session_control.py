@@ -29,10 +29,13 @@ class ConversationSessionController:
         session_store: SessionStore | None = None,
         session_id: str | None = None,
         default_timezone: str = DEFAULT_TIME_ZONE,
+        *,
+        thread_id: str | None = None,
     ) -> None:
         self.runner = runner
         self.session_store = session_store
         self.default_timezone = default_timezone
+        self.thread_id = thread_id
         self._pending_session = False
         self._pending_title: str | None = None
         self.active_session: Session | None = None
@@ -145,16 +148,22 @@ class ConversationSessionController:
         return (self.history()[-limit:], None)
 
     def _ensure_runtime(self, session_id: str) -> None:
-        if self.runtime is not None and self.runtime.state.session_id == session_id:
+        thread_id = self.thread_id or session_id
+        if (
+            self.runtime is not None
+            and self.runtime.state.session_id == session_id
+            and self.runtime.state.thread_id == thread_id
+        ):
             return
         assert self.session_store is not None
-        state = self.session_store.load_runtime(session_id)
+        state = self.session_store.load_runtime(session_id, thread_id=thread_id)
         if state is None:
             self.runtime = self.runner.empty_runtime(
                 session_id=session_id,
                 runtime_store=self.session_store,
             )
             self.runtime.state.timezone = self.default_timezone
+            self.runtime.state.thread_id = thread_id
             self.runtime.save()
             return
         # Imported/fallback branches created before a runtime was bound may
@@ -176,6 +185,7 @@ class ConversationSessionController:
         session = self.session_store.create_session(title)
         runtime = self.runner.empty_runtime(session_id=session.session_id, runtime_store=self.session_store)
         runtime.state.timezone = self.default_timezone
+        runtime.state.thread_id = self.thread_id or session.session_id
         runtime.save()
         self.active_session = session
         self.runtime = runtime

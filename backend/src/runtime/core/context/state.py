@@ -44,9 +44,10 @@ class RunSummary:
 
 @dataclass
 class RuntimeState:
-    """Serializable state required to resume one complete conversation session."""
+    """Serializable execution state owned by one conversation Thread."""
 
     session_id: str
+    thread_id: str = ""
     workspace_root: str | None = None
     project_cwd: str | None = None
     timezone: str = DEFAULT_TIME_ZONE
@@ -71,9 +72,14 @@ class RuntimeState:
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
 
+    def __post_init__(self) -> None:
+        if not self.thread_id:
+            self.thread_id = self.session_id
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
+            "thread_id": self.thread_id,
             "workspace_root": self.workspace_root,
             "project_cwd": self.project_cwd,
             "timezone": self.timezone,
@@ -136,6 +142,7 @@ class RuntimeState:
             active_message = parsed
         return cls(
             session_id=str(data["session_id"]),
+            thread_id=str(data.get("thread_id") or data["session_id"]),
             workspace_root=(str(data["workspace_root"]) if data.get("workspace_root") is not None else None),
             project_cwd=(str(data["project_cwd"]) if data.get("project_cwd") is not None else None),
             timezone=str(data.get("timezone") or DEFAULT_TIME_ZONE),

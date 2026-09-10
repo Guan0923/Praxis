@@ -28,6 +28,7 @@ class ResumableConversation(Protocol):
     active_session: Session | None
     runtime: AgentRuntime | None
     conversation: list[dict[str, str]]
+    thread_id: str | None
 
     def use_session(self, session_id: str) -> Session: ...
 
@@ -44,7 +45,9 @@ class ResumableConversation(Protocol):
     def _fail_resume_node_bridge(self, bridge, error: Exception) -> None: ...
 
 
-def prepare_resume(conversation: ResumableConversation, session_id: str | None = None) -> ResumePreview:
+def prepare_resume(
+    conversation: ResumableConversation, session_id: str | None = None, *, turn_id: str | None = None
+) -> ResumePreview:
     """Inspect a resume target without changing the active conversation."""
 
     store = conversation.session_store
@@ -57,8 +60,11 @@ def prepare_resume(conversation: ResumableConversation, session_id: str | None =
         if session_id:
             raise ValueError(f"Unknown session: {session_id}")
         raise ValueError("No saved session is available to resume.")
-    state = store.load_runtime(session.session_id)
+    thread_id = conversation.thread_id or session.session_id
+    state = store.load_runtime(session.session_id, thread_id=thread_id)
     run = state.current_run if state is not None else None
+    if turn_id is not None and (run is None or run.turn_id != turn_id or run.thread_id != thread_id):
+        raise ValueError("The requested Turn does not match this Thread's saved runtime.")
     finder = getattr(store, "find_node", None)
     turn = finder(run.turn_id) if run is not None and run.turn_id and callable(finder) else None
     return build_preview(session, state, turn if isinstance(turn, RuntimeTreeState) else None)
@@ -75,10 +81,11 @@ def resume_session(
     suspend_requested: CancellationHandler | None = None,
     request_parameters: Mapping[str, Any] | None = None,
     resume_confirmed: bool = False,
+    turn_id: str | None = None,
 ) -> RunState | None:
     """Select an idle session or continue a stopped workflow as a new attempt."""
 
-    preview = prepare_resume(conversation, session_id)
+    preview = prepare_resume(conversation, session_id, turn_id=turn_id)
     if not preview.requires_action:
         conversation.use_session(preview.session_id)
         return None
@@ -113,9 +120,11 @@ def resume_session(
 
     store = conversation.session_store
     assert store is not None
-    state = store.load_runtime(preview.session_id)
+    state = store.load_runtime(preview.session_id, thread_id=conversation.thread_id or preview.session_id)
     if state is None:
         raise RuntimeError("The selected session has no durable runtime state.")
+    if state.current_run is None or state.current_run.run_id != preview.run_id:
+        raise ValueError("The Thread's saved runtime changed after resume was requested.")
     current_workspace = getattr(conversation.runner, "workspace_root", None)
     if state.workspace_root and current_workspace and state.workspace_root != current_workspace:
         raise RuntimeError(
