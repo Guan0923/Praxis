@@ -106,6 +106,11 @@ def test_sandbox_runtime_only_disables_run_command_when_broker_is_unhealthy(monk
         def status(self) -> BrokerStatus:
             return self._status
 
+        def resource_request(self, operation, **values):
+            assert operation == "resource_configure"
+            self.limits = values["limits"]
+            return {}
+
     unavailable = Broker(BrokerStatus(installed=False, healthy=False))
     monkeypatch.setattr(app_factory.WindowsBrokerClient, "from_system", lambda **_kwargs: unavailable)
     launcher, _ = app_factory._sandbox_runtime({})

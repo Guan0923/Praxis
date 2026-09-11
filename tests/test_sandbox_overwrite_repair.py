@@ -157,7 +157,9 @@ def test_concurrent_routes_share_maintenance_guard(tmp_path, entrypoint):
         def status(self):
             return {"installed": True, "healthy": True}
 
-        def repair(self):
+        def repair(self, *, before_repair=None):
+            if before_repair is not None:
+                before_repair()
             calls.append("repair")
             entered.set()
             if not release.wait(5):

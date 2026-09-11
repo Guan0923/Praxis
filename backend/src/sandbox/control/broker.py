@@ -46,6 +46,7 @@ class BrokerStatus:
     proxy_port: int | None = None
     token_model: str | None = None
     error_report: dict[str, Any] | None = None
+    service_state: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -59,6 +60,7 @@ class BrokerStatus:
             "proxy_port": self.proxy_port,
             "token_model": self.token_model,
             "error_report": self.error_report,
+            "service_state": self.service_state,
         }
 
 
@@ -158,7 +160,7 @@ class WindowsBrokerClient:
     def available(self) -> bool:
         return self._transport is not None or self._is_windows
 
-    def status(self) -> BrokerStatus:
+    def status(self, *, timeout: float = 1.0) -> BrokerStatus:
         if not self.available:
             return BrokerStatus(
                 False,
@@ -167,9 +169,25 @@ class WindowsBrokerClient:
                 detail="Windows Broker is unavailable",
             )
         installed = True
-        failure_code = BrokerStatusFailureCode.STATUS_FAILED
+        service_state = None
+        failure_code = BrokerStatusFailureCode.SERVICE_STATE_FAILED
         try:
-            service_installed = getattr(self._installer, "service_installed", None)
+            read_service = getattr(self._installer, "service_state", None)
+            if callable(read_service):
+                service = read_service()
+                service_state = service["state"]
+                if service_state != "running":
+                    return BrokerStatus(
+                        service_state != "missing",
+                        False,
+                        service_state=service_state,
+                        code=BrokerStatusFailureCode.NOT_INSTALLED
+                        if service_state == "missing"
+                        else BrokerStatusFailureCode.SERVICE_NOT_RUNNING,
+                        detail=f"Windows sandbox service is {service_state}; exit_code={service['exit_code']}, "
+                        f"service_exit_code={service['service_exit_code']}",
+                    )
+            service_installed = None if callable(read_service) else getattr(self._installer, "service_installed", None)
             if callable(service_installed):
                 installed = bool(service_installed())
                 if not installed:
@@ -199,7 +217,7 @@ class WindowsBrokerClient:
             else:
                 marker = {}
             failure_code = BrokerStatusFailureCode.STATUS_FAILED
-            payload = self.request("status", {})
+            payload = self.request("status", {}, status_timeout=timeout)
             failure_code = BrokerStatusFailureCode.PROTOCOL_INCOMPATIBLE
             if payload.get("version") != "3":
                 raise SandboxInitializationError("Broker protocol version requires repair")
@@ -216,6 +234,7 @@ class WindowsBrokerClient:
             return BrokerStatus(
                 resolved_installed,
                 healthy,
+                service_state=service_state,
                 code=None if healthy else BrokerStatusFailureCode.UNHEALTHY,
                 version=str(payload.get("version")) if payload.get("version") else None,
                 installation_id=(str(payload.get("installation_id")) if payload.get("installation_id") else None),
@@ -236,21 +255,17 @@ class WindowsBrokerClient:
                     else failure_code
                 ),
                 error_report=error_report(exc),
+                service_state=service_state,
                 detail=detail,
             )
 
     def install(self) -> BrokerStatus:
-        current = self.status()
-        if current.healthy:
-            return current
-        if self._installer is None:
-            self._ensure_installation_key()
-        return self._status_command("repair" if self._installer is not None else "install")
+        return self.repair()
 
-    def repair(self) -> BrokerStatus:
-        if self._installer is None:
-            self._ensure_installation_key()
-        return self._status_command("repair")
+    def repair(self, *, before_repair=None) -> BrokerStatus:
+        from .recovery import recover
+
+        return recover(self, before_repair=before_repair)
 
     def _status_command(self, operation: str) -> BrokerStatus:
         if self._installer is not None:
@@ -359,6 +374,9 @@ class WindowsBrokerClient:
             raise SandboxInitializationError("Windows Broker did not return a reservation")
         return response
 
+    def resource_request(self, operation: str, **values) -> dict[str, Any]:
+        return self.request(operation, {"backend_instance_id": self.backend_instance_id, **values})
+
     def reclaim_stale(self) -> tuple[str, ...]:
         response = self.request("reclaim", {"backend_instance_id": self.backend_instance_id})
         raw = response.get("reclaimed")
@@ -376,7 +394,7 @@ class WindowsBrokerClient:
         if not response.get("released", False):
             raise SandboxInitializationError("Windows Broker did not release the Job")
 
-    def request(self, operation: str, body: Mapping[str, Any]) -> dict[str, Any]:
+    def request(self, operation: str, body: Mapping[str, Any], *, status_timeout: float = 1.0) -> dict[str, Any]:
         if not self.available:
             raise SandboxInitializationError("Windows Broker is not installed")
         nonce = secrets.token_urlsafe(24)
@@ -393,7 +411,12 @@ class WindowsBrokerClient:
         }
         encoded = _canonical(envelope)
         envelope["hmac"] = self._sign(encoded)
-        response_bytes = self._send(_canonical(envelope))
+        if operation == "status" and self._transport is None and self._is_windows:
+            from .status_request import status_request
+
+            response_bytes = status_request(self.pipe_name, _canonical(envelope), status_timeout)
+        else:
+            response_bytes = self._send(_canonical(envelope))
         try:
             response = json.loads(response_bytes.decode("utf-8"))
         except (ValueError, UnicodeError) as exc:

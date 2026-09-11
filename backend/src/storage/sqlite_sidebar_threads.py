@@ -95,7 +95,13 @@ class SQLiteSidebarThreadMixin:
             self._put_json_object(connection, session_id, "sidebar_thread", thread_id, item.to_dict(), now)
         return item
 
-    def get_sidebar_thread(self, thread_id: str) -> SidebarThread | None:
+    def get_sidebar_thread(self, thread_id: str, *, session_id: str | None = None) -> SidebarThread | None:
+        if session_id is not None:
+            if not self.paths.session_db(session_id).is_file():
+                return None
+            with self._connection(session_id) as connection:
+                value = self._json_object(connection, session_id, "sidebar_thread", thread_id)
+            return SidebarThread.from_dict(value) if value is not None else None
         for summary in self.list_sessions(state="all"):
             with self._connection(summary.session_id) as connection:
                 value = self._json_object(connection, summary.session_id, "sidebar_thread", thread_id)
@@ -115,8 +121,10 @@ class SQLiteSidebarThreadMixin:
             result = [item for item in result if item.state == state]
         return sorted(result, key=lambda item: (item.updated_at, item.thread_id), reverse=True)
 
-    def update_sidebar_thread(self, thread_id: str, **changes: object) -> SidebarThread:
-        item = self.get_sidebar_thread(thread_id)
+    def update_sidebar_thread(
+        self, thread_id: str, *, session_id: str | None = None, **changes: object
+    ) -> SidebarThread:
+        item = self.get_sidebar_thread(thread_id, session_id=session_id)
         if item is None:
             raise KeyError(thread_id)
         allowed = {"title", "archived_at", "deleted_at", "title_is_custom"}
@@ -125,7 +133,7 @@ class SQLiteSidebarThreadMixin:
         if "title" in changes and not str(changes["title"]).strip():
             raise ValueError("SidebarThread title cannot be empty.")
         next_item = replace(item, **changes, updated_at=utc_now())
-        with self._connection(item.session_id, write=True) as connection:
+        with self._connection(item.session_id, write=True, refresh_index=False) as connection:
             self._assert_writable(connection)
             self._put_json_object(
                 connection, item.session_id, "sidebar_thread", item.thread_id, next_item.to_dict(), next_item.updated_at

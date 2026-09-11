@@ -1,8 +1,15 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SandboxAutoRecoveryPhase } from "../../app/useSandboxHealth";
 import type { UserSettingsState } from "./useUserSettingsState";
 import { brokerErrorTitle, SandboxSettingsSection } from "./SandboxSettingsSection";
+
+vi.mock("../../api/settings", () => ({
+  getSandboxResources: vi.fn().mockResolvedValue({
+    usage: { memory_bytes: 0, processes: 0, handles: 0 },
+    limits: { memory_mib: 8192, processes: 512, handles: 32768 }, queued: 0,
+  }),
+}));
 
 function makeState(
   phase: "healthy" | "unhealthy" = "healthy",
@@ -34,10 +41,8 @@ function makeState(
       checking: false,
       autoRecoveryPhase,
       nextRetryAt,
-      manualRepairing: false,
       check: vi.fn().mockResolvedValue({ installed: true, healthy: phase === "healthy" }),
       notifyUserBackendRequest: vi.fn(),
-      repairManually: vi.fn().mockResolvedValue(undefined),
     },
     updateSettings: vi.fn(),
   } as unknown as UserSettingsState;
@@ -67,37 +72,21 @@ describe("brokerErrorTitle", () => {
   it("shows automatic recovery states", () => {
     const { rerender } = render(<SandboxSettingsSection state={makeState("unhealthy", "repairing")} />);
     expect(screen.queryByRole("button", { name: "修复" })).not.toBeInTheDocument();
-    expect(screen.getByText("正在自动修复")).toBeInTheDocument();
+    expect(screen.getByText("正在恢复沙箱")).toBeInTheDocument();
 
     rerender(<SandboxSettingsSection state={makeState("unhealthy", "observing", Date.now() + 5_000)} />);
-    expect(screen.getByText("5 秒后自动修复")).toBeInTheDocument();
+    expect(screen.getByText("5 秒后自动恢复")).toBeInTheDocument();
 
     rerender(<SandboxSettingsSection state={makeState("unhealthy", "verifying", Date.now() + 5_000)} />);
-    expect(screen.getByText("正在验证修复，剩余 5 秒")).toBeInTheDocument();
+    expect(screen.getByText("正在验证恢复，剩余 5 秒")).toBeInTheDocument();
 
     rerender(<SandboxSettingsSection state={makeState("unhealthy", "paused")} />);
-    expect(screen.getByText("自动修复已暂停")).toBeInTheDocument();
+    expect(screen.getByText("自动恢复已暂停")).toBeInTheDocument();
   });
 
-  it("treats a manual check as user activity before checking", () => {
-    const state = makeState("unhealthy", "paused");
-    render(<SandboxSettingsSection state={state} />);
-    fireEvent.click(screen.getByRole("button", { name: /检\s*查/ }));
-
-    expect(state.sandboxHealth.notifyUserBackendRequest).toHaveBeenCalledTimes(1);
-    expect(state.sandboxHealth.check).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(["healthy", "unhealthy"] as const)("always exposes confirmed overwrite repair while %s", async (phase) => {
-    const state = makeState(phase);
-    render(<SandboxSettingsSection state={state} />);
-    fireEvent.click(screen.getByRole("button", { name: "覆盖修复" }));
-    expect(await screen.findByText("覆盖修复 Sandbox Broker？")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /取\s*消/ }));
-    expect(state.sandboxHealth.repairManually).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "覆盖修复" }));
-    const buttons = screen.getAllByRole("button", { name: "覆盖修复" });
-    await act(async () => { fireEvent.click(buttons[buttons.length - 1]); });
-    expect(state.sandboxHealth.repairManually).toHaveBeenCalledTimes(1);
+  it.each(["healthy", "unhealthy"] as const)("has no manual check or overwrite repair while %s", (phase) => {
+    render(<SandboxSettingsSection state={makeState(phase)} />);
+    expect(screen.queryByRole("button", { name: /检\s*查/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "覆盖修复" })).not.toBeInTheDocument();
   });
 });

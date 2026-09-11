@@ -147,18 +147,20 @@ describe("useSandboxHealth", () => {
     expect(repairSandboxBroker).toHaveBeenCalledTimes(1);
   });
 
-  it("manual repair runs immediately and uses the same verification window", async () => {
-    vi.mocked(getSandboxStatus).mockResolvedValue(status(true));
+  it.each(["broker_service_start_failed", "broker_service_state_failed"])("pauses on %s and retains the original error", async (code) => {
+    vi.mocked(getSandboxStatus).mockResolvedValue(status(false));
+    vi.mocked(repairSandboxBroker).mockRejectedValue(new ApiError(503, "original startup error", code));
     render(<Harness />);
     await settle();
-
-    await act(async () => current.repairManually());
+    await advance(10_000);
+    expect(current.autoRecoveryPhase).toBe("paused");
+    await advance(60_000);
+    act(() => current.notifyUserBackendRequest());
+    await settle();
     expect(repairSandboxBroker).toHaveBeenCalledTimes(1);
-    expect(current.manualRepairing).toBe(false);
-    expect(current.autoRecoveryPhase).toBe("verifying");
-    expect(current.nextRetryAt).toBe(START.getTime() + 10_000);
-
-    await advance(1_000);
+    expect(current.detail).toBe("original startup error");
+    vi.mocked(getSandboxStatus).mockResolvedValue(status(true));
+    await advance(30_000);
     expect(current.autoRecoveryPhase).toBe("idle");
   });
 

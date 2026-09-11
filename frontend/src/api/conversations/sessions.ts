@@ -64,8 +64,8 @@ export async function restoreSession(threadId: string, sessionId?: string): Prom
   return summary(await restoreSidebarThread(threadId, sessionId));
 }
 
-export async function deleteSession(threadId: string, sessionId?: string): Promise<SessionInfo> {
-  return summary(await deleteSidebarThread(threadId, sessionId));
+export async function deleteSession(threadId: string, sessionId: string): Promise<void> {
+  await deleteSidebarThread(threadId, sessionId);
 }
 
 export async function getSessionNodes(sessionId: string, threadId = sessionId): Promise<RuntimeTreeNode[]> {

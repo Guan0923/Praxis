@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from backend.domain import error_report
+
 from ..broker_service.credentials import BrokerCredentialPackage
 from ..errors import SandboxInitializationError, SandboxResourceExceeded
 from ..native_windows import (
@@ -25,6 +27,7 @@ from ..native_windows import (
 )
 from ..native_windows.api import _modules
 from ..policy import FileAccessMode, NetworkMode, ResourceLimits
+from ..runtime.aggregate import AggregateResources
 from ..runtime.resources import ResourceMonitor, ResourceUsage
 from .process import _NativeWindowsProcess
 
@@ -57,6 +60,8 @@ class _NativeLease:
     desktop: WindowsPrivateDesktop
     resource_monitor: ResourceMonitor | None = None
     failure_code: str | None = None
+    failure_message: str | None = None
+    failure_report: dict | None = None
 
 
 class _NativeResourceProvider:
@@ -102,11 +107,13 @@ class WindowsNativeBrokerAdapter:
         self._processes: dict[str, _NativeLease] = {}
         self._jobs: dict[tuple[str, str, str], str] = {}
         self._lock = threading.RLock()
+        self.aggregate = AggregateResources()
         self._stop = threading.Event()
         self._expiry_thread = threading.Thread(target=self._expire_loop, name="sandbox-reservations", daemon=True)
         self._expiry_thread.start()
 
     def close(self) -> None:
+        self.aggregate.close()
         self._stop.set()
         self._expiry_thread.join(timeout=2.0)
         with self._lock:
@@ -236,6 +243,11 @@ class WindowsNativeBrokerAdapter:
             self._close_reservation(reservation)
             raise SandboxInitializationError("Broker launch environment is invalid")
         policy = reservation.policy
+        try:
+            self.aggregate.require_permit(backend_id, reservation.job_id)
+        except Exception:
+            self._close_reservation(reservation)
+            raise
         workspaces = _required_absolute_paths(policy, "workspaces")
         cwd = _canonical_absolute_path(_required_text(request, "cwd"))
         expected_cwd = _canonical_absolute_path(_required_text(policy, "cwd"))
@@ -284,7 +296,36 @@ class WindowsNativeBrokerAdapter:
         with self._lock:
             self._processes[process_id] = lease
             self._jobs[(backend_id, user_id, reservation.job_id)] = process_id
-        monitor.start()
+
+        def stop_aggregate(reason: str) -> None:
+            lease.failure_code = "resource_exceeded"
+            lease.failure_message = reason
+            process.job.terminate()
+
+        def sample_resources() -> dict[str, int]:
+            try:
+                usage = monitor.provider.sample(process.pid)
+            except OSError as original:
+                try:
+                    self._resource_exceeded(process_id, original)
+                except Exception as cleanup:
+                    original.add_note(f"Stopping unaccounted process failed: {cleanup}")
+                raise
+            if lease.failure_code is None:
+                try:
+                    monitor.check(usage)
+                except SandboxResourceExceeded as exc:
+                    self._resource_exceeded(process_id, exc)
+            return {"memory_bytes": usage.memory_bytes, "processes": usage.processes, "handles": usage.handles}
+
+        try:
+            self.aggregate.register(backend_id, reservation.job_id, process_id, sample_resources, stop_aggregate)
+        except Exception as original:
+            try:
+                process.job.terminate()
+            except Exception as cleanup:
+                original.add_note(f"Stopping unaccounted process failed: {cleanup}")
+            raise
         return {
             "accepted": True,
             "process_id": process_id,
@@ -298,6 +339,18 @@ class WindowsNativeBrokerAdapter:
             "resources": {"process_id": process_id, "pid": process.pid},
         }
 
+    def resource_control(self, operation: str, request: Mapping[str, Any]) -> Mapping[str, Any]:
+        owner = _required_text(request, "backend_instance_id")
+        if operation == "resource_configure":
+            self.aggregate.configure(owner, dict(request["limits"]), initialize=request.get("initialize") is True)
+        elif operation == "resource_acquire":
+            return self.aggregate.acquire(owner, _required_text(request, "ticket"))
+        elif operation == "resource_cancel":
+            self.aggregate.cancel(owner, _required_text(request, "ticket"))
+        elif operation != "resource_status":
+            raise ValueError("Unknown resource operation.")
+        return self.aggregate.status(owner)
+
     def control(self, operation: str, request: Mapping[str, Any]) -> Mapping[str, Any]:
         process_id = _required_text(request, "process_id")
         backend_id = _required_text(request, "backend_instance_id")
@@ -306,8 +359,13 @@ class WindowsNativeBrokerAdapter:
         if lease is None or lease.backend_instance_id != backend_id:
             raise SandboxInitializationError("Broker process is unavailable")
         process = lease.process
-        if lease.failure_code is not None:
-            raise SandboxResourceExceeded("Broker process exceeded a sandbox resource limit")
+        if lease.failure_code is not None and operation not in {"process_terminate", "process_kill"}:
+            failure = SandboxResourceExceeded(
+                lease.failure_message or "Broker process exceeded a sandbox resource limit"
+            )
+            if lease.failure_report is not None:
+                failure.error_report = lease.failure_report
+            raise failure
         if operation == "process_poll":
             return {"returncode": process.poll()}
         if operation == "process_wait":
@@ -381,6 +439,7 @@ class WindowsNativeBrokerAdapter:
         if failures:
             raise SandboxInitializationError("Broker Job cleanup failed") from failures[0]
         if lease is not None:
+            self.aggregate.release(process_id)
             with self._lock:
                 if self._processes.get(process_id) is lease:
                     self._processes.pop(process_id)
@@ -428,6 +487,8 @@ class WindowsNativeBrokerAdapter:
             if lease is None:
                 return
             lease.failure_code = "resource_exceeded"
+            lease.failure_message = str(_error)
+            lease.failure_report = error_report(_error)
         lease.process.terminate()
 
     def _expire_loop(self) -> None:

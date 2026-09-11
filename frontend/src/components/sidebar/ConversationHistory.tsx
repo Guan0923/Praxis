@@ -13,7 +13,7 @@ export function confirmDelete(
 ) {
   confirm({
     title: `删除“${title || "新对话"}”？`,
-    content: "删除后将从界面隐藏，但后台仍保留审计数据。确定继续吗？",
+    content: "删除会停止该对话的任务和终端，清空排队消息；后台保留正式历史。确定继续吗？",
     okText: "删除",
     cancelText: "取消",
     okButtonProps: { danger: true },
@@ -63,7 +63,7 @@ function HistoryActions({ conversation, onRename, onArchive, onDelete }: History
       { key: "rename", label: "重命名", icon: <EditOutlined /> },
       { type: "divider" },
       { key: "archive", label: "归档", icon: <InboxOutlined />, disabled: busy },
-      { key: "delete", label: "删除", icon: <DeleteOutlined />, danger: true, disabled: busy },
+      { key: "delete", label: "删除", icon: <DeleteOutlined />, danger: true },
     ],
     onClick: ({ key }) => {
       if (key === "rename") {

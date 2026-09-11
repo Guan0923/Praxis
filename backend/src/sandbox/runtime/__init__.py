@@ -4,10 +4,6 @@ from importlib import import_module
 from typing import Any
 
 _EXPORTS = {
-    "AggregateLimits": ("admission", "AggregateLimits"),
-    "ResourceRequest": ("admission", "ResourceRequest"),
-    "SandboxAdmission": ("admission", "SandboxAdmission"),
-    "SandboxAdmissionTimeout": ("admission", "SandboxAdmissionTimeout"),
     "SandboxLauncher": ("launcher", "SandboxLauncher"),
     "ResourceManifest": ("manifest", "ResourceManifest"),
     "ResourceRecord": ("manifest", "ResourceRecord"),

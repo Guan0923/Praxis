@@ -179,10 +179,13 @@ def test_sidebar_summary_crud_responses_keep_the_same_contract(tmp_path: Path) -
         assert [item["thread_id"] for item in client.get("/api/sidebar-threads?state=active").json()] == [
             created["thread_id"]
         ]
-        deleted = client.delete(f"/api/sidebar-threads/{created['thread_id']}").json()
+        deleted = client.delete(
+            f"/api/sidebar-threads/{created['thread_id']}", params={"session_id": created["session_id"]}
+        )
         assert expected <= archived.keys()
         assert expected <= restored.keys()
-        assert expected <= deleted.keys()
+        assert deleted.status_code == 204
+        assert deleted.content == b""
         assert [item["thread_id"] for item in client.get("/api/sidebar-threads?state=deleted").json()] == [
             created["thread_id"]
         ]

@@ -13,6 +13,7 @@ from backend.sandbox import (
     NetworkRule,
     ResourceLimits,
 )
+from backend.sandbox.runtime.aggregate import aggregate_limits, default_aggregate_limits
 
 DEFAULT_PROFILE: dict[str, str] = {"display_name": "", "agent_preferences": ""}
 DEFAULT_AGENT_CONFIG: dict[str, object] = {
@@ -62,6 +63,7 @@ DEFAULT_SANDBOX_CONFIG: dict[str, object] = {
     "network_allowlist": [],
     "proxy_port": 17831,
     "limits": ResourceLimits().to_dict(),
+    "aggregate_limits": default_aggregate_limits(),
 }
 
 
@@ -170,6 +172,7 @@ def normalize_sandbox_config(
         "network_allowlist": allowlist,
         "proxy_port": raw_proxy_port,
         "limits": limits.to_dict(),
+        "aggregate_limits": aggregate_limits(dict(result.get("aggregate_limits") or default_aggregate_limits())),
     }
 
 

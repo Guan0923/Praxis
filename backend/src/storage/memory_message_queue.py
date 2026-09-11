@@ -43,6 +43,7 @@ class MemoryMessageQueue:
         self._lock = RLock()
         self._condition = Condition(self._lock)
         self._closed = False
+        self._deleted_threads: set[str] = set()
         self.on_change = None
 
     @property
@@ -84,6 +85,33 @@ class MemoryMessageQueue:
                         envelope.delivery_id, envelope.target_id, envelope.session_id, envelope.thread_id
                     )
                     self._receipts[delivery_id] = (fingerprint, status, receipt)
+
+    def require_thread_open(self, thread_id: str) -> None:
+        with self._lock:
+            if thread_id in self._deleted_threads:
+                raise QueueItemStateConflict("Conversation has been deleted.")
+
+    def restore_threads(self, thread_ids: set[str]) -> None:
+        with self._condition:
+            self._deleted_threads.difference_update(thread_ids)
+            self._condition.notify_all()
+
+    def discard_threads(self, thread_ids: set[str]) -> None:
+        with self._condition:
+            self._deleted_threads.update(thread_ids)
+            for thread_id in thread_ids:
+                self._queues.pop(thread_id, None)
+                self._thread_streams.pop(thread_id, None)
+                self._report_streams.pop(thread_id, None)
+            self._turn_start_stream[:] = [
+                entry for entry in self._turn_start_stream if entry[1].thread_id not in thread_ids
+            ]
+            for key, entries in list(self._streams.items()):
+                self._streams[key] = [entry for entry in entries if entry[1].thread_id not in thread_ids]
+            for delivery_id, (_, _, envelope) in list(self._receipts.items()):
+                if envelope.thread_id in thread_ids:
+                    self._receipts.pop(delivery_id, None)
+            self._condition.notify_all()
 
     def ping(self) -> None:
         with self._lock:
@@ -141,6 +169,7 @@ class MemoryMessageQueue:
     def create(self, item: QueuedMessage) -> tuple[QueuedMessage, bool]:
         with self._lock:
             self.ping()
+            self.require_thread_open(item.thread_id)
             items = self._queues.setdefault(item.thread_id, [])
             existing = next((value for value in items if value.id == item.id), None)
             if existing is not None:
@@ -190,6 +219,7 @@ class MemoryMessageQueue:
     ) -> MessageEnvelope | AcknowledgedDelivery:
         with self._lock:
             self.ping()
+            self.require_thread_open(thread_id)
             fingerprint = _fingerprint(thread_id, turn_id, message_ids)
             receipt = self._receipts.get(delivery_id)
             if receipt is not None:
@@ -247,6 +277,7 @@ class MemoryMessageQueue:
             raise ValueError("Turn-start dispatch requires sender_kind=user and target_kind=turn_start.")
         with self._lock:
             self.ping()
+            self.require_thread_open(envelope.thread_id)
             fingerprint = _envelope_fingerprint(envelope)
             receipt = self._receipts.get(envelope.delivery_id)
             if receipt is not None:
@@ -265,6 +296,7 @@ class MemoryMessageQueue:
             raise ValueError("Agent dispatch requires sender_kind=agent and target_kind=thread.")
         with self._lock:
             self.ping()
+            self.require_thread_open(envelope.thread_id)
             fingerprint = _envelope_fingerprint(envelope)
             receipt = self._receipts.get(envelope.delivery_id)
             if receipt is not None:
@@ -283,6 +315,7 @@ class MemoryMessageQueue:
             raise ValueError("Report dispatch requires sender_kind=agent and target_kind=report.")
         with self._lock:
             self.ping()
+            self.require_thread_open(envelope.thread_id)
             fingerprint = _envelope_fingerprint(envelope)
             receipt = self._receipts.get(envelope.delivery_id)
             if receipt is not None:
@@ -345,7 +378,7 @@ class MemoryMessageQueue:
     def ack(self, claimed: ClaimedEnvelope) -> None:
         with self._lock:
             envelope = claimed.envelope
-            if self._closed:
+            if self._closed or envelope.thread_id in self._deleted_threads:
                 return
             if envelope.target_kind in {"thread", "report"}:
                 streams = self._thread_streams if envelope.target_kind == "thread" else self._report_streams

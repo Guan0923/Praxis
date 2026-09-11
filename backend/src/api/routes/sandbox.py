@@ -44,48 +44,48 @@ def repair(request: Request) -> dict[str, object] | JSONResponse:
     try:
         with gate.acquire_maintenance():
             broker = _broker(request)
-            manifest_path = Path(getattr(state, "sandbox_manifest_path", BrokerConfiguration.create().manifest_path))
-            if _manifest_has_records(manifest_path):
-                try:
-                    broker.reclaim_stale()
-                except Exception as exc:
-                    return JSONResponse(
-                        status_code=409,
-                        content={
-                            "code": "broker_jobs_active",
-                            "detail": safe_error_message(exc),
-                            "error_report": error_report(exc),
-                        },
-                    )
+
+            def before_repair():
+                manifest_path = Path(
+                    getattr(state, "sandbox_manifest_path", BrokerConfiguration.create().manifest_path)
+                )
                 if _manifest_has_records(manifest_path):
-                    return _jobs_active_response("仍有沙箱命令资源正在使用，无法修复 Broker。")
-            current = _broker_payload(broker.status())
-            operation = broker.install if current.get("installed") is not True else broker.repair
-            return _broker_payload(operation())
+                    try:
+                        broker.reclaim_stale()
+                        if _manifest_has_records(manifest_path):
+                            raise RuntimeError("仍有沙箱命令资源正在使用，无法修复 Broker。")
+                    except Exception as exc:
+                        exc.broker_recovery_code = "broker_jobs_active"
+                        exc.api_status_code = 409
+                        raise
+
+            return _broker_payload(broker.repair(before_repair=before_repair))
     except SandboxMaintenanceBusy:
         if gate.maintenance_active:
             return JSONResponse(
                 status_code=409,
-                content={"detail": "Broker 正在修复，请等待当前修复完成。", "code": "broker_maintenance_busy"},
+                content={"detail": "Broker 正在恢复，请等待当前恢复完成。", "code": "broker_maintenance_busy"},
             )
         return _jobs_active_response("仍有沙箱命令正在运行或等待启动，无法修复 Broker。")
+    except HTTPException:
+        raise
     except BrokerInstallationError as exc:
-        logger.warning("sandbox broker repair failed code=%s", exc.broker_code.value, exc_info=False)
+        logger.warning("sandbox broker recovery failed code=%s", exc.broker_code.value, exc_info=False)
         return JSONResponse(
             status_code=503,
             content={
                 "detail": safe_error_message(exc),
-                "code": exc.broker_code.value,
+                "code": getattr(exc, "broker_recovery_code", exc.broker_code.value),
                 "error_report": error_report(exc),
             },
         )
     except Exception as exc:
         logger.warning("sandbox broker repair failed code=%s", type(exc).__name__, exc_info=False)
         return JSONResponse(
-            status_code=503,
+            status_code=getattr(exc, "api_status_code", 503),
             content={
                 "detail": safe_error_message(exc),
-                "code": "broker_install_failed",
+                "code": getattr(exc, "broker_recovery_code", "broker_install_failed"),
                 "error_report": error_report(exc),
             },
         )

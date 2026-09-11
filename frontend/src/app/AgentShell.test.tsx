@@ -112,10 +112,8 @@ function makeProps(overrides: Partial<AgentShellProps> = {}): AgentShellProps {
       checking: false,
       autoRecoveryPhase: "idle",
       nextRetryAt: null,
-      manualRepairing: false,
       check: vi.fn().mockResolvedValue({ installed: true, healthy: true }),
       notifyUserBackendRequest: vi.fn(),
-      repairManually: vi.fn().mockResolvedValue(undefined),
     },
     ...overrides,
   };

@@ -79,10 +79,17 @@ class SandboxNetworkRulePayload(BaseModel):
     port: StrictInt | None = Field(default=None, ge=1, le=65535)
 
 
+class SandboxAggregateLimitsPayload(BaseModel):
+    memory_mib: int = Field(gt=0, strict=True)
+    processes: int = Field(gt=0, strict=True)
+    handles: int = Field(gt=0, strict=True)
+
+
 class SandboxConfigPayload(BaseModel):
     network_mode: Literal["no_network", "restricted_network", "full_network"] = "no_network"
     network_allowlist: list[SandboxNetworkRulePayload] = Field(default_factory=list, max_length=64)
     limits: SandboxLimitsPayload = Field(default_factory=SandboxLimitsPayload)
+    aggregate_limits: SandboxAggregateLimitsPayload | None = None
 
 
 class ProviderConfigPayload(BaseModel):
@@ -190,10 +197,21 @@ def update_memory(body: MemoryConfigPayload, request: Request) -> dict[str, obje
         return error_response(exc, status_code=_value_error(exc).status_code)
 
 
+@router.get("/sandbox/resources")
+def sandbox_resources(request: Request) -> dict[str, object]:
+    return request.app.state.web.sandbox_broker.resource_request("resource_status")
+
+
 @router.put("/sandbox")
 def update_sandbox(body: SandboxConfigPayload, request: Request) -> dict[str, object]:
     try:
-        return _settings(request).update_sandbox_config(body.model_dump())
+        values = body.model_dump(exclude_none=True)
+        result = _settings(request).update_sandbox_config(values)
+        if body.aggregate_limits is not None:
+            request.app.state.web.sandbox_broker.resource_request(
+                "resource_configure", limits=result["aggregate_limits"]
+            )
+        return result
     except ValueError as exc:
         return error_response(exc, status_code=_value_error(exc).status_code)
 

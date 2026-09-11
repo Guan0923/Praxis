@@ -31,6 +31,7 @@ class ToolInvocationContext:
     clock: Callable[[], str] = utc_now
     job_scope: object | None = None
     cancel_requested: Callable[[], bool] | None = None
+    resource_wait: Callable[[dict], None] | None = None
     register_abort: Callable[[Callable[[], None]], Callable[[], None]] | None = None
     sandbox_decision: SandboxExecutionDecision | None = None
 

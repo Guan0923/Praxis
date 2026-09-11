@@ -3,6 +3,8 @@
 from collections import OrderedDict
 from dataclasses import dataclass, field
 
+from backend.domain import QueueItemStateConflict
+
 
 @dataclass
 class ConversationCacheEntry:
@@ -31,9 +33,16 @@ class ConversationCache:
             self._owners[thread_id] = owner
         return owner
 
+    def _require_open(self, session_id: str, owner: str) -> None:
+        self.state.message_queue.require_thread_open(owner)
+        item = self.state.session_store.get_sidebar_thread(owner, session_id=session_id)
+        if item is not None and item.deleted_at is not None:
+            raise QueueItemStateConflict("Conversation has been deleted.")
+
     def touch(self, session_id: str, thread_id: str, turns=()) -> None:
         owner = self.owner(session_id, thread_id)
         with self.lock:
+            self._require_open(session_id, owner)
             entry = self.entries.setdefault(owner, ConversationCacheEntry(session_id))
             entry.threads.add(thread_id)
             entry.turns.update(turns)
@@ -43,6 +52,7 @@ class ConversationCache:
     def begin(self, session_id: str, thread_id: str, turn_id: str) -> None:
         owner = self.owner(session_id, thread_id)
         with self.lock:
+            self._require_open(session_id, owner)
             entry = self.entries.setdefault(owner, ConversationCacheEntry(session_id))
             entry.threads.add(thread_id)
             entry.turns.add(turn_id)
@@ -63,6 +73,22 @@ class ConversationCache:
     def contains(self, thread_id: str) -> bool:
         with self.lock:
             return self._owners.get(thread_id, thread_id) in self.entries
+
+    def release(self, thread_id: str) -> None:
+        with self.lock:
+            entry = self.entries.pop(thread_id, None)
+            if entry is None:
+                self.state.terminal_manager.close_thread(thread_id)
+                return
+            retained = set().union(*(value.turns for value in self.entries.values())) if self.entries else set()
+            turns = entry.turns - retained
+            for thread in entry.threads:
+                self.state.runtime_event_stream.release_thread(thread, turns)
+                self.state.agent_thread_events.release_thread(entry.session_id, thread)
+                self.state.terminal_manager.close_thread(thread)
+                self.state.message_queue.release_thread_cache(thread, tuple(turns))
+                self._owners.pop(thread, None)
+            self.state.todo_store.release_turns(entry.session_id, turns)
 
     def trim(self) -> None:
         with self.lock:

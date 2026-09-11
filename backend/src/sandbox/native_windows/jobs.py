@@ -79,9 +79,11 @@ class WindowsJobObject:
             pids = tuple(int(value) for value in process_ids if int(value) > 0)
             handles = sum(self._handle_count(pid) for pid in pids)
             total_time_100ns = int(basic.get("TotalUserTime", 0)) + int(basic.get("TotalKernelTime", 0))
+            memory_bytes = sum(self._private_memory(pid) for pid in pids)
             return {
                 "cpu_seconds": total_time_100ns / 10_000_000,
-                "memory_bytes": int(extended.get("PeakJobMemoryUsed", 0)),
+                "memory_bytes": memory_bytes,
+                "peak_memory_bytes": int(extended.get("PeakJobMemoryUsed", 0)),
                 "processes": len(pids),
                 "handles": handles,
                 "write_io_bytes": int(io.get("WriteTransferCount", 0)),
@@ -90,17 +92,41 @@ class WindowsJobObject:
             raise OSError("sandbox Job Object usage could not be sampled") from exc
 
     @staticmethod
+    def _private_memory(pid: int) -> int:
+        import win32api
+        import win32process
+
+        try:
+            handle = win32api.OpenProcess(0x0400 | 0x0010, False, pid)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 87:
+                return 0
+            raise
+        try:
+            return int(win32process.GetProcessMemoryInfo(handle)["PagefileUsage"])
+        finally:
+            handle.Close()
+
+    @staticmethod
     def _handle_count(pid: int) -> int:
-        process = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
-        if not process:
-            return 0
+        import win32api
+
+        try:
+            process = win32api.OpenProcess(0x1000, False, pid)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 87:
+                return 0
+            raise
         try:
             count = ctypes.c_uint32()
-            if not ctypes.windll.kernel32.GetProcessHandleCount(process, ctypes.byref(count)):
-                return 0
+            get_count = ctypes.WinDLL("kernel32", use_last_error=True).GetProcessHandleCount
+            get_count.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+            get_count.restype = ctypes.c_int
+            if not get_count(int(process), ctypes.byref(count)):
+                raise ctypes.WinError(ctypes.get_last_error())
             return int(count.value)
         finally:
-            ctypes.windll.kernel32.CloseHandle(process)
+            process.Close()
 
     def close(self) -> None:
         if self.handle is None:

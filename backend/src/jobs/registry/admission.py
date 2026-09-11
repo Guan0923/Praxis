@@ -17,6 +17,8 @@ class _AdmissionRegistryMixin:
 
     def _admission_decision_locked(self, record: _Record) -> str:
         """Return 'admit', 'queue', or 'reject' under the current limits."""
+        if (record.owner.session_id, record.owner.thread_id) in self._blocked_threads:
+            return "reject"
         if record.admission.slot_mode is SlotMode.UNMETERED:
             return "admit"
         if record.admission.slot_mode is SlotMode.INHERIT and self._inherited_lease_locked(record) is not None:
@@ -34,9 +36,16 @@ class _AdmissionRegistryMixin:
     def _finish_admission(self, record: _Record, action: str) -> ScopedJobInfo:
         if action == "admit":
             with self._lock:
-                self._admit_locked(record)
-                to_start = [record.job]
+                blocked = (record.owner.session_id, record.owner.thread_id) in self._blocked_threads
+                if not blocked and record.job.info().state is JobState.PENDING:
+                    self._admit_locked(record)
+                    to_start = [record.job]
+                else:
+                    to_start = []
                 self._cond.notify_all()
+            if blocked:
+                record.job.cancel("conversation deleted")
+                raise JobAdmissionRejected(record.job.info().id)
             self._start_jobs(to_start)
             with self._lock:
                 return self._build_info(record)
@@ -161,6 +170,8 @@ class _AdmissionRegistryMixin:
             job_id = queue.popleft()
             record = self._records.get(job_id)
             if record is None or record.job.info().state is not JobState.PENDING:
+                continue
+            if (record.owner.session_id, record.owner.thread_id) in self._blocked_threads:
                 continue
             session = record.owner.session_id
             if session is not None and session in admitted_sessions:

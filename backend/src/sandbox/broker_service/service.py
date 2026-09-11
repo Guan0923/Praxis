@@ -203,6 +203,10 @@ class WindowsBrokerService:
                 "proxy_port": ready.get("proxy_port"),
                 "token_model": ready.get("token_model"),
             }
+        if operation.startswith("resource_"):
+            if self.adapter is None:
+                raise SandboxInitializationError("Broker resource manager is unavailable")
+            return dict(self.adapter.resource_control(operation, body))
         if operation == "reserve":
             if not self.installed or self.adapter is None:
                 raise SandboxInitializationError("Broker is not ready to reserve jobs")

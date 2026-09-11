@@ -1,3 +1,4 @@
+import { deletedConversations } from "./conversationDeletion";
 import { trimConversationDetails } from "./conversationCache";
 import { ErrorDisplay } from "../components/ErrorDisplay";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -58,7 +59,13 @@ function AgentApp() {
   const { message } = AntApp.useApp();
   const [profile, setProfile] = useState<LocalProfile>({ display_name: "本地用户", agent_preferences: "" });
   const [page, setPage] = useState<Page>("chat");
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversations, rawSetConversations] = useState<Conversation[]>([]);
+  const setConversations = useCallback((update: React.SetStateAction<Conversation[]>) => {
+    rawSetConversations((previous) => {
+      const next = typeof update === "function" ? update(previous) : update;
+      return next.filter((item) => !deletedConversations.has(item.id));
+    });
+  }, []);
   const [archiveReadState, setArchiveReadState] = useState<ArchiveReadState>(() => loadArchiveReadState());
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<Error | string | null>(null);

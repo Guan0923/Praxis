@@ -109,13 +109,16 @@ def test_broker_status_reports_only_confirmed_missing_service_as_not_installed()
 
 
 @pytest.mark.parametrize("old_key", [b"o" * 32, b"n" * 32])
-def test_repair_runs_even_when_healthy_and_reloads_the_installation_key(old_key: bytes) -> None:
+def test_repair_only_when_unhealthy_and_reloads_the_installation_key(old_key: bytes) -> None:
     new_key = b"n" * 32
     calls: list[str] = []
 
     class Installer:
         def repair(self) -> None:
             calls.append("repair")
+
+        def service_state(self):
+            return {"state": "running", "exit_code": 0, "service_exit_code": 0}
 
         def service_installed(self) -> bool:
             return True
@@ -139,7 +142,7 @@ def test_repair_runs_even_when_healthy_and_reloads_the_installation_key(old_key:
     status = client.repair()
 
     assert status.healthy is True
-    assert calls == ["repair", "load"]
+    assert calls == ([] if old_key == new_key else ["repair", "load"])
 
 
 def test_broker_status_preserves_safe_initialization_detail_for_installed_service() -> None:
@@ -864,6 +867,9 @@ def test_install_route_returns_safe_category_and_code() -> None:
                 "需要管理员权限才能安装沙箱 Broker。",
             )
 
+        def repair(self, *, before_repair=None):
+            return self.install()
+
     app = types.SimpleNamespace(
         state=types.SimpleNamespace(
             web=types.SimpleNamespace(
@@ -906,7 +912,9 @@ def test_repair_route_returns_safe_stop_category_and_code() -> None:
         def status(self):
             return {"installed": True, "healthy": False}
 
-        def repair(self):
+        def repair(self, *, before_repair=None):
+            if before_repair is not None:
+                before_repair()
             raise BrokerInstallationError(BrokerInstallFailureCode.SERVICE_STOP_FAILED, message)
 
     app = types.SimpleNamespace(
@@ -954,7 +962,9 @@ def test_repair_route_preserves_every_failure_code_and_complete_detail(
         def status(self):
             return {"installed": True, "healthy": False}
 
-        def repair(self):
+        def repair(self, *, before_repair=None):
+            if before_repair is not None:
+                before_repair()
             raise BrokerInstallationError(failure_code, message)
 
     app = types.SimpleNamespace(
@@ -1000,9 +1010,10 @@ def test_repair_route_installs_when_broker_is_missing() -> None:
             calls.append("install")
             return {"installed": True, "healthy": True}
 
-        def repair(self):
-            calls.append("repair")
-            return {"installed": True, "healthy": True}
+        def repair(self, *, before_repair=None):
+            if before_repair is not None:
+                before_repair()
+            return self.install()
 
     app = types.SimpleNamespace(
         state=types.SimpleNamespace(
@@ -1045,7 +1056,7 @@ def test_maintenance_gate_rejects_overlap_in_both_directions() -> None:
     assert gate.maintenance_active is False
 
 
-def test_repair_route_forces_healthy_broker_replacement(tmp_path: Path) -> None:
+def test_repair_route_delegates_to_broker_recovery(tmp_path: Path) -> None:
     calls: list[str] = []
 
     class Broker:
@@ -1056,7 +1067,9 @@ def test_repair_route_forces_healthy_broker_replacement(tmp_path: Path) -> None:
             calls.append("reclaim")
             return ()
 
-        def repair(self):
+        def repair(self, *, before_repair=None):
+            if before_repair is not None:
+                before_repair()
             calls.append("repair")
             return {"installed": True, "healthy": True}
 
@@ -1140,7 +1153,9 @@ def test_repair_route_rejects_unreclaimed_or_invalid_manifest(
             calls.append("reclaim")
             return ()
 
-        def repair(self):
+        def repair(self, *, before_repair=None):
+            if before_repair is not None:
+                before_repair()
             calls.append("repair")
             return {"installed": True, "healthy": True}
 
@@ -1186,7 +1201,9 @@ def test_repair_route_reclaims_confirmed_stale_manifest_before_replacement(tmp_p
             manifest_path.write_text(json.dumps({"records": []}), encoding="utf-8")
             return ("stale",)
 
-        def repair(self):
+        def repair(self, *, before_repair=None):
+            if before_repair is not None:
+                before_repair()
             calls.append("repair")
             return {"installed": True, "healthy": True}
 

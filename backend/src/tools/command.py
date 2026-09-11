@@ -26,7 +26,6 @@ from backend.jobs import (
 )
 from backend.sandbox import (
     SandboxExecutionDecision,
-    SandboxMaintenanceBusy,
     TerminalKind,
 )
 
@@ -90,7 +89,6 @@ class WorkspaceCommand:
 
         parent_scope, private_registry = self._resolve_scope(context)
         job: SubprocessJob | None = None
-        command_lease = None
         try:
             task_scope = parent_scope.child(
                 JobScopeKind.TASK,
@@ -109,10 +107,6 @@ class WorkspaceCommand:
             effective_timeout = None
             decision = context.sandbox_decision
             if isinstance(decision, SandboxExecutionDecision):
-                try:
-                    command_lease = decision.launcher.command_lease()
-                except SandboxMaintenanceBusy:
-                    raise
                 if self._terminal_type == "wsl":
                     raise ToolError("WSL is disabled for sandboxed run_command execution.")
                 policy = decision.command_policy(job_id, TerminalKind(self._terminal_type))
@@ -135,22 +129,36 @@ class WorkspaceCommand:
                 str(self._workspace),
                 effective_timeout,
                 interactive=True,
-                command_lease=command_lease,
                 **job_options,
             )
-            task_scope.submit(
-                job,
-                lane=JobLane.FOREGROUND,
-                admission=AdmissionPolicy(slot_mode=SlotMode.INHERIT),
-            )
-            command_lease = None
+            if isinstance(decision, SandboxExecutionDecision):
+                decision.launcher.wait_resources(
+                    job_id,
+                    cancelled=context.cancel_requested,
+                    notify=context.resource_wait,
+                )
+            try:
+                if context.cancel_requested is not None and context.cancel_requested():
+                    raise InterruptedError("Command cancelled before launch.")
+                task_scope.submit(
+                    job,
+                    lane=JobLane.FOREGROUND,
+                    admission=AdmissionPolicy(slot_mode=SlotMode.INHERIT),
+                )
+                if isinstance(decision, SandboxExecutionDecision) and not job.info().pids:
+                    raise InterruptedError("Command cancelled before launch.")
+            except BaseException as original:
+                if isinstance(decision, SandboxExecutionDecision):
+                    try:
+                        decision.launcher.cancel_resource_wait(job_id)
+                    except Exception as cleanup:
+                        original.add_note(f"Resource wait cleanup failed: {cleanup}")
+                raise
             with self._session_lock:
                 self._sessions[job_id] = (job, context, private_registry)
                 job.release_callback = lambda: self._release(job_id)
             return self._read(job, context, yield_time_ms, max_output_tokens)
         except BaseException:
-            if command_lease is not None:
-                command_lease.close()
             if private_registry is not None:
                 private_registry.close_all(reason="command start failed", timeout=5.0)
             raise

@@ -1,5 +1,5 @@
 import type { SidebarThread } from "../../types";
-import { requestJson } from "../transport/request";
+import { requestJson, requestVoid } from "../transport/request";
 
 export type SidebarThreadSort = "created_at" | "recent_activity";
 
@@ -54,6 +54,6 @@ export async function restoreSidebarThread(threadId: string, sessionId?: string)
   return requestJson(`/api/sidebar-threads/${encodeURIComponent(threadId)}/restore`, { method: "POST", operation: { sessionId } });
 }
 
-export async function deleteSidebarThread(threadId: string, sessionId?: string): Promise<SidebarThread> {
-  return requestJson(`/api/sidebar-threads/${encodeURIComponent(threadId)}`, { method: "DELETE", operation: { sessionId } });
+export async function deleteSidebarThread(threadId: string, sessionId: string): Promise<void> {
+  return requestVoid(`/api/sidebar-threads/${encodeURIComponent(threadId)}?session_id=${encodeURIComponent(sessionId)}`, { method: "DELETE", operation: { sessionId } });
 }

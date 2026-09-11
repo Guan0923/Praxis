@@ -64,11 +64,29 @@ export interface SandboxNetworkRule {
   port?: number;
 }
 
+export interface SandboxAggregateLimits {
+  memory_mib: number;
+  processes: number;
+  handles: number;
+}
+
+export interface SandboxResourceStatus {
+  usage: { memory_bytes: number; processes: number; handles: number };
+  limits: SandboxAggregateLimits;
+  queued: number;
+  error_report?: import("./errorReport").ErrorReport | null;
+}
+
+export function getSandboxResources(): Promise<SandboxResourceStatus> {
+  return requestJson("/api/settings/sandbox/resources");
+}
+
 export interface SandboxConfig {
   network_mode: SandboxNetworkMode;
   network_allowlist: SandboxNetworkRule[];
   readonly proxy_port: number;
   limits: SandboxLimits;
+  aggregate_limits?: SandboxAggregateLimits;
 }
 
 export interface TerminalOption {
@@ -285,6 +303,7 @@ export function updateSandboxConfig(config: SandboxConfig): Promise<SandboxConfi
 }
 
 export interface SandboxBrokerStatus {
+  service_state?: string | null;
   error_report?: import("./errorReport").ErrorReport | null;
   installed: boolean;
   healthy: boolean;

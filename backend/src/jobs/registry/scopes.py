@@ -8,6 +8,7 @@ from ..base import TERMINAL_STATES, Job, JobState
 from ..errors import JobNotFound, JobQueueFull, JobRegistrationError
 from ..scheduling import AdmissionPolicy, JobLane
 from ..scope import JobScope, JobScopeKind, _merge_owner
+from ..thread_job import ThreadJob
 from .models import CloseReport, JobQuery, ScopedJobInfo
 
 
@@ -29,6 +30,8 @@ class _ScopeRegistryMixin:
         with self._lock:
             self._require_open_scope_locked(parent)
             owner = _merge_owner(parent.owner, session_id=session_id, thread_id=thread_id, run_id=run_id)
+            if (owner.session_id, owner.thread_id) in self._blocked_threads:
+                raise JobRegistrationError("Conversation has been deleted.")
             scope = JobScope(self, self._next_scope_id(), kind, parent, parent_job_id, owner)
             self._scopes[scope.scope_id] = scope
             return scope
@@ -37,13 +40,46 @@ class _ScopeRegistryMixin:
         with self._lock:
             return scope.scope_id in self._closed_scopes
 
+    def unblock_threads(self, session_id: str, thread_ids: set[str]) -> None:
+        with self._lock:
+            self._blocked_threads.difference_update((session_id, thread_id) for thread_id in thread_ids)
+
+    def block_threads(self, session_id: str, thread_ids: set[str]) -> None:
+        with self._lock:
+            self._blocked_threads.update((session_id, thread_id) for thread_id in thread_ids)
+            pending = [
+                record.job
+                for record in self._records.values()
+                if record.owner.session_id == session_id
+                and record.owner.thread_id in thread_ids
+                and (record.job.info().state is JobState.PENDING or isinstance(record.job, ThreadJob))
+            ]
+        for job in pending:
+            job.cancel("conversation deleted")
+
+    def close_threads(self, session_id: str, thread_ids: set[str], timeout: float = 10.0) -> None:
+        with self._lock:
+            scopes = [
+                scope
+                for scope in self._scopes.values()
+                if scope.owner.session_id == session_id
+                and scope.owner.thread_id in thread_ids
+                and scope.kind is JobScopeKind.THREAD
+            ]
+        for scope in scopes:
+            report = self._close_scope(scope, timeout, raise_errors=True)
+            if report.failed or report.timed_out or self.active_count(scope=scope):
+                raise RuntimeError(
+                    f"Conversation cleanup incomplete: failed={report.failed}, timed_out={report.timed_out}"
+                )
+
     def close_all(self, reason: str = "", timeout: float | None = None) -> CloseReport:
         """Close the root scope: every scope and job in the process."""
         return self._close_scope(self._root, timeout)
 
-    def _close_scope(self, scope: JobScope, timeout: float | None) -> CloseReport:
+    def _close_scope(self, scope: JobScope, timeout: float | None, *, raise_errors: bool = False) -> CloseReport:
         with self._lock:
-            if scope.scope_id in self._closed_scopes:
+            if scope.scope_id in self._closed_scopes and not raise_errors:
                 return CloseReport()
             scopes = self._collect_scopes_locked(scope)
             for candidate in scopes:
@@ -62,12 +98,14 @@ class _ScopeRegistryMixin:
         closed: list[str] = []
         timed_out: list[str] = []
         failed: list[str] = []
+        errors: list[Exception] = []
         for job in pending:
             try:
                 if job.info().state is JobState.PENDING:
                     job.cancel("scope closed")
                     closed.append(job.info().id)
-            except Exception:
+            except Exception as exc:
+                errors.append(exc)
                 failed.append(job.info().id)
         # Close running jobs deepest scope first, sharing the deadline.
         running.sort(key=lambda item: item[0], reverse=True)
@@ -82,7 +120,8 @@ class _ScopeRegistryMixin:
                     closed.append(job.info().id)
                 else:
                     timed_out.append(job.info().id)
-            except Exception:
+            except Exception as exc:
+                errors.append(exc)
                 failed.append(job.info().id)
         with self._lock:
             releasable = [
@@ -93,7 +132,15 @@ class _ScopeRegistryMixin:
         for job in releasable:
             release = getattr(job, "release_output", None)
             if callable(release):
-                release()
+                try:
+                    release()
+                except Exception as exc:
+                    if not raise_errors:
+                        raise
+                    errors.append(exc)
+                    failed.append(job.info().id)
+        if raise_errors and errors:
+            raise errors[0]
         return CloseReport(tuple(closed), tuple(timed_out), tuple(failed))
 
     def _collect_scopes_locked(self, scope: JobScope) -> list[JobScope]:

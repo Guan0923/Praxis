@@ -181,6 +181,7 @@ function runtimeToolName(item: TurnItem): string {
 function runtimeActiveLabel(item: TurnItem, minimal = false): string {
   if (item.type === "reasoning") return minimal ? "思考中" : "正在思考中";
   const tool = runtimeToolName(item);
+  if (item.execution_stage === "waiting_resources") return `${tool} 等待资源`;
   return item.type === "tool_call" ? `正在调用 ${tool}` : `正在处理 ${tool} 结果`;
 }
 
@@ -346,6 +347,7 @@ function parallelToolStatus(call: TurnItem, result?: TurnItem): string {
   if (result?.status === "success") return "成功";
   const stage = String(call.execution_stage ?? "");
   if (stage === "waiting_approval") return "待审批";
+  if (stage === "waiting_resources") return "等待资源";
   if (stage === "queued") return "排队中";
   if (stage === "running") return "运行中";
   return call.status === "failed" ? "失败" : "等待中";

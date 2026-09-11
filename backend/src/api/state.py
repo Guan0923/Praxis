@@ -82,6 +82,9 @@ class WebAppState:
         from .conversation_cache import ConversationCache
 
         self.conversation_cache = ConversationCache(self)
+        from .conversation_deletion import ConversationDeletion
+
+        self.conversation_deletion = ConversationDeletion(self)
         self.message_queue.on_change = self.conversation_cache.trim
         self.agent_thread_index = AgentThreadIndex()
 
@@ -291,6 +294,7 @@ class WebAppState:
             self.closing = True
         actions = [
             self.turn_message_worker.close,
+            self.conversation_deletion.close,
             self.subagent_coordinator.close,
             self.message_queue.close,
             self.memory_automation.close,

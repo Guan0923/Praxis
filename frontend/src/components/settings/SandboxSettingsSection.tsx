@@ -1,6 +1,7 @@
+import { getSandboxResources, type SandboxResourceStatus, type SandboxAggregateLimits } from "../../api/settings";
 import { useEffect, useState } from "react";
 import { ErrorDisplay } from "../ErrorDisplay";
-import { Alert, Button, Col, Form, Input, InputNumber, Popconfirm, Row, Select, Space, Tag, Typography } from "antd";
+import { Alert, Button, Col, Form, Input, InputNumber, Row, Select, Space, Tag, Typography } from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import type { SandboxLimits, SandboxNetworkRule } from "../../api";
 import type { SandboxHealthState } from "../../app/useSandboxHealth";
@@ -9,6 +10,8 @@ import type { UserSettingsState } from "./useUserSettingsState";
 type SectionProps = { state: UserSettingsState };
 
 const brokerErrorTitles: Record<string, string> = {
+  broker_service_state_failed: "沙箱服务状态查询失败",
+  broker_service_not_running: "沙箱服务尚未运行",
   broker_unavailable: "沙箱 Broker 不可用",
   broker_not_installed: "沙箱 Broker 未安装",
   broker_service_configuration_invalid: "Broker 服务配置异常",
@@ -58,15 +61,15 @@ function AutoRecoveryStatus({ health }: { health: SandboxHealthState }) {
     return () => globalThis.clearInterval(timer);
   }, [health.autoRecoveryPhase, health.nextRetryAt]);
 
-  if (health.autoRecoveryPhase === "repairing") return <Tag color="processing">正在自动修复</Tag>;
-  if (health.autoRecoveryPhase === "paused") return <Tag color="error">自动修复已暂停</Tag>;
+  if (health.autoRecoveryPhase === "repairing") return <Tag color="processing">正在恢复沙箱</Tag>;
+  if (health.autoRecoveryPhase === "paused") return <Tag color="error">自动恢复已暂停</Tag>;
   if (health.autoRecoveryPhase === "observing" && health.nextRetryAt !== null) {
     const seconds = Math.max(0, Math.ceil((health.nextRetryAt - now) / 1_000));
-    return <Tag color="warning">{seconds} 秒后自动修复</Tag>;
+    return <Tag color="warning">{seconds} 秒后自动恢复</Tag>;
   }
   if (health.autoRecoveryPhase === "verifying" && health.nextRetryAt !== null) {
     const seconds = Math.max(0, Math.ceil((health.nextRetryAt - now) / 1_000));
-    return <Tag color="processing">正在验证修复，剩余 {seconds} 秒</Tag>;
+    return <Tag color="processing">正在验证恢复，剩余 {seconds} 秒</Tag>;
   }
   return null;
 }
@@ -90,6 +93,26 @@ const limitFields: Array<{
 export function SandboxSettingsSection({ state }: SectionProps) {
   const settings = state.settings!;
   const config = settings.sandbox_config;
+  const [resources, setResources] = useState<SandboxResourceStatus | null>(null);
+  const [resourceError, setResourceError] = useState<Error | null>(null);
+  const sandboxReady = state.sandboxHealth.phase === "healthy";
+  useEffect(() => {
+    if (!sandboxReady) { setResources(null); setResourceError(null); return; }
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try {
+        const next = await getSandboxResources();
+        if (!stopped) { setResources(next); setResourceError(null); }
+      } catch (error) {
+        if (!stopped) setResourceError(error instanceof Error ? error : new Error(String(error)));
+      } finally {
+        if (!stopped) timer = setTimeout(refresh, 1000);
+      }
+    };
+    void refresh();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [sandboxReady]);
 
   function updateAllowlist(index: number, patch: Partial<SandboxNetworkRule>) {
     state.updateSettings({
@@ -106,33 +129,9 @@ export function SandboxSettingsSection({ state }: SectionProps) {
     <Form layout="vertical">
       <Typography.Title level={4}>沙箱</Typography.Title>
       <Space align="center" style={{ marginBottom: 16 }} wrap>
-        <Button
-          loading={state.sandboxHealth.checking}
-          disabled={state.sandboxHealth.autoRecoveryPhase === "repairing" || state.sandboxHealth.manualRepairing}
-          onClick={() => {
-            state.sandboxHealth.notifyUserBackendRequest();
-            void state.sandboxHealth.check();
-          }}
-        >
-          检查
-        </Button>
         {state.sandboxHealth.phase === "healthy" ? <Tag color="success">沙箱已就绪</Tag> : null}
         <AutoRecoveryStatus health={state.sandboxHealth} />
-        <Popconfirm
-          title="覆盖修复 Sandbox Broker？"
-          description="需要 UAC 管理员授权；将更新 Praxis 沙箱配置并保留已有安装数据。仅在没有运行或等待启动的沙箱命令时执行。"
-          okText="覆盖修复"
-          cancelText="取消"
-          disabled={state.sandboxHealth.checking || state.sandboxHealth.autoRecoveryPhase === "repairing" || state.sandboxHealth.manualRepairing}
-          onConfirm={() => state.sandboxHealth.repairManually()}
-        >
-          <Button
-            loading={state.sandboxHealth.manualRepairing}
-            disabled={state.sandboxHealth.checking || state.sandboxHealth.autoRecoveryPhase === "repairing"}
-          >
-            覆盖修复
-          </Button>
-        </Popconfirm>
+
       </Space>
       {state.sandboxHealth.phase === "unhealthy" ? (
         <Alert
@@ -219,6 +218,27 @@ export function SandboxSettingsSection({ state }: SectionProps) {
       </Button>
 
       <Typography.Title level={5} style={{ marginTop: 24 }}>资源限制</Typography.Title>
+      <Typography.Title level={5}>模型命令总资源限制</Typography.Title>
+      <Typography.Text type="secondary">不包含右侧手动终端</Typography.Text>
+      {!sandboxReady && <div>资源用量暂不可用</div>}
+      {resourceError && <ErrorDisplay error={resourceError} />}
+      {resources?.error_report && <ErrorDisplay report={resources.error_report} error="资源统计失败" />}
+      {resources && <div>当前内存 {Math.ceil(resources.usage.memory_bytes / 1048576)} MiB · 进程 {resources.usage.processes} · 句柄 {resources.usage.handles} · 排队 {resources.queued}</div>}
+      <Row gutter={[12, 0]}>
+        {([['memory_mib', '总内存（MiB）'], ['processes', '总进程数'], ['handles', '总句柄数']] as const).map(([key, label]) => (
+          <Col xs={24} sm={8} key={key}>
+            <Form.Item label={label}>
+              <InputNumber aria-label={label} min={1} precision={0} style={{ width: '100%' }}
+                value={(config.aggregate_limits ?? resources?.limits)?.[key]}
+                onChange={(value) => {
+                  const limits: SandboxAggregateLimits | undefined = config.aggregate_limits ?? resources?.limits;
+                  if (limits && value !== null) state.updateSettings({ sandbox_config: { ...config, aggregate_limits: { ...limits, [key]: value } } });
+                }} />
+            </Form.Item>
+          </Col>
+        ))}
+      </Row>
+      <Typography.Title level={5}>单条命令限制</Typography.Title>
       <Row data-testid="sandbox-resource-limits" gutter={[12, 0]}>
         {limitFields.map((field) => (
           <Col key={field.key} xs={24} sm={12}>

@@ -1,3 +1,4 @@
+import { getSandboxResources } from "../../api/settings";
 import { App as AntApp } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -210,6 +211,19 @@ export function useUserSettingsState({
         updateSettings({ runtime_config: runtime });
         setSaved((current) => current ? { ...current, runtime_config: runtime } : current);
       } else if (section === "sandbox") {
+        const limits = settings.sandbox_config.aggregate_limits;
+        if (limits) {
+          const { usage } = await getSandboxResources();
+          if (usage.memory_bytes > limits.memory_mib * 1048576 || usage.processes > limits.processes || usage.handles > limits.handles) {
+            const accepted = await new Promise<boolean>((resolve) => modal.confirm({
+              title: "降低总资源上限？",
+              content: "当前用量超过新上限，保存后会从最后启动的模型命令开始停止。",
+              okText: "保存并应用", cancelText: "取消",
+              onOk: () => resolve(true), onCancel: () => resolve(false),
+            }));
+            if (!accepted) return;
+          }
+        }
         const sandbox = await updateSandboxConfig(settings.sandbox_config);
         updateSettings({ sandbox_config: sandbox });
         setSaved((current) => current ? { ...current, sandbox_config: sandbox } : current);

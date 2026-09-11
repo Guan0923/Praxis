@@ -31,7 +31,6 @@ from ..policy import (
     ensure_disk_reserve,
     remove_temp_dir,
 )
-from .admission import ResourceRequest, SandboxAdmission
 from .leases import CommandLease, CommandLeaseStore
 from .proxy import ProxyCredential, RunCommandProxy
 
@@ -91,7 +90,6 @@ class SandboxLauncher:
         broker: WindowsBrokerClient | None = None,
         is_windows: bool | None = None,
         environment: Mapping[str, str] | None = None,
-        admission: SandboxAdmission | None = None,
         acl_manager: WindowsAclManager | None = None,
         lease_store_path: Path | None = None,
         proxy_factory=None,
@@ -100,14 +98,12 @@ class SandboxLauncher:
         self.broker = broker
         self.is_windows = os.name == "nt" if is_windows is None else is_windows
         self.environment = dict(os.environ if environment is None else environment)
-        self.admission = admission
         self.acl_manager = acl_manager or WindowsAclManager()
         default_lease_path = Path(tempfile.gettempdir()) / "praxis-sandbox" / "backend-leases-v1.json"
         self.lease_store = CommandLeaseStore(Path(lease_store_path or default_lease_path), self.acl_manager)
         self.proxy_factory = proxy_factory or RunCommandProxy.shared
         self.maintenance_gate = maintenance_gate or SandboxMaintenanceGate()
         self._temp_dirs: dict[int, Path] = {}
-        self._admitted: dict[int, tuple[str, ResourceRequest]] = {}
         self._job_contexts: dict[int, SandboxJobContext] = {}
         self._leases: dict[int, CommandLease] = {}
         self._proxies: dict[int, RunCommandProxy] = {}
@@ -158,16 +154,10 @@ class SandboxLauncher:
         launch_cwd = str(launch_cwd_path)
         env = policy.environment(self.environment if environment is None else environment, temp_dir=temp_dir)
         job_context = SandboxJobContext(user_id=user_id, policy=policy, job_kind="command")
-        request = ResourceRequest(
-            memory_mib=policy.limits.memory_mib,
-            processes=policy.limits.processes,
-            handles=policy.limits.handles,
-        )
 
         rollback = _RollbackStack()
         temp_action = rollback.push(lambda: remove_temp_dir(temp_dir))
         maintenance_lease: SandboxCommandLease | None = None
-        admitted = False
         lease: CommandLease | None = None
         proxy: RunCommandProxy | None = None
         acl_entries: list[AclLeaseEntry] = []
@@ -176,10 +166,6 @@ class SandboxLauncher:
         try:
             maintenance_lease = self.command_lease()
             rollback.push(maintenance_lease.close)
-            if self.admission is not None:
-                self.admission.acquire(job_context.user_id, request)
-                admitted = True
-                rollback.push(lambda: self.admission.release(job_context.user_id, request))
             self._recover_once()
             policy_payload = {
                 **policy.to_dict(),
@@ -302,8 +288,6 @@ class SandboxLauncher:
         self._leases[pid] = lease
         if proxy is not None:
             self._proxies[pid] = proxy
-        if admitted:
-            self._admitted[pid] = (job_context.user_id, request)
         return process
 
     def _broker_launch(self, *, service_sid: str, execute_paths: tuple[Path, ...], **kwargs: Any) -> Any:
@@ -398,14 +382,6 @@ class SandboxLauncher:
                 path = None
             if path is not None:
                 cleaned = remove_temp_dir(path) and cleaned
-            admitted = self._admitted.get(pid)
-            if admitted is not None and self.admission is not None:
-                try:
-                    self.admission.release(*admitted)
-                except Exception:
-                    cleaned = False
-                else:
-                    self._admitted.pop(pid, None)
         if maintenance_lease is not None:
             try:
                 maintenance_lease.close()
@@ -419,6 +395,34 @@ class SandboxLauncher:
             self._leases.pop(pid, None)
             self._proxies.pop(pid, None)
         return cleaned
+
+    def wait_resources(self, ticket: str, *, cancelled=None, notify=None) -> None:
+        if self.broker is None:
+            raise SandboxInitializationError("Broker is unavailable")
+        notified = False
+        try:
+            while True:
+                if cancelled is not None and cancelled():
+                    raise InterruptedError("Model command cancelled while waiting for resources.")
+                result = self.broker.resource_request("resource_acquire", ticket=ticket)
+                if result.get("granted"):
+                    if notify is not None and notified:
+                        notify(result)
+                    return
+                if notify is not None and not notified:
+                    notify(result)
+                    notified = True
+                threading.Event().wait(0.25)
+        except BaseException as original:
+            try:
+                self.broker.resource_request("resource_cancel", ticket=ticket)
+            except Exception as cleanup:
+                original.add_note(f"Resource wait cleanup failed: {cleanup}")
+            raise
+
+    def cancel_resource_wait(self, ticket: str) -> None:
+        if self.broker is not None:
+            self.broker.resource_request("resource_cancel", ticket=ticket)
 
     def popen_factory(self, policy: SandboxPolicy, *, user_id: str = "local", job_kind: str = "command"):
         def factory(argv, **kwargs):

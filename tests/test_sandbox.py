@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from backend.sandbox import (
-    AggregateLimits,
     ApprovalDecision,
     ApprovalStore,
     BrokerConfiguration,
@@ -23,10 +22,7 @@ from backend.sandbox import (
     NetworkRule,
     ResourceLimits,
     ResourceMonitor,
-    ResourceRequest,
     ResourceUsage,
-    SandboxAdmission,
-    SandboxAdmissionTimeout,
     SandboxFailureCode,
     SandboxInitializationError,
     SandboxJobContext,
@@ -496,20 +492,6 @@ def test_policy_environment_does_not_inherit_profile_locations(tmp_path: Path) -
     assert "BACKEND_API_TOKEN" not in environment
 
 
-def test_sandbox_admission_times_out_and_releases() -> None:
-    admission = SandboxAdmission(
-        user_limits=AggregateLimits(memory_mib=128, processes=1, handles=64, cpu_percent=75),
-        system_limits=AggregateLimits(memory_mib=128, processes=1, handles=64, cpu_percent=90),
-        wait_seconds=0.01,
-    )
-    request = ResourceRequest(memory_mib=128, processes=1, handles=64)
-    admission.acquire("session", request)
-    with pytest.raises(SandboxAdmissionTimeout):
-        admission.acquire("session", request)
-    admission.release("session", request)
-    admission.acquire("session", request)
-
-
 def test_windows_launcher_fails_closed_without_broker(tmp_path: Path) -> None:
     policy = SandboxPolicy((tmp_path,), "session", "job")
     launcher = SandboxLauncher(is_windows=True)
@@ -608,31 +590,19 @@ def test_launcher_holds_maintenance_lease_until_cleanup(
     assert gate.active_commands == 0
 
 
-def test_launcher_holds_maintenance_lease_during_admission(tmp_path: Path) -> None:
+def test_launcher_resource_wait_does_not_hold_maintenance_lease(tmp_path: Path) -> None:
     gate = SandboxMaintenanceGate()
 
-    class RejectingAdmission:
-        def acquire(self, _user_id: str, _request: ResourceRequest) -> None:
-            assert gate.active_commands == 1
-            raise RuntimeError("rejected")
+    class WaitingBroker:
+        def resource_request(self, operation, **values):
+            assert gate.active_commands == 0
+            if operation == "resource_acquire":
+                raise RuntimeError("accounting unavailable")
+            return {}
 
-        def release(self, _user_id: str, _request: ResourceRequest) -> None:
-            raise AssertionError("unadmitted request must not be released")
-
-    launcher = SandboxLauncher(
-        broker=_LauncherBroker(),
-        is_windows=True,
-        admission=RejectingAdmission(),
-        acl_manager=_LauncherAcl(),
-        lease_store_path=tmp_path / "leases.json",
-        maintenance_gate=gate,
-    )
-
-    with pytest.raises(RuntimeError, match="rejected") as exc_info:
-        launcher.launch(["cmd.exe", "/c", "echo ok"], SandboxPolicy((tmp_path,), "session", "job"))
-
-    assert exc_info.value.__cause__ is None
-    assert str(exc_info.value) == "rejected"
+    launcher = SandboxLauncher(broker=WaitingBroker(), maintenance_gate=gate, lease_store_path=tmp_path / "leases.json")
+    with pytest.raises(RuntimeError, match="accounting unavailable"):
+        launcher.wait_resources("ticket")
     assert gate.active_commands == 0
 
 

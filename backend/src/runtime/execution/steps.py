@@ -240,6 +240,22 @@ class ToolStepExecutor:
                             cancel_requested=cancel_requested,
                             register_abort=runtime.services.register_operation_abort,
                             sandbox_decision=sandbox_decision,
+                            resource_wait=lambda usage: publish(
+                                RuntimeEvent(
+                                    "tool_call",
+                                    tool,
+                                    self._event_data(
+                                        tool_message,
+                                        {
+                                            "arguments": tool_message.arguments,
+                                            "execution_stage": "running"
+                                            if usage.get("granted")
+                                            else "waiting_resources",
+                                            "resource_usage": usage,
+                                        },
+                                    ),
+                                )
+                            ),
                         ),
                         confirmed=True,
                     )

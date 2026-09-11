@@ -112,5 +112,8 @@ class _LifecycleRegistryMixin:
         return False
 
     def _require_open_scope_locked(self, scope: JobScope) -> None:
-        if scope.scope_id in self._closed_scopes:
+        if (
+            scope.scope_id in self._closed_scopes
+            or (scope.owner.session_id, scope.owner.thread_id) in self._blocked_threads
+        ):
             raise JobScopeClosed(scope.scope_id)

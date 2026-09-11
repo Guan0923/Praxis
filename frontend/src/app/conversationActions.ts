@@ -1,3 +1,4 @@
+import { deletedConversations, pendingConversationDeletes, waitForDeletion } from "./conversationDeletion";
 import type { Dispatch, SetStateAction } from "react";
 import {
   archiveSession,
@@ -64,15 +65,26 @@ export function createConversationActions(context: ConversationActionsContext) {
   }
 
   async function deleteConversation(id: string) {
+    if (pendingConversationDeletes.has(id)) return;
+    pendingConversationDeletes.add(id);
     setActionError(null);
     try {
       const conversation = conversations.find((item) => item.id === id);
-      const sessionId = await ensureSession(id);
-      await deleteSession(conversation?.threadId ?? sessionId, sessionId);
+      if (!conversation) return;
+      if (conversation.sessionId) {
+        await deleteSession(conversation.threadId ?? conversation.sessionId, conversation.sessionId);
+      }
+      deletedConversations.add(id);
       setConversations((previous) => previous.filter((item) => item.id !== id));
+      if (conversation.sessionId) void waitForDeletion(conversation.threadId ?? conversation.sessionId).catch(
+        (error) => setActionError(error instanceof Error ? error : String(error)),
+      );
       if (currentId === id) setCurrentId(null);
     } catch (error) {
       setActionError(error instanceof Error ? error : String(error));
+      throw error;
+    } finally {
+      pendingConversationDeletes.delete(id);
     }
   }
 
@@ -83,6 +95,7 @@ export function createConversationActions(context: ConversationActionsContext) {
       if (!conversation) return;
       const sessionId = await ensureSession(id);
       const summary = await restoreSession(conversation.threadId ?? sessionId, sessionId);
+      deletedConversations.delete(id);
       updateConversation(id, (current) => summaryToConversation(summary, current));
       if (!currentId) setCurrentId(conversation.id);
     } catch (error) {

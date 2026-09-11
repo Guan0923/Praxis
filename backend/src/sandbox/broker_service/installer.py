@@ -338,6 +338,23 @@ class WindowsServiceInstaller:
         with self._configuration_diagnostic_lock:
             self._last_configuration_failure = None
 
+    def service_state(self) -> dict:
+        self._require_windows()
+        from ..control.service_state import query_service
+
+        return query_service(self.service_name)
+
+    def start(self) -> None:
+        self._require_windows()
+        from ..control.service_state import start_service
+
+        try:
+            start_service(self.service_name)
+        except Exception as exc:
+            if getattr(exc, "winerror", None) not in {5, 740}:
+                raise
+            self._run_elevated_transaction("start", self._current_user_sid())
+
     def service_installed(self) -> bool:
         """Return whether SCM contains this service, preserving other query failures."""
 
@@ -588,6 +605,8 @@ class WindowsServiceInstaller:
                 "缺少 Windows Broker 安装依赖，请重新安装后端依赖。",
             ) from exc
 
+        action = "启动" if operation == "start" else "安装"
+        helper_action = "启动" if operation == "start" else "修复"
         result_id = uuid.uuid4().hex
         payload = {
             "result_id": result_id,
@@ -628,16 +647,16 @@ class WindowsServiceInstaller:
             if winerror == 1223:
                 raise BrokerInstallationError(
                     BrokerInstallFailureCode.UAC_CANCELLED,
-                    "安装已取消，请在 UAC 提示中批准 Broker 安装。",
+                    f"{action}已取消，请在 UAC 提示中批准 Broker {action}。",
                 ) from exc
             if winerror in {5, 740}:
                 raise BrokerInstallationError(
                     BrokerInstallFailureCode.ADMIN_REQUIRED,
-                    "需要管理员权限才能安装沙箱 Broker。",
+                    f"需要管理员权限才能{action}沙箱 Broker。",
                 ) from exc
             raise BrokerInstallationError(
                 BrokerInstallFailureCode.UNKNOWN,
-                "沙箱 Broker 安装失败，请查看后端日志。",
+                f"沙箱 Broker {action}失败，请查看后端日志。",
             ) from exc
         finally:
             if handle is not None:
@@ -660,7 +679,7 @@ class WindowsServiceInstaller:
                 raise
         failure = BrokerInstallationError(
             BrokerInstallFailureCode.UNKNOWN,
-            report["message"] if report else f"修复子进程退出码 {code}；未取得子进程异常详情。",
+            report["message"] if report else f"{helper_action}子进程退出码 {code}；未取得子进程异常详情。",
         )
         failure.error_report = report
         failure.broker_code = {

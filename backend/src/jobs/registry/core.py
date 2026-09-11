@@ -39,6 +39,7 @@ class JobRegistry(_ScopeRegistryMixin, _AdmissionRegistryMixin, _LifecycleRegist
         self._records: dict[str, _Record] = {}
         self._scopes: dict[str, JobScope] = {}
         self._closed_scopes: set[str] = set()
+        self._blocked_threads: set[tuple[str, str]] = set()
         self._queues: dict[JobLane, deque[str]] = {lane: deque() for lane in JobLane}
         self._running: dict[JobLane, int] = {lane: 0 for lane in JobLane}
         self._running_by_session: dict[tuple[str, JobLane], int] = {}

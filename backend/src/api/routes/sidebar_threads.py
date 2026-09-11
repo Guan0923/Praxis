@@ -146,6 +146,8 @@ def _require(store, thread_id: str):
 def _require_queue_thread(store, thread_id: str):
     item = store.get_sidebar_thread(thread_id)
     if item is not None:
+        if item.deleted_at is not None:
+            raise HTTPException(status_code=409, detail="Conversation has been deleted.")
         return item
     for summary in store.list_sessions(state="all"):
         panel = store.active_right_panel_window_for_thread(summary.session_id, thread_id)
@@ -320,17 +322,47 @@ def restore_sidebar_thread(thread_id: str, request: Request) -> dict[str, object
     web: WebAppState = request.app.state.web
     store = session_store(web)
     _require(store, thread_id)
-    return _payload(store, store.update_sidebar_thread(thread_id, archived_at=None, deleted_at=None), web)
+    with web.message_queue.admission_lock:
+        if web.conversation_deletion.result(thread_id)["status"] in {"pending", "failed"}:
+            raise HTTPException(status_code=409, detail="Conversation cleanup must finish before restoration.")
+        item = store.update_sidebar_thread(thread_id, archived_at=None, deleted_at=None)
+        threads = {thread_id} | {
+            node.thread_id
+            for node in store.list_thread_nodes(item.session_id)
+            if node.root_thread_id == thread_id and node.depth > 0
+        }
+        web.message_queue.restore_threads(threads)
+        web.job_registry.unblock_threads(item.session_id, threads)
+        web.conversation_deletion.forget(thread_id)
+    return _payload(store, item, web)
 
 
-@router.delete("/{thread_id}")
-def delete_sidebar_thread(thread_id: str, request: Request) -> dict[str, object]:
+@router.delete("/{thread_id}", status_code=204)
+def delete_sidebar_thread(thread_id: str, session_id: str, request: Request) -> Response:
     web: WebAppState = request.app.state.web
-    store = session_store(web)
-    _require(store, thread_id)
+    store = web.session_store
     from backend.domain.state import utc_now
 
-    return _payload(store, store.update_sidebar_thread(thread_id, deleted_at=utc_now()), web)
+    with web.message_queue.admission_lock:
+        item = store.get_sidebar_thread(thread_id, session_id=session_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Unknown conversation.")
+        threads = {thread_id}
+        threads.update(
+            node.thread_id
+            for node in store.list_thread_nodes(session_id)
+            if node.root_thread_id == thread_id and node.depth > 0
+        )
+        store.update_sidebar_thread(thread_id, session_id=session_id, deleted_at=item.deleted_at or utc_now())
+        web.job_registry.block_threads(session_id, threads)
+        web.message_queue.discard_threads(threads)
+        web.conversation_deletion.schedule(session_id, thread_id, threads)
+    return Response(status_code=204)
+
+
+@router.get("/{thread_id}/deletion")
+def deletion_status(thread_id: str, request: Request) -> dict:
+    return request.app.state.web.conversation_deletion.result(thread_id)
 
 
 __all__ = ["router"]

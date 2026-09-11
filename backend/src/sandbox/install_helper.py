@@ -276,6 +276,11 @@ def _run_transaction(payload: Mapping[str, Any]) -> int:
         runtime_paths,
         proxy_port,
     ) = _validate_payload(payload)
+    if operation == "start":
+        from .control.service_state import start_service
+
+        start_service(service_name)
+        return EXIT_OK
     ready_path = data_path / "ready.json" if data_path is not None else None
     installed = _service_exists(service_name)
     if installed:

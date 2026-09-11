@@ -283,7 +283,7 @@ class _EventProjectionMixin:
             self._set_tool_call_stage(str(data.get("call_id") or "call_unknown"), "queued")
         elif kind == "tool_call":
             call_id = str(data.get("call_id") or "call_unknown")
-            self._set_tool_call_stage(call_id, "running")
+            self._set_tool_call_stage(call_id, str(data.get("execution_stage") or "running"))
             if not any(
                 item.get("type") == "tool_call" and item.get("call_id") == call_id for item in self.assistant_blocks
             ):

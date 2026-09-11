@@ -11,7 +11,6 @@ class SandboxFailureCode(StrEnum):
     INIT_FAILED = "init_failed"
     POLICY_FAILED = "policy_failed"
     RESOURCE_EXCEEDED = "resource_exceeded"
-    ADMISSION_TIMEOUT = "admission_timeout"
     CLEANUP_PENDING = "cleanup_pending"
 
 
@@ -47,6 +46,8 @@ class BrokerInstallFailureCode(StrEnum):
 
 
 class BrokerStatusFailureCode(StrEnum):
+    SERVICE_STATE_FAILED = "broker_service_state_failed"
+    SERVICE_NOT_RUNNING = "broker_service_not_running"
     """Stable failure categories returned by the Broker health endpoint."""
 
     UNAVAILABLE = "broker_unavailable"

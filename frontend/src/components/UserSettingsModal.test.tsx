@@ -2,6 +2,7 @@ import { App as AntApp } from "antd";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as sandboxApi from "../api/settings";
 import UserSettingsModal from "./UserSettingsModal";
 
 const api = vi.hoisted(() => ({
@@ -95,10 +96,8 @@ const sandboxHealth = {
   checking: false,
   autoRecoveryPhase: "idle" as const,
   nextRetryAt: null,
-  manualRepairing: false,
   check: vi.fn().mockResolvedValue({ installed: true, healthy: true }),
   notifyUserBackendRequest: vi.fn(),
-  repairManually: vi.fn().mockResolvedValue(undefined),
 };
 
 function modalElement(
@@ -131,6 +130,10 @@ describe("UserSettingsModal", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(sandboxApi, "getSandboxResources").mockResolvedValue({
+      usage: { memory_bytes: 0, processes: 0, handles: 0 },
+      limits: { memory_mib: 8192, processes: 512, handles: 32768 }, queued: 0,
+    });
     api.getSettings.mockResolvedValue(structuredClone(settings));
     api.updateProfile.mockResolvedValue({ display_name: "新名字", agent_preferences: "" });
     api.updateAgentConfig.mockResolvedValue(settings.agent_config);
@@ -320,9 +323,9 @@ describe("UserSettingsModal", () => {
     expect(screen.getByRole("combobox", { name: "沙箱网络权限" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "网络白名单" })).toBeInTheDocument();
     expect(screen.getByText("暂无白名单规则")).toBeInTheDocument();
-    expect(screen.getAllByRole("spinbutton")).toHaveLength(7);
+    expect(screen.getAllByRole("spinbutton")).toHaveLength(10);
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /检\s*查/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /检\s*查/ })).not.toBeInTheDocument();
     expect(screen.getByText("沙箱已就绪", { exact: true })).toBeInTheDocument();
     const resourceGrid = screen.getByTestId("sandbox-resource-limits");
     expect(resourceGrid.children).toHaveLength(7);
@@ -356,6 +359,30 @@ describe("UserSettingsModal", () => {
 
     await waitFor(() => expect(api.updateSandboxConfig).toHaveBeenCalledTimes(1));
     expect(api.updateSandboxConfig.mock.calls[0][0].network_allowlist).toEqual([{ host: "localhost", port: 443 }]);
+  });
+
+  it("confirms before applying aggregate limits below current usage", async () => {
+    vi.mocked(sandboxApi.getSandboxResources).mockResolvedValue({
+      usage: { memory_bytes: 10 * 1048576, processes: 5, handles: 10 },
+      limits: { memory_mib: 8192, processes: 512, handles: 32768 }, queued: 1,
+    });
+    renderModal();
+    await screen.findByDisplayValue("旧名字");
+    await userEvent.click(screen.getByRole("menuitem", { name: "沙箱" }));
+    const input = await screen.findByRole("spinbutton", { name: "总进程数" });
+    await waitFor(() => expect(input).toHaveValue("512"));
+    fireEvent.change(input, { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findAllByText("降低总资源上限？");
+    expect(api.updateSandboxConfig).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /取\s*消/ }));
+    await waitFor(() => expect(screen.queryAllByText("降低总资源上限？")).toHaveLength(0));
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存" })).not.toHaveClass("ant-btn-loading"));
+    expect(api.updateSandboxConfig).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await userEvent.click(await screen.findByRole("button", { name: "保存并应用" }));
+    await waitFor(() => expect(api.updateSandboxConfig).toHaveBeenCalledTimes(1));
+    expect(api.updateSandboxConfig.mock.calls[0][0].aggregate_limits.processes).toBe(2);
   });
 
   it("saves command network policy independently from Turn file permission", async () => {

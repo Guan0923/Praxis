@@ -15,7 +15,6 @@ from backend.mcp.config import McpSettings, prepare_mcp_plan
 from backend.planning import LLMPlanner, RuleBasedPlanner
 from backend.providers import LLMClient, ModelConfig
 from backend.sandbox import (
-    SandboxAdmission,
     SandboxLauncher,
     SandboxMaintenanceGate,
     WindowsBrokerClient,
@@ -430,10 +429,10 @@ def _sandbox_runtime(
     status = broker.status()
     if not status.installed or not status.healthy:
         return None, normalized
+    broker.resource_request("resource_configure", limits=normalized["aggregate_limits"], initialize=True)
     lease_store_path = paths.runtime_dir / "sandbox-leases.json" if paths is not None else None
     return SandboxLauncher(
         broker=broker,
-        admission=SandboxAdmission(),
         lease_store_path=lease_store_path,
         maintenance_gate=maintenance_gate,
     ), normalized
