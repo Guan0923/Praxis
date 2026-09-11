@@ -157,7 +157,7 @@ class PlanWriteAttemptPlanner:
         return AgentAction(
             type="tool_call",
             tool="run_command",
-            arguments={"command": "[System.IO.File]::WriteAllText('blocked.txt', 'no')"},
+            arguments={"cmd": "[System.IO.File]::WriteAllText('blocked.txt', 'no')"},
         )
 
 
@@ -185,7 +185,7 @@ class OneWriteThenAnswerPlanner:
         return AgentAction(
             type="tool_call",
             tool="run_command",
-            arguments={"command": "[System.IO.File]::WriteAllText('output.txt', 'done')"},
+            arguments={"cmd": "[System.IO.File]::WriteAllText('output.txt', 'done')"},
         )
 
 

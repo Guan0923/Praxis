@@ -84,6 +84,16 @@ class _ScopeRegistryMixin:
                     timed_out.append(job.info().id)
             except Exception:
                 failed.append(job.info().id)
+        with self._lock:
+            releasable = [
+                record.job
+                for record in self._records.values()
+                if record.scope in scopes and record.job.info().state in TERMINAL_STATES
+            ]
+        for job in releasable:
+            release = getattr(job, "release_output", None)
+            if callable(release):
+                release()
         return CloseReport(tuple(closed), tuple(timed_out), tuple(failed))
 
     def _collect_scopes_locked(self, scope: JobScope) -> list[JobScope]:

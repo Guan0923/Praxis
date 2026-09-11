@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
+import time
 from collections.abc import Mapping
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from backend.domain.terminal import DEFAULT_TERMINAL_TYPE, TERMINAL_LABELS, TerminalType, normalize_terminal_type
@@ -20,7 +23,6 @@ from backend.jobs import (
     SlotMode,
     SubprocessJob,
     TreeTerminator,
-    format_command_output,
 )
 from backend.sandbox import (
     SandboxExecutionDecision,
@@ -35,9 +37,7 @@ from .terminal import terminal_executable, windows_workspace_to_wsl
 class WorkspaceCommand:
     """Run an explicitly approved command with the workspace as its working directory."""
 
-    _MAX_TIMEOUT_SECONDS = 600
     _MAX_OUTPUT_CHARS = 20_000
-    _WAIT_INTERVAL_SECONDS = 0.05
     _SENSITIVE_ENV_COMPOUNDS = (
         "ACCESS_KEY",
         "API_KEY",
@@ -66,6 +66,8 @@ class WorkspaceCommand:
         tree_terminator: TreeTerminator | None = None,
         environment: Mapping[str, str] | None = None,
     ) -> None:
+        self._sessions: dict[str, tuple[SubprocessJob, ToolInvocationContext, JobRegistry | None]] = {}
+        self._session_lock = RLock()
         self._workspace = workspace.resolve()
         self._is_windows = os.name == "nt" if is_windows is None else is_windows
         self._terminal_type = normalize_terminal_type(terminal_type)
@@ -73,20 +75,16 @@ class WorkspaceCommand:
         self._tree_terminator = tree_terminator
         self._environment = self._filtered_environment(os.environ if environment is None else environment)
 
-    def run(self, command: str, timeout_seconds: int = 60) -> str:
-        """Execute through a private registry when no runtime context exists."""
-
-        return self.run_with_context(ToolInvocationContext(), command, timeout_seconds)
+    def run(self, cmd: str, yield_time_ms: int = 10000, max_output_tokens: int = 2000) -> str:
+        return self.run_with_context(ToolInvocationContext(), cmd, yield_time_ms, max_output_tokens)
 
     def run_with_context(
-        self,
-        context: ToolInvocationContext,
-        command: str,
-        timeout_seconds: int = 60,
+        self, context: ToolInvocationContext, cmd: str, yield_time_ms: int = 10000, max_output_tokens: int = 2000
     ) -> str:
-        """Execute as a managed subprocess job in the invocation's registry."""
-
-        self._validate(command, timeout_seconds)
+        self._validate_request(yield_time_ms, max_output_tokens)
+        if not isinstance(cmd, str) or not cmd.strip():
+            raise ToolError("cmd must be a non-empty string.")
+        self._prune()
         if context.cancel_requested is not None and context.cancel_requested():
             raise ToolError("Command was cancelled before start.")
 
@@ -108,7 +106,7 @@ class WorkspaceCommand:
             if self._popen_factory is not None:
                 job_options["popen_factory"] = self._popen_factory
             job_id = parent_scope.registry.new_job_id()
-            effective_timeout = timeout_seconds
+            effective_timeout = None
             decision = context.sandbox_decision
             if isinstance(decision, SandboxExecutionDecision):
                 try:
@@ -120,7 +118,7 @@ class WorkspaceCommand:
                 policy = decision.command_policy(job_id, TerminalKind(self._terminal_type))
                 max_output_chars = decision.limits.output_chars
                 job_options["max_output_chars"] = max_output_chars
-                effective_timeout = min(timeout_seconds, decision.limits.wall_seconds)
+                effective_timeout = decision.limits.wall_seconds
                 sandbox_user_id = decision.user_id or "local"
                 job_options["popen_factory"] = decision.launcher.popen_factory(
                     policy,
@@ -132,10 +130,12 @@ class WorkspaceCommand:
                 job_options["sandbox_launcher"] = decision.launcher
             job = SubprocessJob(
                 job_id,
-                self._command_line(command),
+                self._command_line(cmd),
                 self._environment,
                 str(self._workspace),
                 effective_timeout,
+                interactive=True,
+                command_lease=command_lease,
                 **job_options,
             )
             task_scope.submit(
@@ -143,13 +143,120 @@ class WorkspaceCommand:
                 lane=JobLane.FOREGROUND,
                 admission=AdmissionPolicy(slot_mode=SlotMode.INHERIT),
             )
-            self._wait_for_job(job, context)
-            return self._result(job, max_output_chars=max_output_chars)
-        finally:
+            command_lease = None
+            with self._session_lock:
+                self._sessions[job_id] = (job, context, private_registry)
+                job.release_callback = lambda: self._release(job_id)
+            return self._read(job, context, yield_time_ms, max_output_tokens)
+        except BaseException:
             if command_lease is not None:
                 command_lease.close()
             if private_registry is not None:
-                private_registry.close_all(reason="private command registry closed", timeout=5.0)
+                private_registry.close_all(reason="command start failed", timeout=5.0)
+            raise
+
+    def write_stdin(
+        self, session_id: str, chars: str = "", yield_time_ms: int = 60000, max_output_tokens: int = 2000
+    ) -> str:
+        return self.write_with_context(ToolInvocationContext(), session_id, chars, yield_time_ms, max_output_tokens)
+
+    def write_with_context(
+        self,
+        context: ToolInvocationContext,
+        session_id: str,
+        chars: str = "",
+        yield_time_ms: int = 60000,
+        max_output_tokens: int = 2000,
+    ) -> str:
+        self._validate_request(yield_time_ms, max_output_tokens)
+        self._prune()
+        with self._session_lock:
+            entry = self._sessions.get(session_id)
+        if entry is None:
+            raise ToolError("Command session does not exist or has been released.")
+        job, owner, _registry = entry
+        if (owner.session_id, owner.turn_id, owner.job_scope) != (
+            context.session_id,
+            context.turn_id,
+            context.job_scope,
+        ):
+            raise ToolError("Command session belongs to another Turn or run.")
+        if not isinstance(chars, str) or len(chars.encode("utf-8")) > 16384:
+            raise ToolError("chars must be a string of at most 16 KiB.")
+        unregister = context.register_abort(lambda: job.cancel("Turn cancelled")) if context.register_abort else None
+        try:
+            with job.interaction_lock:
+                if isinstance(owner.job_scope, JobScope) and owner.job_scope.closed:
+                    raise ToolError("Command session has been released.")
+                job.write_input(chars)
+                return self._read(job, context, yield_time_ms, max_output_tokens)
+        finally:
+            if unregister is not None:
+                unregister()
+
+    def _release(self, job_id: str) -> None:
+        with self._session_lock:
+            self._sessions.pop(job_id, None)
+
+    def _prune(self) -> None:
+        with self._session_lock:
+            expired = [
+                key
+                for key, (_job, owner, _registry) in self._sessions.items()
+                if isinstance(owner.job_scope, JobScope) and owner.job_scope.closed
+            ]
+            for key in expired:
+                job, _owner, _registry = self._sessions.pop(key)
+                job.buffer.clear()
+
+    def close(self) -> None:
+        with self._session_lock:
+            entries = list(self._sessions.values())
+            self._sessions.clear()
+        for job, _owner, registry in entries:
+            job.close(timeout=5)
+            job.buffer.clear()
+            if registry is not None:
+                registry.close_all(reason="command manager closed", timeout=5)
+
+    @staticmethod
+    def _validate_request(yield_time_ms: int, max_output_tokens: int) -> None:
+        if isinstance(yield_time_ms, bool) or not isinstance(yield_time_ms, int) or not 0 <= yield_time_ms <= 300000:
+            raise ToolError("yield_time_ms must be an integer between 0 and 300000.")
+        if isinstance(max_output_tokens, bool) or not isinstance(max_output_tokens, int) or max_output_tokens <= 0:
+            raise ToolError("max_output_tokens must be a positive integer.")
+
+    def _read(self, job: SubprocessJob, context: ToolInvocationContext, wait_ms: int, tokens: int) -> str:
+        deadline = time.monotonic() + wait_ms / 1000
+        while not job.wait(min(0.05, max(0, deadline - time.monotonic()))):
+            if context.cancel_requested is not None and context.cancel_requested():
+                job.cancel("Turn cancelled")
+            if time.monotonic() >= deadline:
+                break
+        output, job.read_position, cache_omitted = job.buffer.read_details(job.read_position)
+        from .command_output import limit_output
+
+        info = job.info()
+        bounded_output, response_omitted = limit_output(output, tokens, min(self._MAX_OUTPUT_CHARS, job.output_limit))
+        truncated = bool(cache_omitted or response_omitted)
+        del output
+        result: dict[str, Any] = {"output": bounded_output, "status": info.state.value, "output_truncated": truncated}
+        if cache_omitted:
+            result["cache_omitted_bytes"] = cache_omitted
+        if response_omitted:
+            result["response_omitted_bytes"] = response_omitted
+        if info.state in {JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED}:
+            result["exit_code"] = info.exit_code
+        else:
+            result["session_id"] = info.id
+        if info.state in {JobState.FAILED, JobState.CANCELLED}:
+            from backend.domain import error_report
+
+            failure = job.failure_exception or ToolError("Command was cancelled.")
+            result["error_report"] = error_report(failure)
+            failure.tool_output = json.dumps(result, ensure_ascii=False)
+            raise failure
+        return json.dumps(result, ensure_ascii=False)
 
     @staticmethod
     def _resolve_scope(context: ToolInvocationContext) -> tuple[JobScope, JobRegistry | None]:
@@ -162,48 +269,6 @@ class WorkspaceCommand:
         runner_scope = registry.root_scope().child(JobScopeKind.THREAD)
         run_scope = runner_scope.child(JobScopeKind.RUN, session_id=context.session_id)
         return run_scope, registry
-
-    def _wait_for_job(self, job: SubprocessJob, context: ToolInvocationContext) -> None:
-        cancel_sent = False
-        while not job.wait(self._WAIT_INTERVAL_SECONDS):
-            if not cancel_sent and context.cancel_requested is not None and context.cancel_requested():
-                cancel_sent = job.cancel("tool invocation cancelled")
-
-    @classmethod
-    def _result(cls, job: SubprocessJob, *, max_output_chars: int) -> str:
-        info = job.info()
-        if info.state is JobState.SUCCEEDED:
-            return cls._truncate_stdout(job.stdout, max_chars=max_output_chars)
-        if info.state is JobState.CANCELLED:
-            raise ToolError(cls._failure_output("Command was cancelled.", job, max_chars=max_output_chars))
-        failure = job.failure_exception
-        if failure is not None:
-            raise failure
-        raise ToolError(cls._failure_output(info.error or "Command failed.", job, max_chars=max_output_chars))
-
-    @staticmethod
-    def _truncate_stdout(stdout: str, *, max_chars: int) -> str:
-        if len(stdout) <= max_chars:
-            return stdout
-
-        marker = ""
-        payload_chars = max_chars
-        for _ in range(8):
-            payload_chars = max(0, max_chars - len(marker))
-            omitted = len(stdout) - payload_chars
-            updated_marker = f"\n… output truncated ({omitted} characters omitted)"
-            if updated_marker == marker:
-                break
-            marker = updated_marker
-        return stdout[:payload_chars] + marker
-
-    @staticmethod
-    def _failure_output(status: str, job: SubprocessJob, *, max_chars: int) -> str:
-        if not job.stdout and not job.stderr:
-            return status
-        output_budget = max(0, max_chars - len(status) - 1)
-        output = format_command_output(job.stdout, job.stderr, max_chars=output_budget)
-        return f"{status}\n{output}"
 
     def _command_line(self, command: str) -> list[str]:
         if not self._is_windows:
@@ -232,14 +297,6 @@ class WorkspaceCommand:
         except ValueError:
             raise
         return [executable, "--cd", linux_workspace, "--", "sh", "-lc", command]
-
-    def _validate(self, command: Any, timeout_seconds: Any) -> None:
-        if not isinstance(command, str) or not command.strip():
-            raise ToolError("command must be a non-empty string.")
-        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int):
-            raise ToolError("timeout_seconds must be an integer.")
-        if not 1 <= timeout_seconds <= self._MAX_TIMEOUT_SECONDS:
-            raise ToolError(f"timeout_seconds must be between 1 and {self._MAX_TIMEOUT_SECONDS}.")
 
     @classmethod
     def _filtered_environment(cls, environment: Mapping[str, str]) -> dict[str, str]:

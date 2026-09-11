@@ -1,3 +1,6 @@
+import { ApiError } from "../../api/transport/request";
+import { getTurnPage } from "../../api/conversations/turns";
+import { withTurnPage } from "../../app/conversationProjection";
 import { ErrorDisplay } from "../../components/ErrorDisplay";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { App as AntApp, FloatButton } from "antd";
@@ -121,6 +124,35 @@ export default function ChatPage({
     messages,
     active,
   );
+  const historyRequestRef = useRef<string | null>(null);
+  const loadEarlier = async () => {
+    if (!conversation?.sessionId || conversation.historyHasMore !== true || historyRequestRef.current) return;
+    const id = conversation.id;
+    const cursor = conversation.historyCursor;
+    const head = conversation.activeTurnId;
+    historyRequestRef.current = id;
+    try {
+      const page = await getTurnPage(conversation.sessionId, conversation.threadId, conversation.historyCursor ?? undefined);
+      if (agentThreadView.isSubagent) agentThreadView.applyHistoryPage(page);
+      else onUpdate(id, (current) => current.messagesLoaded && current.historyCursor === cursor
+        && current.activeTurnId === head ? withTurnPage(current, page, true) : current);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        const page = await getTurnPage(conversation.sessionId, conversation.threadId).catch(() => null);
+        if (page && agentThreadView.isSubagent) agentThreadView.applyHistoryPage(page, false);
+        else if (page) onUpdate(id, (current) => current.messagesLoaded && current.historyCursor === cursor
+          && current.activeTurnId === head ? withTurnPage(current, page) : current);
+      }
+      const failure = error instanceof Error ? error : new Error(String(error));
+      void message.error({ content: <ErrorDisplay error={failure} /> });
+    } finally {
+      historyRequestRef.current = null;
+    }
+  };
+  const handleHistoryScroll = () => {
+    handleChatScroll();
+    if (chatScrollRef.current && chatScrollRef.current.scrollTop <= 24) void loadEarlier();
+  };
   // A queue flush has no optimistic assistant message by design. Keep the
   // composer in its running interaction mode from the moment the flush
   // request is sent until its SSE cleanup, including the tiny interval
@@ -448,7 +480,7 @@ export default function ChatPage({
           runtimeNodes = pruneTurnDescendants(current.runtimeNodes, target.rewindTurnId);
           const map = new Map(runtimeNodes.map((node) => [`${node.session_id}:${node.id}`, node] as const));
           visibleMessages = map.has(`${sessionId}:${target.rewindTurnId}`)
-            ? messagesBeforeRewind(projectTurnPath(map, target.rewindTurnId), target.rewindTurnId)
+            ? messagesBeforeRewind(projectTurnPath(map, target.rewindTurnId, true), target.rewindTurnId)
             : messagesBeforeRewind(current.messages, target.rewindTurnId);
         } else {
           visibleMessages = messagesBeforeRewind(current.messages, target.rewindTurnId);
@@ -671,7 +703,8 @@ export default function ChatPage({
           interactionBusy={interactionBusy}
           compactionPending={compactionPending}
           chatScrollRef={chatScrollRef}
-          onScroll={handleChatScroll}
+          onScroll={handleHistoryScroll}
+          onWheel={(event) => { if (event.deltaY < 0 && event.currentTarget.scrollTop <= 24) void loadEarlier(); }}
           editingMessageId={editingMessageId}
           editingDraft={editingDraft}
           editRef={editRef}

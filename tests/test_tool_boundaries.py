@@ -147,6 +147,9 @@ def test_workspace_command_filters_sensitive_environment_variables(tmp_path: Pat
     }
 
     class FakeProcess:
+        stdin = None
+        stdout = None
+        stderr = None
         pid = 1234
         returncode = 0
 
@@ -155,6 +158,9 @@ def test_workspace_command_filters_sensitive_environment_variables(tmp_path: Pat
             return b"", b""
 
         def poll(self) -> int:
+            return self.returncode
+
+        def wait(self, timeout=None) -> int:
             return self.returncode
 
     def popen_factory(_args: list[str], **kwargs: Any) -> FakeProcess:
@@ -168,6 +174,8 @@ def test_workspace_command_filters_sensitive_environment_variables(tmp_path: Pat
         environment=environment,
     ).run("true")
 
-    assert output == ""
+    import json
+
+    assert json.loads(output)["output"] == ""
     assert calls[0]["env"] == {"PATH": "tools", "VISIBLE_SETTING": "visible"}
     assert environment["API_KEY"] == "generic-key"

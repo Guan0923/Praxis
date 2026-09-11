@@ -1,16 +1,16 @@
-"""Reliable SQLite-outbox to Redis fan-out and replayable browser SSE."""
+"""Process-owned Runtime event publication and browser SSE."""
 
 from __future__ import annotations
 
 import asyncio
 import html
 import json
-import threading
 from collections.abc import AsyncIterator
 from time import monotonic
 from uuid import uuid4
 
 from backend.domain.runtime_state import NodeFrame, RuntimeState
+from backend.storage.runtime_event_stream import RuntimeEventCursorExpired
 from backend.storage.sqlite import SQLiteSessionStore
 
 from .agent_report_projection import project_frame
@@ -30,7 +30,12 @@ def _cursor_id(state, cursor: str) -> str:
 
 def _resume_cursor(state, cursor: str | None, latest: str) -> str:
     epoch = _cursor_id(state, "").split("|", 1)[0]
-    if cursor and cursor.startswith(f"{epoch}|"):
+    if (
+        cursor
+        and cursor.startswith(f"{epoch}|")
+        and cursor.split("|", 1)[1].isdecimal()
+        and int(cursor.split("|", 1)[1]) <= int(latest)
+    ):
         return cursor.split("|", 1)[1]
     return latest
 
@@ -47,54 +52,21 @@ def _runtime_snapshot(state, store, session_id: str, turn_id: str):
     return store.runtime_stream_snapshot(session_id, turn_id)
 
 
-def publish_outbox_event(state, event: dict[str, object], *, recover_terminal: bool = False) -> None:
-    event_id = str(event.get("event_id") or "")
-    session_id = str(event.get("session_id") or "")
-    thread_id = str(event.get("thread_id") or "")
-    turn_id = str(event.get("turn_id") or "")
-    frame_payload = event.get("frame")
-    if not event_id or not all((session_id, thread_id, turn_id)):
-        raise ValueError("Runtime outbox event identifiers are required.")
-    if not isinstance(frame_payload, dict):
-        raise ValueError("Runtime outbox event requires a frame payload.")
-    store = _store(state)
-    payload = dict(frame_payload)
-    delivery_ids = event.get("report_delivery_ids")
-    if delivery_ids:
-        statuses = store.agent_report_statuses(session_id, set(delivery_ids))
-        if statuses:
-            if payload.get("type") == "turn.snapshot":
-                payload["turn"] = {**payload["turn"], "agent_report_statuses": statuses}
-            else:
-                payload["agent_report_statuses"] = statuses
-    state.runtime_event_stream.publish(
-        event_id=event_id,
-        turn_id=turn_id,
-        thread_id=thread_id,
-        sequence=int(event.get("sequence") or 0),
-        payload=payload,
-    )
-    store.ack_runtime_event(session_id, event_id)
-    active_streams = getattr(state, "active_turn_streams", {})
-    execution_active = isinstance(active_streams, dict) and turn_id in active_streams
-    live_child = getattr(getattr(state, "subagent_coordinator", None), "live_turn_snapshot", None)
-    if not execution_active and callable(live_child):
-        execution_active = live_child(session_id, turn_id) is not None
-    status = event.get("status")
-    if recover_terminal and not execution_active and status in {"success", "paused", "failed"}:
-        # A live execution still has synchronous post-finalization work (for
-        # example the first-Turn title) before it publishes the terminal.  The
-        # relay owns terminal recovery only after no execution is active.
-        publish_terminal(
-            state,
-            session_id=session_id,
-            thread_id=thread_id,
-            turn_id=turn_id,
-            terminal_type="success" if status in {"success", "paused"} else "failed",
-        )
+async def _current_thread_snapshots(state, store, session_id: str, thread_id: str):
+    for candidate in (await asyncio.to_thread(store.load_turn_page, session_id, thread_id))[0]:
+        if not isinstance(candidate, RuntimeState) or candidate.thread_id != thread_id:
+            continue
+        current, sequence = await asyncio.to_thread(_runtime_snapshot, state, store, session_id, candidate.id)
+        current = current or candidate
+        payload = await asyncio.to_thread(project_frame, store, NodeFrame.snapshot(current), current)
+        payload["revision"] = 0
+        yield current.id, sequence, payload
 
 
 def publish_frame(state, frame: NodeFrame, current: RuntimeState) -> None:
+    cache = getattr(state, "conversation_cache", None)
+    if cache is not None and current.status == "running":
+        cache.begin(current.session_id, current.thread_id, current.id)
     if frame.sequence:
         payload = frame.to_dict()
         if frame.type == "turn.snapshot" or any(
@@ -110,15 +82,13 @@ def publish_frame(state, frame: NodeFrame, current: RuntimeState) -> None:
         )
         return
     store = _store(state)
-    event = store.runtime_event(frame.session_id, frame.event_id)
-    if event is None:
-        # The relay can publish and ACK between NodeWriter's transaction and
-        # this synchronous callback. The Redis receipt is the durable proof
-        # that this exact frame already reached both fan-out streams.
-        if state.runtime_event_stream.has_event(frame.event_id):
-            return
-        raise RuntimeError("Persisted Runtime frame is missing its outbox event.")
-    publish_outbox_event(state, event)
+    state.runtime_event_stream.publish(
+        event_id=frame.event_id,
+        turn_id=frame.turn_id,
+        thread_id=current.thread_id,
+        sequence=store.runtime_event_sequence(frame.session_id, frame.turn_id),
+        payload=project_frame(store, frame, current),
+    )
 
 
 def publish_terminal(
@@ -133,9 +103,7 @@ def publish_terminal(
 ) -> None:
     _node, sequence = _store(state).runtime_stream_snapshot(session_id, turn_id)
     state.runtime_event_stream.publish(
-        # The execution thread and the recovery relay may observe the same
-        # committed terminal frame concurrently.  A deterministic receipt
-        # makes both publications one Redis event instead of two terminals.
+        # Repeated completion callbacks publish a single terminal event.
         event_id=f"terminal:{session_id}:{turn_id}:{sequence + 1}:{terminal_type}",
         turn_id=turn_id,
         thread_id=thread_id,
@@ -151,37 +119,9 @@ def publish_terminal(
         },
     )
 
-
-class RuntimeEventRelay:
-    def __init__(self, state) -> None:
-        self.state = state
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        if self._thread is not None:
-            return
-        self._thread = threading.Thread(target=self._run, name="runtime-event-relay", daemon=True)
-        self._thread.start()
-
-    def close(self) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
-
-    def _run(self) -> None:
-        while not self._stop.wait(0.25):
-            store = _store(self.state)
-            try:
-                summaries = store.list_sessions(state="all")
-                for summary in summaries:
-                    for event in store.pending_runtime_events(summary.session_id):
-                        if self._stop.is_set():
-                            return
-                        publish_outbox_event(self.state, event, recover_terminal=True)
-            except Exception:
-                # The canonical outbox remains intact; the next pass retries.
-                continue
+    cache = getattr(state, "conversation_cache", None)
+    if cache is not None:
+        cache.finish(thread_id, turn_id)
 
 
 def _terminal_envelope(
@@ -240,7 +180,9 @@ def _matching_terminal(
 
 def _turn_continuation(store: SQLiteSessionStore, session_id: str, thread_id: str, turn_id: str) -> list[RuntimeState]:
     turns = [
-        node for node in store.load_nodes(session_id) if isinstance(node, RuntimeState) and node.thread_id == thread_id
+        node
+        for node in store.load_turn_page(session_id, thread_id)[0]
+        if isinstance(node, RuntimeState) and node.thread_id == thread_id
     ]
     by_id = {node.id: node for node in turns}
 
@@ -272,11 +214,11 @@ async def turn_sse(
     # ActiveTurnStream aliases and keeps that execution observable end-to-end.
     cursor = _resume_cursor(state, last_event_id, await asyncio.to_thread(stream.latest_thread_id, thread_id))
     heartbeat_at = monotonic() + 15.0
-    while True:
+    while not stream.closed:
         store = _store(state)
         node, _baseline_sequence = await asyncio.to_thread(_runtime_snapshot, state, store, session_id, turn_id)
         # Existing Turns are reused by rewind. Do not mistake the old sealed
-        # version for the newly accepted delivery while the Redis worker is
+        # version for the newly accepted delivery while the message worker is
         # still between claim and SQLite admission.
         if node is not None and (not delivery_id or _node_has_delivery(node, delivery_id)):
             break
@@ -343,8 +285,16 @@ async def turn_sse(
         return
 
     heartbeat_at = monotonic() + 15.0
-    while True:
-        entries = await asyncio.to_thread(stream.read_thread, thread_id, cursor, block_ms=1000)
+    while not stream.closed:
+        try:
+            entries = await asyncio.to_thread(stream.read_thread, thread_id, cursor, block_ms=1000)
+        except RuntimeEventCursorExpired:
+            cursor = await asyncio.to_thread(stream.latest_thread_id, thread_id)
+            async for node_id, sequence, payload in _current_thread_snapshots(state, store, session_id, thread_id):
+                baseline_sequences[node_id] = sequence
+                local_revisions[node_id] = 0
+                yield f"id: {_cursor_id(state, cursor)}\ndata: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+            continue
         if not entries:
             if monotonic() >= heartbeat_at:
                 heartbeat_at = monotonic() + 15.0
@@ -397,12 +347,14 @@ async def turn_sse(
 
 async def thread_sse(state, session_id: str, thread_id: str, last_event_id: str | None = None) -> AsyncIterator[str]:
     stream = state.runtime_event_stream
+    cache = getattr(state, "conversation_cache", None)
+    retained_on_connect = cache is not None and await asyncio.to_thread(cache.contains, thread_id)
     cursor = _resume_cursor(state, last_event_id, await asyncio.to_thread(stream.latest_thread_id, thread_id))
     yield f"id: {_cursor_id(state, cursor)}\ndata: {json.dumps({'type': 'thread.ready', 'session_id': session_id, 'thread_id': thread_id}, separators=(',', ':'))}\n\n"
     store = _store(state)
     canonical_turns = [
         node
-        for node in await asyncio.to_thread(store.load_nodes, session_id)
+        for node in (await asyncio.to_thread(store.load_turn_page, session_id, thread_id))[0]
         if isinstance(node, RuntimeState) and node.thread_id == thread_id
     ]
     baseline_sequences: dict[str, int] = {}
@@ -417,8 +369,19 @@ async def thread_sse(state, session_id: str, thread_id: str, last_event_id: str 
         yield f"id: {_cursor_id(state, cursor)}\ndata: {json.dumps(snapshot, ensure_ascii=False, separators=(',', ':'))}\n\n"
     heartbeat_at = monotonic() + 15.0
     revisions: dict[str, int] = {node.id: 0 for node in refreshed_turns}
-    while True:
-        entries = await asyncio.to_thread(stream.read_thread, thread_id, cursor, block_ms=1000)
+    while not stream.closed:
+        if retained_on_connect and not await asyncio.to_thread(cache.contains, thread_id):
+            yield 'data: {"type":"thread.evicted"}\n\n'
+            return
+        try:
+            entries = await asyncio.to_thread(stream.read_thread, thread_id, cursor, block_ms=1000)
+        except RuntimeEventCursorExpired:
+            cursor = await asyncio.to_thread(stream.latest_thread_id, thread_id)
+            async for node_id, sequence, payload in _current_thread_snapshots(state, store, session_id, thread_id):
+                baseline_sequences[node_id] = sequence
+                revisions[node_id] = 0
+                yield f"id: {_cursor_id(state, cursor)}\ndata: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+            continue
         if not entries:
             if monotonic() >= heartbeat_at:
                 heartbeat_at = monotonic() + 15.0
@@ -457,7 +420,6 @@ async def thread_sse(state, session_id: str, thread_id: str, last_event_id: str 
 
 
 __all__ = [
-    "RuntimeEventRelay",
     "publish_frame",
     "publish_terminal",
     "thread_sse",

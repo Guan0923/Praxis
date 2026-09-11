@@ -2,7 +2,7 @@ import { ErrorDisplay } from "../../components/ErrorDisplay";
 import { LeftOutlined, ReloadOutlined, RightOutlined } from "@ant-design/icons";
 import { Button, Input } from "antd";
 import type { TextAreaRef } from "antd/es/input/TextArea";
-import type { MouseEvent as ReactMouseEvent, RefObject, UIEventHandler } from "react";
+import type { MouseEvent as ReactMouseEvent, RefObject, UIEventHandler, WheelEventHandler } from "react";
 import MarkdownContent from "../../components/MarkdownContent";
 import ShimmerText from "../../components/ShimmerText";
 import type { ChatMessage, DecisionRequest, DisplayMode } from "../../types";
@@ -17,6 +17,7 @@ interface ChatMessageListProps {
   compactionPending: boolean;
   chatScrollRef: RefObject<HTMLDivElement>;
   onScroll: UIEventHandler<HTMLDivElement>;
+  onWheel?: WheelEventHandler<HTMLDivElement>;
   editingMessageId: string | null;
   editingDraft: string;
   editRef: RefObject<TextAreaRef>;
@@ -45,6 +46,7 @@ export function ChatMessageList({
   compactionPending,
   chatScrollRef,
   onScroll,
+  onWheel,
   editingMessageId,
   editingDraft,
   editRef,
@@ -65,7 +67,7 @@ export function ChatMessageList({
   onRetrySend,
 }: ChatMessageListProps) {
   return (
-    <div className="chat-scroll" ref={chatScrollRef} data-conversation-scroll onScroll={onScroll}>
+    <div className="chat-scroll" ref={chatScrollRef} data-conversation-scroll onScroll={onScroll} onWheel={onWheel}>
       <div className="chat-scroll-content">
         <div className="chat-messages">
           {messages.length === 0 ? (

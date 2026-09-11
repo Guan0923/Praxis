@@ -136,7 +136,7 @@ export function useMessageEditing({
         const map = new Map((current.runtimeNodes ?? []).map((item) => [`${item.session_id}:${item.id}`, item] as const));
         map.set(`${updated.session_id}:${updated.id}`, updated);
         const activeTurnId = current.activeTurnId ?? activeRuntimeNode?.id ?? updated.id;
-        return { ...current, runtimeNodes: [...map.values()], messages: projectTurnPath(map, activeTurnId) };
+        return { ...current, runtimeNodes: [...map.values()], messages: projectTurnPath(map, activeTurnId, true) };
       });
     } catch (error) {
       onError(error);

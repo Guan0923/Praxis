@@ -1,3 +1,4 @@
+import { TerminalOutputBuffer } from "./outputBuffer";
 import { useEffect, useRef, useState } from "react";
 import { Alert, Typography } from "antd";
 import type { Terminal as XtermTerminal } from "@xterm/xterm";
@@ -27,6 +28,11 @@ export default function TerminalPane({ panelWindow, readOnly = false }: Terminal
     const terminalId = panelWindow.terminal_id;
     if (!host || !terminalId) return undefined;
     let disposed = false;
+    const output = new TerminalOutputBuffer();
+    sequenceRef.current = 0;
+    let rendering = false;
+    let dirty = false;
+    let renderTimer: number | undefined;
     exitedRef.current = false;
     let socket: WebSocket | null = null;
     let reconnectTimer: number | undefined;
@@ -62,13 +68,23 @@ export default function TerminalPane({ panelWindow, readOnly = false }: Terminal
       resizeObserver.observe(host);
       sendResize();
 
+      const renderOutput = () => {
+        if (disposed || rendering) return;
+        rendering = true;
+        dirty = false;
+        terminal.reset();
+        terminal.write(output.snapshot(), () => {
+          rendering = false;
+          if (dirty && !disposed) renderTimer = window.setTimeout(renderOutput, 50);
+        });
+      };
       const connect = () => {
         if (disposed) return;
         setStatus("connecting");
         socket = new WebSocket(terminalWebSocketUrl(terminalId, sequenceRef.current));
         socket.onopen = () => sendResize();
         socket.onmessage = (event) => {
-          let payload: { type?: string; data?: string; sequence?: number; code?: number | null };
+          let payload: { type?: string; data?: string; sequence?: number; code?: number | null; segments?: { data?: string; omitted_bytes?: number }[] };
           try {
             payload = JSON.parse(String(event.data));
           } catch {
@@ -76,17 +92,29 @@ export default function TerminalPane({ panelWindow, readOnly = false }: Terminal
           }
           if (payload.type === "ready") {
             setStatus("connected");
-          } else if (payload.type === "output" && typeof payload.data === "string") {
+          } else if (payload.type === "output" && (typeof payload.data === "string" || Array.isArray(payload.segments))) {
             if (typeof payload.sequence === "number") sequenceRef.current = payload.sequence;
-            terminal.write(payload.data);
+            if (payload.segments) {
+              for (const segment of payload.segments) {
+                if (typeof segment.data === "string") output.append(segment.data);
+                else if (typeof segment.omitted_bytes === "number") output.omit(segment.omitted_bytes);
+              }
+            } else if (typeof payload.data === "string") output.append(payload.data);
+            dirty = true;
+            if (!rendering) renderOutput();
           } else if (payload.type === "exit") {
             exitedRef.current = true;
             setExitCode(typeof payload.code === "number" ? payload.code : null);
             setStatus("exited");
           }
         };
-        socket.onclose = () => {
+        socket.onclose = (event) => {
           if (disposed || exitedRef.current) return;
+          if (event.code === 1008 || event.code === 1000) {
+            exitedRef.current = true;
+            setStatus("exited");
+            return;
+          }
           setStatus("failed");
           reconnectTimer = window.setTimeout(connect, 1_000);
         };
@@ -99,6 +127,7 @@ export default function TerminalPane({ panelWindow, readOnly = false }: Terminal
 
     return () => {
       disposed = true;
+      if (renderTimer !== undefined) window.clearTimeout(renderTimer);
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       socket?.close();
       disposeInput?.dispose();

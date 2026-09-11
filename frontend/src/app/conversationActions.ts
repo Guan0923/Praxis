@@ -113,7 +113,7 @@ export function createConversationActions(context: ConversationActionsContext) {
         messageCount: sidebar.message_count,
         messagesLoaded: false,
         updatedAt: sidebar.conversation_updated_at,
-      }, await getSessionNodes(sidebar.session_id));
+      }, await getSessionNodes(sidebar.session_id, sidebar.thread_id));
       setConversations((previous) => [branch, ...previous]);
       setCurrentId(branch.id);
       setPage("chat");
@@ -150,7 +150,7 @@ export function createConversationActions(context: ConversationActionsContext) {
     const conversation = conversations.find((item) => item.id === id);
     if (!conversation) throw new Error("会话不存在");
     const sessionId = await ensureSession(id);
-    const nodes = await getSessionNodes(sessionId);
+    const nodes = await getSessionNodes(sessionId, conversation.threadId);
     updateConversation(id, (current) => withLoadedTurns(current, nodes, preferredActiveTurnId));
   }
 
@@ -166,7 +166,7 @@ export function createConversationActions(context: ConversationActionsContext) {
     setCurrentId(target.id);
     setPage("chat");
     if (!target.messagesLoaded) {
-      const nodes = await getSessionNodes(target.sessionId ?? sessionId);
+      const nodes = await getSessionNodes(target.sessionId ?? sessionId, target.threadId);
       setConversations((previous) => previous.map((item) => (
         item.id === target!.id ? withLoadedTurns(item, nodes) : item
       )));

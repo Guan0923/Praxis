@@ -1,4 +1,4 @@
-"""Persistent same-Session Agent Threads and Redis mailbox coordination."""
+"""Persistent same-Session Agent Threads and in-memory mailbox coordination."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from .subagent.tool_executor import LockedToolExecutor, WorkspaceWriteLock
 
 
 class SubagentCoordinator(_SubagentToolActionsMixin, _SubagentReportDeliveryMixin, _SubagentExecutionMixin):
-    """Process-owned coordinator backed by SQLite and Redis rather than batch state."""
+    """Process-owned coordinator backed by SQLite and in-memory rather than batch state."""
 
     _TOOLS = {
         "delegate_tasks",
@@ -50,6 +50,7 @@ class SubagentCoordinator(_SubagentToolActionsMixin, _SubagentReportDeliveryMixi
         self._index = index
         self._job_registry = job_registry
         self._thread_events = thread_events
+        self._published_report_turns: set[str] = set()
         self._bindings: dict[str, _SessionBinding] = {}
         self._jobs: dict[str, ThreadJob] = {}
         self._active_bridges: dict[str, RuntimeEventNodeBridge] = {}
@@ -80,7 +81,7 @@ class SubagentCoordinator(_SubagentToolActionsMixin, _SubagentReportDeliveryMixi
                 project_workspace.resolve() if project_workspace is not None else None,
             )
         self._ensure_report_dispatcher()
-        self.recover_session(session_id)
+        self._report_dispatch_wakeup.set()
 
     def close(self) -> None:
         self._report_dispatch_stop.set()

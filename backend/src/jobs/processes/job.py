@@ -14,6 +14,7 @@ package.
 
 from __future__ import annotations
 
+import codecs
 import subprocess
 import threading
 from collections.abc import Mapping, Sequence
@@ -22,6 +23,7 @@ from backend.domain import error_report
 
 from ..base import Job, JobKind, JobStateError
 from ..output import CommandError, format_command_output
+from ..output_buffer import OutputBuffer
 from .group import ProcessFactory, ProcessGroup, TreeTerminator
 
 __all__ = ["SubprocessJob"]
@@ -58,6 +60,8 @@ class SubprocessJob(Job):
         timeout_seconds: float | None,
         *,
         max_output_chars: int = 20_000,
+        interactive: bool = False,
+        command_lease=None,
         popen_factory: ProcessFactory = subprocess.Popen,
         tree_terminator: TreeTerminator | None = None,
         is_windows: bool | None = None,
@@ -76,6 +80,12 @@ class SubprocessJob(Job):
             error_formatter=error_formatter,
             listener=listener,
         )
+        self.interactive = interactive
+        self.command_lease = command_lease
+        self.buffer = OutputBuffer()
+        self.release_callback = None
+        self.read_position = 0
+        self.interaction_lock = threading.Lock()
         self._timeout_seconds = timeout_seconds
         self._max_output_chars = max_output_chars
         self._group = ProcessGroup(
@@ -86,6 +96,8 @@ class SubprocessJob(Job):
             popen_factory=popen_factory,
             tree_terminator=tree_terminator,
             termination_timeout=termination_timeout,
+            retain_tree=interactive,
+            stdin=subprocess.PIPE if interactive else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -110,6 +122,10 @@ class SubprocessJob(Job):
             )
 
     # -- public API ---------------------------------------------------------
+
+    @property
+    def output_limit(self) -> int:
+        return self._max_output_chars
 
     @property
     def output(self) -> str:
@@ -173,6 +189,12 @@ class SubprocessJob(Job):
         if thread is not None:
             thread.join(timeout=5.0)
 
+    def release_output(self) -> None:
+        self.buffer.clear()
+        if self.release_callback is not None:
+            callback, self.release_callback = self.release_callback, None
+            callback()
+
     def _request_cancel(self) -> None:
         """Stop the running subprocess by terminating the whole tree; the
         monitor thread observes the exit and seals the ``cancelled`` state."""
@@ -191,10 +213,10 @@ class SubprocessJob(Job):
         outcome: tuple[str, int | None, Exception | None] = ("failed", None, CommandError("Command failed."))
         try:
             try:
-                stdout, stderr = self._group.communicate(timeout=self._timeout_seconds)
+                stdout, stderr = self._communicate()
             except subprocess.TimeoutExpired as timeout_error:
                 self._group.terminate()
-                stdout, stderr = self._group.communicate(timeout=30.0)
+                stdout, stderr = (b"", b"") if self.interactive else self._group.communicate(timeout=30.0)
                 exit_code = self._group.poll()
                 self._capture(stdout, stderr)
                 if self.info().cancel_requested_at is not None:
@@ -227,6 +249,11 @@ class SubprocessJob(Job):
                     self.resource_monitor.stop()
                 except Exception as exc:
                     cleanup_errors.append(exc)
+            if self.interactive:
+                try:
+                    self._group.release_streams()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
             if self.sandbox_launcher is not None:
                 process = getattr(self._group, "_process", None)
                 try:
@@ -234,6 +261,12 @@ class SubprocessJob(Job):
                         cleanup_errors.append(CommandError("Sandbox cleanup failed."))
                 except Exception as exc:
                     cleanup_errors.append(exc)
+            if self.command_lease is not None:
+                try:
+                    self.command_lease.close()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+                self.command_lease = None
             if cleanup_errors:
                 current = self.info().sandbox or {}
                 current.update({"cleanup_pending": True, "failure_code": "sandbox_cleanup_failed"})
@@ -255,6 +288,47 @@ class SubprocessJob(Job):
                 self._mark_failed(error or CommandError("Command failed."), exit_code=exit_code)
         except JobStateError:
             return
+
+    def _communicate(self) -> tuple[bytes | None, bytes | None]:
+        if not self.interactive:
+            return self._group.communicate(timeout=self._timeout_seconds)
+        errors: list[Exception] = []
+
+        def drain(source: str) -> None:
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            try:
+                while data := self._group.read_stream(source):
+                    self.buffer.append(decoder.decode(data).encode("utf-8"), source)
+                self.buffer.append(decoder.decode(b"", final=True).encode("utf-8"), source)
+            except Exception as exc:
+                errors.append(exc)
+                self._group.terminate()
+
+        readers = [threading.Thread(target=drain, args=(source,), daemon=True) for source in ("stdout", "stderr")]
+        for reader in readers:
+            reader.start()
+        code = self._group.wait(self._timeout_seconds)
+        if code is None:
+            self._group.terminate()
+        for reader in readers:
+            reader.join(timeout=5)
+        if any(reader.is_alive() for reader in readers):
+            self._group.terminate()
+            for reader in readers:
+                reader.join(timeout=5)
+        if any(reader.is_alive() for reader in readers):
+            raise OSError("Command output reader did not exit after the process stopped.")
+        if errors:
+            raise errors[0]
+        if code is None:
+            raise subprocess.TimeoutExpired("command", self._timeout_seconds)
+        return b"", b""
+
+    def write_input(self, chars: str) -> None:
+        if chars == "\x03":
+            self._group.interrupt()
+        elif chars:
+            self._group.write_stdin(chars.encode("utf-8"))
 
     def _resource_exceeded(self, error: Exception) -> None:
         self._mark_sandbox_failure("resource_exceeded")

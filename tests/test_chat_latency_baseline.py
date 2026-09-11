@@ -12,10 +12,7 @@ from types import ModuleType
 
 import pytest
 
-from backend.configuration import ClientPaths
-from backend.domain.runtime_state import NodeFrame, RuntimeState
 from backend.providers import JsonHttpTransport
-from backend.storage.sqlite import SQLiteSessionStore
 
 BASELINE_REF = "dbf161ec97d90b99ab67a3a1eedf0320ccda1f45"
 
@@ -34,12 +31,8 @@ def baseline_module(path: str, package: str) -> ModuleType:
     return module
 
 
-def test_baseline_small_chunk_latency_and_outbox_size(tmp_path):
+def test_baseline_small_chunk_latency():
     baseline_transport = baseline_module("backend/src/providers/transport.py", "backend.providers").JsonHttpTransport
-    baseline_events = baseline_module("backend/src/storage/sqlite_runtime/events.py", "backend.storage.sqlite_runtime")
-
-    class BaselineStore(SQLiteSessionStore):
-        _put_runtime_event = baseline_events.SQLiteRuntimeEventMixin._put_runtime_event
 
     class Model(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -64,9 +57,9 @@ def test_baseline_small_chunk_latency_and_outbox_size(tmp_path):
     worker.start()
     measurements = {}
     try:
-        for name, transport_type, store_type in [
-            ("baseline", baseline_transport, BaselineStore),
-            ("updated", JsonHttpTransport, SQLiteSessionStore),
+        for name, transport_type in [
+            ("baseline", baseline_transport),
+            ("updated", JsonHttpTransport),
         ]:
             transport = transport_type()
             started = perf_counter()
@@ -75,33 +68,8 @@ def test_baseline_small_chunk_latency_and_outbox_size(tmp_path):
             first_ms = (perf_counter() - started) * 1000
             list(events)
             transport.session.close()
-            paths = ClientPaths(tmp_path / name)
-            paths.ensure()
-            store = store_type(paths)
-            session = store.create_session("latency")
-            parent = store.ensure_root_node(session.session_id)
-            node = RuntimeState.create(
-                session_id=session.session_id,
-                thread_id=session.session_id,
-                id="turn",
-                parent=parent,
-                user_content=[{"type": "text", "text": "history " * 8192}],
-            )
-            store.create_node_with_frame(node, NodeFrame.snapshot(node))
-            updated = node.clone()
-            updated.data[0][-1]["content"] = [{"type": "text", "text": "x", "status": "running"}]
-            frame = NodeFrame.delta(node, updated, revision=1)
-            started = perf_counter()
-            store.update_node_with_frame(updated, frame)
-            stored = store.runtime_event(node.session_id, frame.event_id)
-            measurements[name] = {
-                "first_small_event_ms": round(first_ms, 3),
-                "outbox_bytes": len(json.dumps(stored, ensure_ascii=False, separators=(",", ":")).encode()),
-                "delta_bytes": len(json.dumps(frame.to_dict(), ensure_ascii=False, separators=(",", ":")).encode()),
-                "persist_and_read_ms": round((perf_counter() - started) * 1000, 3),
-            }
+            measurements[name] = {"first_small_event_ms": round(first_ms, 3)}
         print("latency_baseline=" + json.dumps(measurements))
-        assert measurements["updated"]["outbox_bytes"] < measurements["baseline"]["outbox_bytes"] / 10
         assert measurements["updated"]["first_small_event_ms"] < measurements["baseline"]["first_small_event_ms"] / 2
     finally:
         server.shutdown()

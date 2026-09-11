@@ -102,7 +102,7 @@ describe("Agent Thread API", () => {
     ]);
   });
 
-  it("accepts and advances the standard Redis Stream reconnect cursor", async () => {
+  it("accepts and advances the opaque SSE reconnect cursor", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(
       'id: 42-0\ndata: {"type":"thread.ready","session_id":"session_1","thread_id":"thread_child"}\n\n',
       { status: 200, headers: { "Content-Type": "text/event-stream" } },

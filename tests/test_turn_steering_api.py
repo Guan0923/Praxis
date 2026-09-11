@@ -9,7 +9,7 @@ from backend.api.session_store import session_store
 from backend.api.state import WebAppState
 from backend.domain import QueuedMessage
 from backend.domain.runtime_state import RuntimeState
-from backend.storage.message_queue import MemoryMessageQueue, RedisTurnMailbox
+from backend.storage.message_queue import MemoryMessageQueue, TurnMailbox
 
 
 def test_turn_mailbox_consumes_one_fifo_delivery_per_boundary() -> None:
@@ -23,7 +23,7 @@ def test_turn_mailbox_consumes_one_fifo_delivery_per_boundary() -> None:
             thread_id="thread",
             turn_id="turn",
         )
-    inbox = RedisTurnMailbox(queue, "turn", "worker")
+    inbox = TurnMailbox(queue, "turn", "worker")
 
     first = inbox.take()[0]
     assert first["delivery_id"] == "delivery-first"

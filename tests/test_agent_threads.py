@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import sqlite3
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
@@ -10,11 +9,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Thread
 from time import monotonic, sleep
-from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from redis import Redis
 
 from backend.api import agent_thread_stream
 from backend.api.agent_thread_stream import AgentThreadEventHub
@@ -48,7 +45,7 @@ from backend.runtime.application.factory import build_application
 from backend.runtime.capability_settings import SubagentSettings
 from backend.runtime.execution.runner import AgentRunner
 from backend.runtime.subagents import SubagentCoordinator
-from backend.storage.message_queue import MemoryMessageQueue, RedisMessageQueue
+from backend.storage.message_queue import MemoryMessageQueue
 from backend.storage.sqlite import SQLiteSessionStore
 from backend.storage.sqlite_agent_threads import AgentThreadCreate
 from backend.tools import Tool, ToolError, ToolRegistry, delegation_tools
@@ -908,7 +905,7 @@ def test_report_replay_after_sqlite_delivery_before_queue_ack_is_idempotent(tmp_
         def ack(self, claimed):
             if self.fail_ack and claimed.envelope.target_kind == "report":
                 self.fail_ack = False
-                raise RuntimeError("simulated crash before Redis ACK")
+                raise RuntimeError("simulated crash before queue ACK")
             return super().ack(claimed)
 
     index = AgentThreadIndex()
@@ -954,13 +951,15 @@ def test_report_replay_after_sqlite_delivery_before_queue_ack_is_idempotent(tmp_
         replayed = store.get_node(session.session_id, root.id)
         assert isinstance(replayed, RuntimeState)
         assert len(replayed.data[replayed.current_data_idx]) == 3
-        assert queue.pending_deliveries() == []
+        assert not any(queue._streams.values())
+        assert not any(queue._thread_streams.values())
+        assert not any(queue._report_streams.values())
     finally:
         coordinator.close()
         registry.close_all(reason="test cleanup", timeout=2)
 
 
-def test_waiting_report_survives_queue_outage_and_dispatches_after_restart(tmp_path: Path) -> None:
+def test_new_coordinator_does_not_replay_unfinished_reports_after_restart(tmp_path: Path) -> None:
     class UnavailableReportQueue(MemoryMessageQueue):
         def dispatch_report(self, envelope):
             raise MessageQueueUnavailable("message_queue_unavailable")
@@ -1004,10 +1003,9 @@ def test_waiting_report_survives_queue_outage_and_dispatches_after_restart(tmp_p
     recovered = SubagentCoordinator(store=store, message_queue=queue, index=index, job_registry=registry)
     try:
         recovered._dispatch_ready_reports(session.session_id)
-        assert len(store.list_agent_turn_reports(session.session_id, states=("delivered",))) == 1
-        received = store.get_node(session.session_id, root.id)
-        assert isinstance(received, RuntimeState)
-        assert received.data[received.current_data_idx][-1]["content"][0]["text"] == content
+        assert store.list_agent_turn_reports(session.session_id, states=("delivered",)) == []
+        assert len(store.list_agent_turn_reports(session.session_id, states=("waiting",))) == 1
+        assert queue.claim_report(session.session_id, "verify") is None
     finally:
         recovered.close()
         registry.close_all(reason="test cleanup", timeout=2)
@@ -1431,13 +1429,13 @@ def test_running_agent_inserts_report_at_safe_boundary_and_continues(tmp_path: P
         parent_runner.close()
 
 
-def test_agent_thread_message_returns_503_when_redis_is_unavailable(tmp_path: Path) -> None:
+def test_agent_thread_message_returns_503_when_queue_is_unavailable(tmp_path: Path) -> None:
     class UnavailableQueue(MemoryMessageQueue):
         def dispatch_agent(self, envelope: MessageEnvelope) -> MessageEnvelope:
             del envelope
-            raise MessageQueueUnavailable("redis unavailable")
+            raise MessageQueueUnavailable("queue unavailable")
 
-    state = WebAppState(tmp_path / "web-agent-redis-error", message_queue=UnavailableQueue())
+    state = WebAppState(tmp_path / "web-agent-queue-error", message_queue=UnavailableQueue())
     try:
         with TestClient(create_app(state)) as client:
             sidebar = client.post("/api/sidebar-threads", json={}).json()
@@ -1451,7 +1449,7 @@ def test_agent_thread_message_returns_503_when_redis_is_unavailable(tmp_path: Pa
                 json={"session_id": sidebar["session_id"], "content": "must fail closed"},
             )
             assert response.status_code == 503
-            assert response.json()["detail"] == "redis unavailable"
+            assert response.json()["detail"] == "queue unavailable"
             assert response.json()["error_report"]["type"] == "MessageQueueUnavailable"
     finally:
         state.close()
@@ -1658,7 +1656,9 @@ def test_persistent_delegate_reports_result_and_accepts_follow_up(tmp_path: Path
         pytest.fail("automatic Agent report was not queued")
     assert reports[0].recipient_thread_id == session.session_id
     assert coordinator.consume_runtime_reports(runtime) == 1
-    assert queue.pending_deliveries() == []
+    assert not any(queue._streams.values())
+    assert not any(queue._thread_streams.values())
+    assert not any(queue._report_streams.values())
     delivered_reports = store.list_agent_turn_reports(session.session_id, states=("delivered",))
     assert [report.delivery_id for report in delivered_reports] == [reports[0].delivery_id]
     assert json.loads(coordinator.invoke(runtime, "get_thread_node", {})) == [
@@ -1798,7 +1798,7 @@ def test_running_subagent_bridge_accepts_live_runtime_config(tmp_path: Path) -> 
         parent_runner.close()
 
 
-def test_recover_session_reclaims_preclaimed_delivery_without_duplicate_canonical_input(tmp_path: Path) -> None:
+def test_binding_does_not_restart_preclaimed_delivery_or_old_agent(tmp_path: Path) -> None:
     paths = ClientPaths(tmp_path / "data")
     index = AgentThreadIndex()
     store = SQLiteSessionStore(paths, index)
@@ -1840,31 +1840,16 @@ def test_recover_session_reclaims_preclaimed_delivery_without_duplicate_canonica
         tmp_path,
     )
 
-    deadline = monotonic() + 5
-    while monotonic() < deadline:
-        runtime_thread = store.get_runtime_thread(session.session_id, child.node.thread_id)
-        if runtime_thread is not None and runtime_thread.running_turn_id is None:
-            break
-        sleep(0.01)
-    else:
-        pytest.fail("recovered Agent Turn did not finish")
-
-    recovered = store.get_node(session.session_id, turn.id)
-    assert isinstance(recovered, RuntimeState) and recovered.status == "success"
-    assert (
-        sum(
-            message.get("delivery_id") == delivery_id
-            for version in recovered.data
-            for message in version
-            if message.get("role") == "user"
-        )
-        == 1
-    )
-    assert queue.peek_thread(child.node.thread_id) is None
+    assert coordinator._jobs == {}
+    preserved = store.get_node(session.session_id, turn.id)
+    assert isinstance(preserved, RuntimeState) and preserved.status == "running"
+    coordinator.close()
+    queue.close()
+    assert MemoryMessageQueue().peek_thread(child.node.thread_id) is None
     registry.close_all(reason="test complete", timeout=5)
 
 
-def test_web_startup_reconciliation_leaves_running_subagent_for_coordinator_recovery(tmp_path: Path) -> None:
+def test_old_subagent_is_interrupted_on_access_not_restarted_at_startup(tmp_path: Path) -> None:
     data_root = tmp_path / "web"
     paths = ClientPaths(data_root)
     store = SQLiteSessionStore(paths)
@@ -1883,23 +1868,20 @@ def test_web_startup_reconciliation_leaves_running_subagent_for_coordinator_reco
         )
         assert isinstance(preserved, RuntimeState) and preserved.status == "running"
         assert runtime_thread is not None and runtime_thread.running_turn_id == child.turn.id
+        state.access_session(session.session_id)
+        interrupted = state.session_store.get_node(session.session_id, child.turn.id)
+        assert interrupted.status == "failed"
+        assert state.subagent_coordinator._jobs == {}
     finally:
         state.close()
 
 
-def test_real_http_sse_redis_subagents_auto_report_and_restart_idle_child(
+def test_real_http_sse_queue_subagents_auto_report_and_restart_idle_child(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     local_sandbox_runtime: None,
 ) -> None:
-    prefix = f"praxis:test:agents:{uuid4().hex}"
-    client = Redis.from_url(os.environ.get("PRAXIS_TEST_REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True)
-    try:
-        client.ping()
-    except Exception as exc:
-        client.close()
-        pytest.skip(f"real Redis unavailable: {exc}")
-    queue = RedisMessageQueue(client, key_prefix=prefix)
+    queue = MemoryMessageQueue()
     state = WebAppState(tmp_path / "web", message_queue=queue)
     monkeypatch.setattr(
         state,
@@ -2018,27 +2000,17 @@ def test_real_http_sse_redis_subagents_auto_report_and_restart_idle_child(
             source_runner.close()
     finally:
         state.close()
-        keys = list(client.scan_iter(f"{prefix}:*"))
-        if keys:
-            client.delete(*keys)
-        client.close()
+        queue.close()
 
 
-def test_real_http_sse_redis_subagents_persist_model_trace(
+def test_real_http_sse_queue_subagents_persist_model_trace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     local_sandbox_runtime: None,
     local_subagent_model: tuple[ModelConfig, list[str]],
 ) -> None:
     model_config, model_calls = local_subagent_model
-    prefix = f"praxis:test:agent-trace:{uuid4().hex}"
-    client = Redis.from_url(os.environ.get("PRAXIS_TEST_REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True)
-    try:
-        client.ping()
-    except Exception as exc:
-        client.close()
-        pytest.skip(f"real Redis unavailable: {exc}")
-    queue = RedisMessageQueue(client, key_prefix=prefix)
+    queue = MemoryMessageQueue()
     state = WebAppState(tmp_path / "web", message_queue=queue)
     monkeypatch.setattr(state, "model_config", lambda *_args, **_kwargs: model_config)
     planner = _DelegatingRootPlanner()
@@ -2165,10 +2137,7 @@ def test_real_http_sse_redis_subagents_persist_model_trace(
             assert follow_up_trace.items[-1].item.get("text") == "child answered through local HTTP"
     finally:
         state.close()
-        keys = list(client.scan_iter(f"{prefix}:*"))
-        if keys:
-            client.delete(*keys)
-        client.close()
+        queue.close()
 
 
 def test_context_strategies_freeze_share_compact_and_keep_independent_isolated(tmp_path: Path) -> None:

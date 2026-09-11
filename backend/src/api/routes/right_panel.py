@@ -170,7 +170,9 @@ def create_terminal(
         raise HTTPException(status_code=409, detail="当前 Turn 没有可用 cwd。")
     terminal_type = state.settings.runtime_config().get("terminal_type", "cmd")
     try:
-        terminal = state.terminal_manager.create(terminal_type, source.cwd)
+        with state.conversation_cache.lock:
+            state.conversation_cache.touch(session_id, source.thread_id, [source.id])
+            terminal = state.terminal_manager.create(terminal_type, source.cwd, thread_id=source.thread_id)
     except MessageQueueUnavailable as exc:
         return error_response(exc, status_code=503, detail="message_queue_unavailable")
     except (RuntimeError, ValueError) as exc:
@@ -272,7 +274,8 @@ async def _terminal_output(websocket: WebSocket, state: WebAppState, terminal_id
     while True:
         chunks = await asyncio.to_thread(state.terminal_manager.wait_after, terminal_id, sequence)
         for chunk in chunks:
-            await websocket.send_json({"type": "output", "sequence": chunk.sequence, "data": chunk.data})
+            content = {"segments": chunk.segments} if chunk.segments else {"data": chunk.data}
+            await websocket.send_json({"type": "output", "sequence": chunk.sequence, **content})
             sequence = chunk.sequence
         terminal = state.terminal_manager.get(terminal_id)
         if terminal is None:

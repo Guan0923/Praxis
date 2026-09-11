@@ -8,7 +8,6 @@
 - SQLite 存储版本为 17。旧库直接拒绝打开，不做迁移、删除或覆盖。
 - 创建 Turn 保存基础快照；运行中写 `runtime_delta:<turn_id>`。每条记录保留事件 ID、序号及原始增量。
 - `runtime_event_outbox` 是独立的待发送记录。确认发送只删除 outbox，不删除恢复日志。
-- `NodeWriter` 为同一份不可变增量分配顺序。主对话和子 Agent 的显示直接发布 Redis，保存交给容量为 256 的有界队列。
 - 队列满时生产者等待；没有定时攒批、不丢弃文字。每条增量单独提交 SQLite。
 - 后台保存线程复用连接。读取使用一致的只读事务，写入先取得写锁，避免读后升级写锁与事件确认互相阻塞。
 - 读取入口统一还原快照和后续增量，包括历史、恢复、回退、Trace 的 Turn 读取及侧栏摘要。
@@ -30,7 +29,6 @@
 
 ## 本机对比
 
-使用基线源码的独立 Python 环境及构建产物，与本分支分别运行相同的本地 HTTP 模型源。真实 Redis 使用独立前缀，SQLite 使用独立临时数据目录。
 输入包含 100 个带编号的中文段落及 Markdown/公式片段；共 116 个模型片段，每片间隔约 10 ms。表格统计其中 100 个可唯一匹配的段落。
 
 | 阶段，中位耗时 | main 基线 | 本分支 |
@@ -47,7 +45,6 @@
 页面可见延迟 P95：4131.68 ms → 32.20 ms。保存完成延迟 P95：27.86 ms → 53.69 ms，说明后台写入确实可能积压，不能把更快显示理解成所有保存延迟都下降。
 这些是本机单组样本，不是所有模型、机器或工作负载的提速保证。页面变化由浏览器 MutationObserver 记录，不等同于屏幕实际发光时间。
 
-原始记录在本 worktree 的 `.test-tmp/pipeline-before-real-01/test_browser_with_real_redis_h0/` 和 `.test-tmp/http-final-03/test_browser_with_real_redis_h0/`，包含 `pipeline-backend.json`、`pipeline-browser.json` 和桌面/窄屏截图。
 误用共享可编辑 Python 环境的初次基线样本未用于上表；上述基线已核对导入路径确实来自归档的 main 源码。
 
 ## 复验
@@ -55,7 +52,6 @@
 最终验证结果：
 
 - 相关后端 118 项通过；随后增加一项旧内存视图不可变回归，并连同 Trace/多消息共 33 项复验通过。日志记录格式的最后调整另有 25 项复验通过，重复项不累计。
-- 四类真实 HTTP/Redis/SQLite/浏览器测试全部通过：控制流程、富文本连续输出、Todo、写入失败，分两次各运行两项。
 - 前端全套 424 项通过；之后补充的两项异步公式过期/清理测试也通过。
 - TypeScript 类型检查、前端构建、Ruff 检查、格式检查及 `git diff --check` 通过。
 - 检查了 1365×900 桌面及 390×844 窄屏截图。富文本最终内容完整，未变化公式在追加和收尾时均未替换。
@@ -77,7 +73,6 @@ uv run python -m ruff check backend tests
 uv run python -m ruff format --check backend tests
 ```
 
-HTTP 测试使用显式测试 Sandbox launcher，不验证系统沙箱隔离，也不访问付费模型 API。Redis 必须可连接。每次运行应使用新的 basetemp 名称。
 计时汇总工具：`tests/support/streaming_metrics.py <before-directory> <after-directory>`。
 
 手动运行必须指定一个新的空目录和空闲端口，例如：

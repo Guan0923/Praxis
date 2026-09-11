@@ -3,7 +3,7 @@
 该包把 Handler 能力包装为模型可见的 Tool schema。
 
 - `filesystem.py`：读、写、列目录和 upload 读取 Tool。
-- `command.py`：`run_command`；`web.py`：search/fetch；`time.py`：当前时间。
+- `command.py`：`run_command` 与 `write_stdin`；`web.py`：search/fetch；`time.py`：当前时间。
 - `todo.py`：`update_todo_list`；`schema.py`：`object_schema`。
 - `__init__.py`：`build_default_tools` 汇总只读/可写集合。
 

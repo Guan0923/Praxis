@@ -2,7 +2,7 @@ import { useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateA
 import { getSessionNodes, pauseTurn } from "../api";
 import type { Conversation, RuntimeStateNode } from "../types";
 import type { ActiveRun, ChatRunRequest } from "./types";
-import { withLoadedTurns } from "./conversationProjection";
+import { withLoadedTurns, withRefreshedTurns } from "./conversationProjection";
 import { isRuntimeTurnNode } from "./runtime/runtimeNodeNormalization";
 import type { SandboxHealthState } from "./useSandboxHealth";
 
@@ -38,11 +38,11 @@ export function useSandboxRunLifecycle({
     }
     if (sandboxHealth.phase !== "unhealthy") return;
     const runningTurnIds = new Set<string>();
-    const turnSessions = new Map<string, { conversationId: string; sessionId: string }>();
+    const turnSessions = new Map<string, { conversationId: string; sessionId: string; threadId?: string }>();
     for (const [conversationId, active] of activeRunsRef.current.entries()) {
       if (active.turnId) {
         runningTurnIds.add(active.turnId);
-        turnSessions.set(active.turnId, { conversationId, sessionId: active.sessionId });
+        turnSessions.set(active.turnId, { conversationId, sessionId: active.sessionId, threadId: [...conversations, ...Object.values(panelConversations)].find((item) => item.id === conversationId)?.threadId });
       }
     }
     for (const conversation of [...conversations, ...Object.values(panelConversations)]) {
@@ -50,7 +50,7 @@ export function useSandboxRunLifecycle({
         if (isRuntimeTurnNode(node) && node.status === "running") {
           runningTurnIds.add(node.id);
           if (conversation.sessionId) {
-            turnSessions.set(node.id, { conversationId: conversation.id, sessionId: conversation.sessionId });
+            turnSessions.set(node.id, { conversationId: conversation.id, sessionId: conversation.sessionId, threadId: conversation.threadId });
           }
         }
       }
@@ -79,8 +79,8 @@ export function useSandboxRunLifecycle({
         const target = turnSessions.get(turnId);
         if (!target) return;
         try {
-          const nodes = await getSessionNodes(target.sessionId);
-          updateConversation(target.conversationId, (conversation) => withLoadedTurns(conversation, nodes));
+          const nodes = await getSessionNodes(target.sessionId, target.threadId);
+          updateConversation(target.conversationId, (conversation) => withRefreshedTurns(conversation, nodes));
         } catch {
           // The next health transition or session reload retries reconciliation.
         }

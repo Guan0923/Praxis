@@ -4,7 +4,6 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,11 +12,11 @@ from starlette.websockets import WebSocketDisconnect
 from backend.api.app import create_app
 from backend.api.session_store import session_store as web_session_store
 from backend.api.state import WebAppState
-from backend.api.terminal_manager import TERMINAL_DISCONNECT_SECONDS, TerminalManager, TerminalSession
+from backend.api.terminal_manager import TerminalManager, TerminalSession
 from backend.domain.right_panel import RightPanelWindow
 from backend.domain.runtime_state import RuntimeState, RuntimeStateTree
 from backend.domain.state import utc_now
-from backend.storage.terminal_stream import MAX_TERMINAL_CHUNKS, RedisTerminalOutputStream, TerminalOutputChunk
+from backend.storage.terminal_stream import MemoryTerminalOutputStream, TerminalOutputChunk
 from tests.local_store import session_store
 
 
@@ -216,7 +215,7 @@ def test_files_window_is_unique_and_does_not_require_a_turn(tmp_path: Path) -> N
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows terminal test")
-def test_terminal_creation_fails_closed_without_redis_and_restart_drops_stale_metadata(tmp_path: Path) -> None:
+def test_terminal_works_without_external_service_and_restart_drops_stale_metadata(tmp_path: Path) -> None:
     state = WebAppState(tmp_path / ".praxis")
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
@@ -226,9 +225,9 @@ def test_terminal_creation_fails_closed_without_redis_and_restart_drops_stale_me
             f"/api/right-panel/{sidebar['session_id']}/terminals",
             json={"source_turn_id": source.id},
         )
-        assert unavailable.status_code == 503
-        assert unavailable.json()["detail"] == "message_queue_unavailable"
+        assert unavailable.status_code == 201, unavailable.text
 
+        state.terminal_manager.close_all()
         now = utc_now()
         stale = RightPanelWindow(
             id="window_stale_terminal",
@@ -252,68 +251,16 @@ def test_terminal_creation_fails_closed_without_redis_and_restart_drops_stale_me
         assert deleted is not None and deleted.deleted_at is not None
 
 
-class _FakePipeline:
-    def __init__(self, client: _FakeRedis) -> None:
-        self.client = client
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-    def expire(self, key: str, seconds: int) -> None:
-        self.client.expirations[key] = seconds
-
-    def execute(self) -> list[object]:
-        return []
-
-
-class _FakeRedis:
-    def __init__(self) -> None:
-        self.streams: dict[str, list[tuple[str, dict[str, object]]]] = {}
-        self.sequences: dict[str, int] = {}
-        self.expirations: dict[str, int] = {}
-
-    def register_script(self, _script: str):
-        def append(*, keys: list[str], args: list[object]) -> int:
-            stream, sequence_key = keys
-            sequence = self.sequences.get(sequence_key, 0) + 1
-            self.sequences[sequence_key] = sequence
-            rows = self.streams.setdefault(stream, [])
-            rows.append((f"{sequence}-0", {"sequence": sequence, "data": args[0]}))
-            del rows[: max(0, len(rows) - int(args[1]))]
-            return sequence
-
-        return append
-
-    def ping(self) -> bool:
-        return True
-
-    def xrange(self, stream: str, **_kwargs):
-        return list(self.streams.get(stream, []))
-
-    def pipeline(self) -> _FakePipeline:
-        return _FakePipeline(self)
-
-    def delete(self, *keys: str) -> None:
-        for key in keys:
-            self.streams.pop(key, None)
-            self.sequences.pop(key, None)
-            self.expirations.pop(key, None)
-
-
-def test_terminal_stream_chunks_and_strictly_keeps_the_latest_256_entries() -> None:
-    stream = RedisTerminalOutputStream(_FakeRedis(), key_prefix="test")
-    split = stream.append("terminal", "x" * (16 * 1024 + 5))
-    assert [len(item.data) for item in split] == [16 * 1024, 5]
-    stream.delete("terminal")
-
-    for index in range(MAX_TERMINAL_CHUNKS + 1):
-        stream.append("terminal", str(index))
+def test_terminal_stream_keeps_head_and_tail_with_a_byte_limit() -> None:
+    stream = MemoryTerminalOutputStream()
+    stream.append("terminal", "H" * (512 * 1024))
+    stream.append("terminal", "M" * (1024 * 1024))
+    stream.append("terminal", "T" * (512 * 1024))
     replay = stream.after("terminal", 0)
-    assert len(replay) == MAX_TERMINAL_CHUNKS
-    assert replay[0].sequence == 2 and replay[-1].sequence == MAX_TERMINAL_CHUNKS + 1
+    assert replay[0].data.startswith("H" * 100)
+    assert replay[-1].data.endswith("T" * 100)
+    assert "1048576 bytes omitted" in replay[0].data
+    assert stream._buffers["terminal"].retained_bytes == 1024 * 1024
 
 
 @dataclass
@@ -344,38 +291,14 @@ class _FakeOutput:
         self.deleted.append(terminal_id)
 
 
-class _FakeTimer:
-    instances: list[_FakeTimer] = []
-
-    def __init__(self, delay: int, callback, args: tuple[str, ...]) -> None:
-        self.delay = delay
-        self.callback = callback
-        self.args = args
-        self.cancelled = False
-        self.daemon = False
-        self.instances.append(self)
-
-    def start(self) -> None:
-        return None
-
-    def cancel(self) -> None:
-        self.cancelled = True
-
-    def fire(self) -> None:
-        if not self.cancelled:
-            self.callback(*self.args)
-
-
 @pytest.mark.skipif(os.name != "nt", reason="Windows terminal cleanup test")
 def test_terminal_disconnect_reconnect_and_explicit_cleanup(monkeypatch) -> None:
-    monkeypatch.setattr("backend.api.terminal_manager.Timer", _FakeTimer)
     taskkill: list[list[str]] = []
     monkeypatch.setattr(
         "backend.api.terminal_manager.subprocess.run",
         lambda argv, **_kwargs: taskkill.append(argv),
     )
-    _FakeTimer.instances.clear()
-    manager = TerminalManager(SimpleNamespace())
+    manager = TerminalManager()
     process = _FakePty()
     output = _FakeOutput()
     session = TerminalSession("terminal", "cmd", "C:\\work", process, output)  # type: ignore[arg-type]
@@ -383,14 +306,14 @@ def test_terminal_disconnect_reconnect_and_explicit_cleanup(monkeypatch) -> None
 
     manager.connect(session.id)
     manager.disconnect(session.id)
-    first = _FakeTimer.instances[-1]
-    assert first.delay == TERMINAL_DISCONNECT_SECONDS == 30 * 60
-    assert output.expired == [session.id]
+    assert manager.get(session.id) is session
+    assert output.expired == []
 
     manager.connect(session.id)
-    assert first.cancelled is True
+    assert session.clients == 1
     manager.disconnect(session.id)
-    _FakeTimer.instances[-1].fire()
+    assert manager.get(session.id) is session
+    manager.close(session.id)
     assert manager.get(session.id) is None
     assert process.closed is True
     assert output.deleted == [session.id]

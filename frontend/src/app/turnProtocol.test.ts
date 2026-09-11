@@ -352,6 +352,16 @@ describe("Turn protocol projection", () => {
     expect(created.activeTurnId).toBe(first.id);
   });
 
+  it("keeps an unloaded history boundary when a new Turn arrives", () => {
+    const first = turn({ id: "page_head", parent_id: "older_unloaded", parent_session_id: "session_1", parent_thread_id: "session_1" });
+    const child = turn({ id: "new_child", parent_id: first.id, parent_session_id: "session_1", parent_thread_id: "session_1" });
+    const conversation: Conversation = { id: "session_1", title: "x", messages: [], runtimeNodes: [first], historyHasMore: true };
+    const updated = integrateRuntimeNodeUpdates(conversation, [child], child.id, true);
+    expect(updated.runtimeNodes?.map((node) => node.id)).toEqual([first.id, child.id]);
+    expect(updated.messages).toHaveLength(4);
+    expect(updated.historyHasMore).toBe(true);
+  });
+
   it("still rejects a missing non-root ancestor", () => {
     const root: RuntimeRootNode = { session_id: "session_1", thread_id: "session_1", id: "turn_root" };
     const first = turn({

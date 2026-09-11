@@ -138,7 +138,7 @@ class SQLiteNodeMixin:
             )
             self._put_json_object(connection, node.session_id, "runtime_node", node.id, node.to_dict(), node.timestamp)
             if frame is not None:
-                self._put_runtime_event(connection, node, frame)
+                self._advance_frame_sequence(connection, frame)
             self._touch_session(connection, node.session_id, node.timestamp)
 
     def update_node(self, node: TreeRuntimeState) -> None:
@@ -159,7 +159,7 @@ class SQLiteNodeMixin:
                 raise KeyError(node.id)
             self._put_json_object(connection, node.session_id, "runtime_node", node.id, node.to_dict(), node.timestamp)
             if frame is not None:
-                self._put_runtime_event(connection, node, frame)
+                self._advance_frame_sequence(connection, frame)
             self._set_thread_head(
                 connection,
                 session_id=node.session_id,
@@ -253,6 +253,85 @@ class SQLiteNodeMixin:
                     if value.parent_session_id == parent_session_id and value.parent_id == parent_id:
                         result.append(value)
         return sorted(result, key=lambda item: (item.timestamp, item.id))
+
+    def load_running_nodes(self, session_id: str):
+        with self._connection(session_id) as connection:
+            ids = [
+                row[0]
+                for row in connection.execute(
+                    "SELECT running_turn_id FROM runtime_threads WHERE session_id=? AND running_turn_id IS NOT NULL",
+                    (session_id,),
+                )
+            ]
+        return [node for node_id in ids if (node := self.get_node(session_id, node_id)) is not None]
+
+    def load_turn_page(
+        self, session_id: str, thread_id: str, *, before: str | None = None, limit: int = 5
+    ) -> tuple[list[TreeRuntimeState], str | None]:
+        import json
+
+        thread = self.get_runtime_thread(session_id, thread_id)
+        if thread is None:
+            raise KeyError("Conversation not found.")
+        head = thread.current_turn_id
+        current_session, current_id = session_id, head
+        if before:
+            try:
+                cursor = json.loads(before)
+                if not isinstance(cursor, dict) or any(
+                    not isinstance(cursor.get(key), str) or not cursor[key]
+                    for key in ("thread", "head", "session", "turn")
+                ):
+                    raise ValueError("Invalid history cursor.")
+                if cursor["thread"] != thread_id:
+                    raise ValueError("Conversation history changed; reload the latest page.")
+                cursor_head = self.get_node(session_id, cursor["head"])
+                if not isinstance(cursor_head, TreeRuntimeState) or (
+                    "version" in cursor and cursor_head.current_data_idx != cursor["version"]
+                ):
+                    raise ValueError("Conversation history changed; reload the latest page.")
+                if head != cursor["head"]:
+                    with self._connection(session_id) as connection:
+                        continuation = connection.execute(
+                            "WITH RECURSIVE ancestry(id) AS (VALUES (?) UNION "
+                            "SELECT json_extract(n.payload_json, '$.parent_id') FROM ancestry a "
+                            "JOIN json_objects n ON n.object_id=a.id AND n.namespace='runtime_node' AND n.session_id=? "
+                            "WHERE json_extract(n.payload_json, '$.parent_session_id')=?) "
+                            "SELECT 1 FROM ancestry WHERE id=? LIMIT 1",
+                            (head, session_id, session_id, cursor["head"]),
+                        ).fetchone()
+                    if continuation is None:
+                        raise ValueError("Conversation history changed; reload the latest page.")
+                current_session, current_id = cursor["session"], cursor["turn"]
+            except (KeyError, TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("Invalid history cursor.") from exc
+        page: list[TreeRuntimeState] = []
+        seen: set[tuple[str, str]] = set()
+        while current_id and len(page) < limit + 1:
+            key = (current_session, current_id)
+            if key in seen:
+                raise ValueError("Conversation history contains a cycle.")
+            seen.add(key)
+            node = self.get_node(current_session, current_id)
+            if node is None or isinstance(node, RuntimeRootState):
+                break
+            page.append(node)
+            current_session, current_id = node.parent_session_id, node.parent_id
+        more = len(page) > limit
+        cursor = None
+        if more:
+            following = page[limit]
+            head_node = self.get_node(session_id, head) if head else None
+            cursor = json.dumps(
+                {
+                    "thread": thread_id,
+                    "head": head,
+                    "version": head_node.current_data_idx if head_node else 0,
+                    "session": following.session_id,
+                    "turn": following.id,
+                }
+            )
+        return list(reversed(page[:limit])), cursor
 
     def load_nodes(self, session_id: str) -> list[RuntimeNode]:
         if not self.paths.session_db(session_id).exists():

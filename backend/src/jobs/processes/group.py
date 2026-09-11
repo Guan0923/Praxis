@@ -72,6 +72,8 @@ class ProcessGroup:
         popen_factory: ProcessFactory = subprocess.Popen,
         tree_terminator: TreeTerminator | None = None,
         termination_timeout: float = 5.0,
+        retain_tree: bool = False,
+        stdin: int | None = subprocess.DEVNULL,
         stdout: int | None = subprocess.DEVNULL,
         stderr: int | None = subprocess.DEVNULL,
     ) -> None:
@@ -82,6 +84,8 @@ class ProcessGroup:
         self._popen_factory = popen_factory
         self._tree_terminator = tree_terminator
         self._termination_timeout = termination_timeout
+        self._retain_tree = retain_tree
+        self._stdin = stdin
         self._stdout = stdout
         self._stderr = stderr
 
@@ -105,7 +109,7 @@ class ProcessGroup:
         process_options: dict[str, Any] = {
             "cwd": self._cwd,
             "env": self._env,
-            "stdin": subprocess.DEVNULL,
+            "stdin": self._stdin,
             "stdout": self._stdout,
             "stderr": self._stderr,
         }
@@ -117,7 +121,16 @@ class ProcessGroup:
         with self._lock:
             if self._process is not None and self._process.poll() is None:
                 return self._process.pid
-            process = self._popen_factory(self._argv, **process_options)
+            argv = self._argv
+            if self._is_windows and self._popen_factory is subprocess.Popen:
+                from pathlib import PureWindowsPath
+
+                if PureWindowsPath(argv[0]).name.casefold() in {"cmd", "cmd.exe"} and argv[-2].casefold() in {
+                    "/c",
+                    "/k",
+                }:
+                    argv = subprocess.list2cmdline(argv[:-1]) + ' "' + argv[-1] + '"'
+            process = self._popen_factory(argv, **process_options)
             self._process = process
             if self._is_windows:
                 self._windows_job_handle = _create_windows_job(process)
@@ -130,7 +143,7 @@ class ProcessGroup:
         if process is None:
             return None
         exit_code = process.poll()
-        if exit_code is not None:
+        if exit_code is not None and not self._retain_tree:
             self._release_windows_job()
         return exit_code
 
@@ -147,8 +160,50 @@ class ProcessGroup:
             exit_code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             return None
-        self._release_windows_job()
+        if not self._retain_tree:
+            self._release_windows_job()
         return exit_code
+
+    def release_streams(self) -> None:
+        process = self._process
+        if process is not None:
+            for source in ("stdin", "stdout", "stderr"):
+                stream = getattr(process, source, None)
+                if stream is not None:
+                    stream.close()
+        self._release_windows_job()
+
+    def read_stream(self, source: str, size: int = 16384) -> bytes:
+        process = self._process
+        stream = getattr(process, source, None)
+        if stream is None:
+            return b""
+        return stream.read1(size) if hasattr(stream, "read1") else stream.read(size)
+
+    def write_stdin(self, data: bytes) -> None:
+        process = self._process
+        if process is None or process.stdin is None or process.poll() is not None:
+            raise BrokenPipeError("Command is no longer accepting input.")
+        process.stdin.write(data)
+        process.stdin.flush()
+
+    def interrupt(self) -> None:
+        import signal
+
+        process = self._process
+        if process is None or process.poll() is not None:
+            return
+        if self._is_windows:
+            try:
+                send = getattr(process, "send_signal", None)
+                if send is None:
+                    self.terminate()
+                else:
+                    send(signal.CTRL_BREAK_EVENT)
+            except OSError:
+                self.terminate()
+        else:
+            os.killpg(process.pid, signal.SIGINT)
 
     def communicate(
         self,
@@ -181,8 +236,13 @@ class ProcessGroup:
         """
         with self._lock:
             process = self._process
-            if process is None or process.poll() is not None:
-                return  # nothing running → already-exited idempotent no-op
+            if process is None:
+                return
+            if process.poll() is not None:
+                if self._retain_tree:
+                    self._terminate_tree(process)
+                    self._release_windows_job_locked()
+                return
 
             tree_termination_requested = self._terminate_tree(process)
 

@@ -71,8 +71,6 @@ def test_text_writes_are_deltas_and_all_store_readers_reconstruct_them(tmp_path:
         next(item for item in store.load_nodes(node.session_id) if item.id == node.id).assistant_items[0]["text"]
         == expected
     )
-    for frame in frames:
-        store.ack_runtime_event(node.session_id, frame.event_id)
     assert store.get_node(node.session_id, node.id).assistant_items[0]["text"] == expected
     node = writer.set_item_status(node, data_idx=0, message_idx=1, item_idx=0, status="success")
     final = writer.finalize(node, "success")
@@ -172,9 +170,9 @@ def test_persistence_failure_is_reported_and_never_emits_success(tmp_path: Path)
 def test_old_execution_cursor_is_not_replayed_after_restart() -> None:
     old = SimpleNamespace()
     current = SimpleNamespace()
-    cursor = _cursor_id(old, "12-0")
-    assert _resume_cursor(old, cursor, "13-0") == "12-0"
-    assert _resume_cursor(current, cursor, "13-0") == "13-0"
+    cursor = _cursor_id(old, "12")
+    assert _resume_cursor(old, cursor, "13") == "12"
+    assert _resume_cursor(current, cursor, "13") == "13"
 
 
 def test_finishing_an_item_does_not_mutate_a_previously_emitted_view(tmp_path: Path) -> None:
@@ -201,8 +199,6 @@ def test_reopened_store_recovers_committed_delta_without_an_outbox(tmp_path: Pat
     writer = NodeWriter(store, emit=frames.append)
     node = writer.create(node)
     node = writer.append_item(node, {"type": "text", "text": "committed", "status": "running"})
-    for frame in frames:
-        store.ack_runtime_event(node.session_id, frame.event_id)
     reopened = SQLiteSessionStore(store.paths)
     recovered, sequence = reopened.runtime_stream_snapshot(node.session_id, node.id)
     assert recovered.assistant_items[0]["text"] == "committed"

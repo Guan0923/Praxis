@@ -45,7 +45,7 @@ Praxis does not require a Praxis account or a cloud-sync service. Application da
 
 The development workflow below targets **Windows**. Command isolation uses a Windows sandbox service; do not assume equivalent sandbox support on other operating systems.
 
-You will need **Python 3.11+**, **Node.js 20+**, **uv**, and **Docker Desktop** for Redis. If you use the project's Conda setup, run `conda activate dev` first. You also need a model service you are authorized to use.
+You will need **Python 3.11+**, **Node.js 20+**, **uv**,. If you use the project's Conda setup, run `conda activate dev` first. You also need a model service you are authorized to use.
 
 From the repository root:
 
@@ -54,7 +54,6 @@ uv sync --locked
 cd frontend
 npm ci
 cd ..
-docker compose up -d redis
 uv run python -m backend.api
 ```
 
@@ -71,7 +70,7 @@ Open **<http://127.0.0.1:5173>**, then:
 2. Check the **Sandbox** settings. Installing the Windows sandbox requires administrator approval. Commands that require it remain blocked until it is ready.
 3. Create a conversation or open a project, reference the relevant files, and describe a task. Start in Plan mode when you want to agree on the approach first.
 
-Redis must be running for message queues and task execution. The app does not switch to an in-memory queue if Redis is unavailable.
+Run one backend process. Queued messages and temporary state live only in that process; restarting it discards them. SQLite retains formal history.
 
 For a single-server setup, build the frontend with `npm run build` inside `frontend/`, then run the backend. It serves the built app at <http://127.0.0.1:8000>.
 

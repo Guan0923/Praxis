@@ -1,4 +1,4 @@
-"""Full loopback HTTP/Redis/browser verification with an unpaid local model."""
+"""Full loopback HTTP/memory/browser verification with an unpaid local model."""
 
 from __future__ import annotations
 
@@ -25,14 +25,14 @@ from backend.domain.runtime_state import NodeWriter
 from backend.planning.llm import LLMPlanner
 from backend.providers import LLMClient, ModelConfig
 from backend.runtime import build_application
-from backend.storage.message_queue import RedisMessageQueue
+from backend.storage.message_queue import MemoryMessageQueue
 from backend.storage.sqlite import SQLiteSessionStore
 
 
 @pytest.mark.parametrize(
     "benchmark", [False, True, "todo", "failure"], ids=["controls", "rich-stream", "todo", "failure"]
 )
-def test_browser_with_real_redis_http_and_small_model_chunks(tmp_path, monkeypatch, local_sandbox_runtime, benchmark):
+def test_browser_with_real_memory_http_and_small_model_chunks(tmp_path, monkeypatch, local_sandbox_runtime, benchmark):
     root = Path(__file__).resolve().parents[1]
     if not (root / "frontend/dist/index.html").exists() or not shutil.which("node"):
         pytest.skip("Build frontend and install Node before the browser integration check")
@@ -177,7 +177,7 @@ def test_browser_with_real_redis_http_and_small_model_chunks(tmp_path, monkeypat
     model = ThreadingHTTPServer(("127.0.0.1", 0), Model)
     model_thread = threading.Thread(target=model.serve_forever, daemon=True)
     model_thread.start()
-    queue = RedisMessageQueue.from_url(key_prefix=f"praxis:test:chat-latency:{uuid4().hex}")
+    queue = MemoryMessageQueue()
     queue.ping()
 
     class TestBroker:
@@ -273,10 +273,7 @@ def test_browser_with_real_redis_http_and_small_model_chunks(tmp_path, monkeypat
         model.shutdown()
         model.server_close()
         model_thread.join(3)
-        keys = list(queue.client.scan_iter(f"{queue.key_prefix}:*"))
-        if keys:
-            queue.client.delete(*keys)
-        queue.client.close()
+        queue.close()
 
 
 def verify_control_races(url, state, metrics):

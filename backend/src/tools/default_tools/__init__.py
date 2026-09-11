@@ -10,7 +10,7 @@ from ..base import Tool
 from ..command import WorkspaceCommand
 from ..filesystem import WorkspaceFiles
 from ..web import DdgrWebSearch, SafeWebFetcher
-from .command import command_tool
+from .command import command_tool, stdin_tool
 from .filesystem import filesystem_mutation_tools, filesystem_read_tools
 from .time import time_tools
 from .todo import todo_tools
@@ -29,6 +29,7 @@ def build_default_tools(
     """Build tools in the stable order exposed to planners."""
 
     workspace_files = files or WorkspaceFiles(workspace, project_workspace=project_workspace)
+    commands = WorkspaceCommand(project_workspace or workspace, terminal_type=terminal_type)
     tools = [
         *time_tools(),
         *todo_tools(),
@@ -38,12 +39,8 @@ def build_default_tools(
             fetcher or SafeWebFetcher(),
         ),
         *filesystem_mutation_tools(workspace_files),
-        command_tool(
-            WorkspaceCommand(
-                project_workspace or workspace,
-                terminal_type=terminal_type,
-            )
-        ),
+        command_tool(commands),
+        stdin_tool(commands),
     ]
     return tuple(tools)
 

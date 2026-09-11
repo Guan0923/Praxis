@@ -89,7 +89,7 @@ def test_resume_is_bound_to_requested_thread_and_turn(tmp_path: Path) -> None:
     assert store.find_node(main_paused.turn_id).status == "paused"
 
 
-def test_startup_finishes_each_interrupted_thread_independently(tmp_path: Path) -> None:
+def test_session_access_finishes_each_interrupted_thread_independently(tmp_path: Path) -> None:
     _app, store, main, branch = conversations(tmp_path)
     for conversation in (main, branch):
         with pytest.raises(KeyboardInterrupt):
@@ -98,6 +98,7 @@ def test_startup_finishes_each_interrupted_thread_independently(tmp_path: Path) 
     attempts = [conversation.runtime.run for conversation in (main, branch)]
     reopened = WebAppState(tmp_path / "data", message_queue=MemoryMessageQueue())
     try:
+        reopened.access_session(session_id)
         for attempt in attempts:
             saved = store.load_runtime(session_id, thread_id=attempt.thread_id)
             assert saved.status == "idle" and saved.current_run.status == "failed"

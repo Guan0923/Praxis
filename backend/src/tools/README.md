@@ -14,3 +14,11 @@
 所有 tool_call 在 Handler 前经过 Runtime Hook/Sandbox 决策；资源语义校验仍必须保留在具体 Handler。
 
 `ToolError` 可以保留工具失败分类，但捕获底层异常时不得添加工具名或 unexpected 前缀；Tool result/error 展示统一使用脱敏后的根因原消息。
+
+## 命令读写
+
+- `run_command(cmd, yield_time_ms=10000, max_output_tokens=2000)` 启动命令，等待结束不会杀进程；仍运行时返回 `session_id`。
+- `write_stdin(session_id, chars="", yield_time_ms=60000, max_output_tokens=2000)` 读取新增输出或发送输入；Ctrl+C 用于中断所属命令。
+- 输出以 JSON 文本返回，包含 `output`、`status` 和运行中的 `session_id` 或结束后的 `exit_code`。非零退出仍标记工具失败并保留真实错误报告。
+- 命令只属于创建它的 Turn 和运行任务；Turn 结束、暂停、取消或后端关闭时清理进程树。沙箱硬限制继续有效。
+- 每个命令的输出缓存最多 1 MiB，头尾各 512 KiB，中间丢弃。单次返回再按 token 预算保留头尾，被省略部分不会在下一次补发。

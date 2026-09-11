@@ -1,3 +1,4 @@
+import type { TurnPage } from "../../api/conversations/turns";
 import { reportFromError } from "../../api/errorReport";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getSessionNodes, sendAgentThreadMessage, streamAgentThread } from "../../api";
@@ -27,6 +28,7 @@ function mergeNodes(current: RuntimeTreeNode[] | undefined, updates: RuntimeTree
 }
 
 export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThreadViewOptions) {
+  const [historyByThread, setHistoryByThread] = useState<Record<string, Pick<Conversation, "historyCursor" | "historyHasMore">>>({});
   const [selectedByRootThread, setSelectedByRootThread] = useState<Record<string, string>>({});
   const [pendingByThread, setPendingByThread] = useState<Record<string, ChatMessage[]>>({});
   const [treeInvalidation, setTreeInvalidation] = useState(0);
@@ -64,7 +66,7 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
       .filter(isRuntimeTurnNode)
       .filter((node) => node.thread_id === selectedThreadId)
       .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
-    return withLoadedTurns(
+    const projected = withLoadedTurns(
       {
         ...canonical,
         threadId: selectedThreadId,
@@ -75,7 +77,12 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
       },
       canonical.runtimeNodes ?? [],
     );
-  }, [canonical, isSubagent, selectedThreadId]);
+    return { ...projected, ...historyByThread[selectedThreadId] };
+  }, [canonical, isSubagent, selectedThreadId, historyByThread]);
+
+  const viewRef = useRef(viewConversation);
+  viewRef.current = viewConversation;
+  useEffect(() => { setHistoryByThread({}); }, [canonical?.id]);
 
   const pendingKey = sessionId && selectedThreadId ? `${sessionId}:${selectedThreadId}` : "";
   const canonicalDeliveryIds = useMemo(
@@ -116,7 +123,7 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
     };
 
     const reload = async () => {
-      const nodes = await getSessionNodes(sessionId);
+      const nodes = await getSessionNodes(sessionId, selectedThreadId);
       if (!controller.signal.aborted) commitNodes(nodes);
     };
 
@@ -146,7 +153,7 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
           }, controller.signal, lastEventId, (cursor) => {
             lastEventId = cursor;
           });
-          if (result === "aborted") return;
+          if (result === "aborted" || result === "evicted") return;
           throw new Error("Agent Thread SSE ended unexpectedly.");
         } catch (error) {
           if (controller.signal.aborted) return;
@@ -159,6 +166,17 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
     void run();
     return () => controller.abort();
   }, [canonical?.id, enabled, isSubagent, selectedThreadId, sessionId]);
+
+  function applyHistoryPage(page: TurnPage, append = true) {
+    if (!canonical || !selectedThreadId || viewRef.current?.id !== canonical.id
+      || viewRef.current?.threadId !== selectedThreadId
+      || viewRef.current?.activeTurnId !== viewConversation?.activeTurnId
+      || viewRef.current?.historyCursor !== viewConversation?.historyCursor) return;
+    updateRef.current(canonical.id, (current) => current.messagesLoaded === false ? current : {
+      ...current, runtimeNodes: append ? mergeNodes(page.turns, current.runtimeNodes ?? []) : mergeNodes(current.runtimeNodes, page.turns),
+    });
+    setHistoryByThread((current) => ({ ...current, [selectedThreadId]: { historyCursor: page.next_cursor, historyHasMore: page.has_more } }));
+  }
 
   function selectThread(threadId: string) {
     if (!rootThreadId) return;
@@ -216,6 +234,7 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
     treeInvalidation,
     streamError,
     selectThread,
+    applyHistoryPage,
     sendMessage,
   };
 }

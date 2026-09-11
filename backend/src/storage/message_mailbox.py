@@ -5,13 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from .memory_message_queue import MemoryMessageQueue
-from .redis_message_queue import RedisMessageQueue
 
 
-class RedisTurnMailbox:
+class TurnMailbox:
     """Callable safe-boundary adapter consumed by AgentRuntime."""
 
-    def __init__(self, queue: RedisMessageQueue | MemoryMessageQueue, turn_id: str, consumer: str) -> None:
+    def __init__(self, queue: MemoryMessageQueue, turn_id: str, consumer: str) -> None:
         self.queue = queue
         self.turn_id = turn_id
         self.consumer = consumer
@@ -39,12 +38,12 @@ class RedisTurnMailbox:
         self.closed = True
 
 
-class RedisAgentMailbox(RedisTurnMailbox):
+class AgentMailbox(TurnMailbox):
     """Safe-boundary adapter combining one Turn stream and its Thread mailbox."""
 
     def __init__(
         self,
-        queue: RedisMessageQueue | MemoryMessageQueue,
+        queue: MemoryMessageQueue,
         turn_id: str,
         thread_id: str,
         consumer: str,
@@ -72,4 +71,4 @@ class RedisAgentMailbox(RedisTurnMailbox):
         ]
 
 
-__all__ = ["RedisAgentMailbox", "RedisTurnMailbox"]
+__all__ = ["AgentMailbox", "TurnMailbox"]

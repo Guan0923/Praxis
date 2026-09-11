@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -489,7 +490,7 @@ def test_approved_command_uses_hook_decision_for_real_process_and_cleans_up(
                     name="run_command",
                     call_id="call_command",
                     arguments={
-                        "command": (
+                        "cmd": (
                             'powershell -NoProfile -Command "Start-Sleep -Milliseconds 200; Write-Output hook-sandbox"'
                             if os.name == "nt"
                             else "sleep 0.2; printf hook-sandbox"
@@ -578,6 +579,7 @@ def test_command_without_sandbox_launcher_is_rejected_before_handler() -> None:
 
 def test_real_sandbox_command_timeout_cleans_process_resources(tmp_path: Path) -> None:
     launcher = DirectTestSandboxLauncher()
+    launcher.terminate_tree = None
     decision = SandboxExecutionDecision(
         launcher=launcher,
         workspaces=(tmp_path,),
@@ -587,7 +589,7 @@ def test_real_sandbox_command_timeout_cleans_process_resources(tmp_path: Path) -
         network_mode=NetworkMode.NO_NETWORK,
         network_allowlist=(),
         proxy_port=17831,
-        limits=ResourceLimits(wall_seconds=5),
+        limits=ResourceLimits(wall_seconds=1),
     )
     command = WorkspaceCommand(tmp_path)
     slow_command = "powershell -NoProfile -Command Start-Sleep -Seconds 5" if os.name == "nt" else "sleep 5"
@@ -596,7 +598,7 @@ def test_real_sandbox_command_timeout_cleans_process_resources(tmp_path: Path) -
         command.run_with_context(
             ToolInvocationContext(session_id="session-timeout", sandbox_decision=decision),
             slow_command,
-            timeout_seconds=1,
+            yield_time_ms=10000,
         )
 
     assert launcher._temp_dirs == {}
@@ -626,5 +628,5 @@ def test_real_local_sandbox_command_starts_from_project_workspace(tmp_path: Path
         "cd" if os.name == "nt" else "pwd",
     )
 
-    assert os.path.normcase(str(project_workspace.resolve())) in os.path.normcase(output)
+    assert os.path.normcase(str(project_workspace.resolve())) in os.path.normcase(json.loads(output)["output"])
     assert launcher._temp_dirs == {}

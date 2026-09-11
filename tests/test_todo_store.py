@@ -1,37 +1,24 @@
 from __future__ import annotations
 
-import os
 from concurrent.futures import ThreadPoolExecutor
-from uuid import uuid4
 
 import pytest
-from redis import Redis
 
 from backend.domain import TodoStateError
-from backend.storage.todo_list import TODO_TTL_SECONDS, MemoryTodoListStore, RedisTodoListStore
+from backend.storage.todo_list import MemoryTodoListStore
 
 
 @pytest.fixture
-def redis_todo_store() -> tuple[RedisTodoListStore, Redis, str]:
-    prefix = f"praxis:test:todo:{uuid4().hex}"
-    client = Redis.from_url(os.environ.get("PRAXIS_TEST_REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True)
-    try:
-        client.ping()
-    except Exception as exc:
-        client.close()
-        pytest.skip(f"real Redis unavailable: {exc}")
-    store = RedisTodoListStore(client, key_prefix=prefix)
-    yield store, client, prefix
-    keys = list(client.scan_iter(f"{prefix}:*"))
-    if keys:
-        client.delete(*keys)
-    client.close()
+def memory_todo_store():
+    store = MemoryTodoListStore()
+    yield store
+    store.close()
 
 
-def test_real_redis_todo_transaction_is_atomic_and_idempotent(
-    redis_todo_store: tuple[RedisTodoListStore, Redis, str],
+def test_memory_todo_transaction_is_atomic_and_idempotent(
+    memory_todo_store: MemoryTodoListStore,
 ) -> None:
-    store, _client, _prefix = redis_todo_store
+    store = memory_todo_store
     operations = [
         {"op": "add", "content": "same", "status": "in_progress"},
         {"op": "add", "content": "same", "status": "in_progress"},
@@ -69,10 +56,10 @@ def test_real_redis_todo_transaction_is_atomic_and_idempotent(
     assert store.snapshot("session", "turn") == first.snapshot
 
 
-def test_real_redis_rejects_stale_revision_and_conflicting_call_id(
-    redis_todo_store: tuple[RedisTodoListStore, Redis, str],
+def test_memory_rejects_stale_revision_and_conflicting_call_id(
+    memory_todo_store: MemoryTodoListStore,
 ) -> None:
-    store, _client, _prefix = redis_todo_store
+    store = memory_todo_store
     operations = [{"op": "add", "content": "work", "status": "pending"}]
     store.update(
         session_id="session",
@@ -105,10 +92,10 @@ def test_real_redis_rejects_stale_revision_and_conflicting_call_id(
     assert store.snapshot("session", "turn").revision == 1
 
 
-def test_real_redis_finalization_and_ttl_lifecycle(
-    redis_todo_store: tuple[RedisTodoListStore, Redis, str],
+def test_memory_finalization_without_expiry(
+    memory_todo_store: MemoryTodoListStore,
 ) -> None:
-    store, client, _prefix = redis_todo_store
+    store = memory_todo_store
     store.update(
         session_id="session",
         turn_id="turn",
@@ -116,22 +103,18 @@ def test_real_redis_finalization_and_ttl_lifecycle(
         expected_revision=0,
         operations=[{"op": "add", "content": "work", "status": "pending"}],
     )
-    key = store._key("session", "turn")
 
-    assert client.ttl(key) == -1
     assert store.claim_finalization("session", "turn") is True
     assert store.claim_finalization("session", "turn") is False
     assert store.finalization_claimed("session", "turn") is True
     store.expire_turn("session", "turn")
-    assert 0 < client.ttl(key) <= TODO_TTL_SECONDS
     store.persist_turn("session", "turn")
-    assert client.ttl(key) == -1
 
 
-def test_real_redis_allows_only_one_concurrent_writer(
-    redis_todo_store: tuple[RedisTodoListStore, Redis, str],
+def test_memory_allows_only_one_concurrent_writer(
+    memory_todo_store: MemoryTodoListStore,
 ) -> None:
-    store, _client, _prefix = redis_todo_store
+    store = memory_todo_store
 
     def update(call_id: str):
         try:
@@ -154,10 +137,10 @@ def test_real_redis_allows_only_one_concurrent_writer(
     assert store.snapshot("session", "turn").revision == 1
 
 
-def test_real_redis_isolates_sessions_and_turns_even_when_call_ids_match(
-    redis_todo_store: tuple[RedisTodoListStore, Redis, str],
+def test_memory_isolates_sessions_and_turns_even_when_call_ids_match(
+    memory_todo_store: MemoryTodoListStore,
 ) -> None:
-    store, _client, _prefix = redis_todo_store
+    store = memory_todo_store
     operation = [{"op": "add", "content": "isolated", "status": "pending"}]
 
     first = store.update(
@@ -285,10 +268,10 @@ def test_memory_store_compaction_copy_rejects_an_unrelated_target() -> None:
     assert store.snapshot("session", "target").todos[0].content == "target"
 
 
-def test_real_redis_compaction_copy_preserves_state_and_ttl_lifecycle(
-    redis_todo_store: tuple[RedisTodoListStore, Redis, str],
+def test_memory_compaction_copy_preserves_state_without_expiry(
+    memory_todo_store: MemoryTodoListStore,
 ) -> None:
-    store, client, _prefix = redis_todo_store
+    store = memory_todo_store
     source = store.update(
         session_id="session",
         turn_id="turn-source",
@@ -308,17 +291,14 @@ def test_real_redis_compaction_copy_preserves_state_and_ttl_lifecycle(
     assert copied == source.snapshot
     assert store.snapshot("session", "turn-target") == source.snapshot
     assert store.finalization_claimed("session", "turn-target") is True
-    assert client.ttl(store._key("session", "turn-target")) == -1
     store.expire_turn("session", "turn-source")
-    assert 0 < client.ttl(store._key("session", "turn-source")) <= TODO_TTL_SECONDS
 
 
-def test_real_redis_compaction_copy_handles_completed_empty_absent_and_repeated_targets(
-    redis_todo_store: tuple[RedisTodoListStore, Redis, str],
+def test_memory_compaction_copy_handles_completed_empty_absent_and_repeated_targets(
+    memory_todo_store: MemoryTodoListStore,
 ) -> None:
-    store, client, _prefix = redis_todo_store
+    store = memory_todo_store
     assert store.copy_for_compaction("session", "missing", "missing-target", expected_revision=0) is None
-    assert client.exists(store._key("session", "missing-target")) == 0
 
     completed = store.update(
         session_id="session",
@@ -380,4 +360,3 @@ def test_real_redis_compaction_copy_handles_completed_empty_absent_and_repeated_
         expected_revision=emptied.snapshot.revision,
     )
     assert empty_copy is not None and empty_copy.revision == 2 and empty_copy.todos == ()
-    assert client.exists(store._key("session", "empty-target")) == 1

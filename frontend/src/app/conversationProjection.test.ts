@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Conversation, RuntimeStateNode, RuntimeTreeNode } from "../types";
-import { withLoadedTurns } from "./conversationProjection";
+import { withLoadedTurns, withRefreshedTurns } from "./conversationProjection";
 import { TURN_PROTOCOL_VERSION } from "./runtime/runtimeNodeNormalization";
 
 const turn = (
@@ -99,4 +99,15 @@ describe("side-chat conversation projection", () => {
       "persisted-question-answer",
     ]);
   });
+});
+
+
+it("refreshes the recent page without dropping appended history", () => {
+  const nodes = Array.from({ length: 10 }, (_, index) => turn(String(index), index ? String(index - 1) : "root", "session", String(index)));
+  const conversation = withLoadedTurns({ id: "session", title: "history", sessionId: "session", messages: [] }, nodes);
+  const refreshed = withRefreshedTurns(conversation, nodes.slice(5).map((node) => ({ ...node, status: "paused" })));
+  expect(refreshed.runtimeNodes).toHaveLength(10);
+  expect(refreshed.messages[0].content).toBe("0");
+  expect(refreshed.runtimeNodes?.at(-1)).toMatchObject({ status: "paused" });
+  expect(refreshed.historyCursor).toBe(conversation.historyCursor);
 });

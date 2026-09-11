@@ -63,7 +63,10 @@ export function useChatScroll(conversationId: string | undefined, messages: Chat
       positionRef.current = null;
     }
     if (scrollContainer.clientHeight === 0 || restoringRef.current) return;
-    if (!shouldStickToBottomRef.current) return;
+    if (!shouldStickToBottomRef.current) {
+      if (positionRef.current) restorePosition(scrollContainer, positionRef.current);
+      return;
+    }
     scrollContainer.scrollTop = scrollContainer.scrollHeight;
     syncBottomState(scrollContainer);
   }, [conversationId, messages, syncBottomState, active]);

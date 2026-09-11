@@ -54,7 +54,6 @@ The complete backend run finished with 1273 passed, 49 skipped and 10 failed. Af
 - Actual child process writes and parent reads a protected diagnostic file; an early child exit without a report is reported honestly.
 - Actual command exits nonzero with sensitive stderr; exit code, original exception and redacted output are retained.
 - Static ErrorDisplay browser verification at 1280x800 and 390x844: expansion, copying, no horizontal overflow and no page errors. Screenshots are in .test-tmp/error-report-desktop.png and .test-tmp/error-report-mobile.png.
-- The existing real Redis/HTTP/browser persistence-failure check now verifies the OSError summary and expanded details instead of a generic persistence message.
 - Frontend: 446 tests passed in the final full run (54 files). TypeScript checking and the production build passed.
 - Backend final boundary checks: 314 passed, covering reports, real commands, MCP, Broker installation/report handling, maintenance exclusion, hooks, subprocesses, memory storage and Turn HTTP/SSE. Earlier command/cleanup checks also passed 146 tests.
 - Ruff excludes generated .test-tmp fixtures, which deliberately contain invalid Python; source checks and format checks passed. The initially requested bare-dot check included those generated fixtures and failed, so it is not reported as a pass.
@@ -68,6 +67,5 @@ Reproduced in the original working tree without source edits:
 2. test_baseline_small_chunk_latency_and_outbox_size compares equal 479-byte outbox measurements with a less-than-one-tenth expectation.
 3. test_running_subagent_bridge_accepts_live_runtime_config sometimes reads read_only immediately after a workspace_write update. It also failed in the original working tree during this verification.
 
-A separate full-browser control scenario intermittently timed out while waiting for a delayed-session request in an earlier run. All four real Redis/HTTP/browser scenarios passed in the final complete backend run, including the original persistence-error summary and expanded stack. The earlier timeout is retained here rather than erased from the verification history.
 
 Docker/download acceptance, the isolated MCP-v1 environment and platform-inapplicable tests retain their existing skip conditions. Actual UAC installation, privileged account/ACL/network repair and production Broker lifecycle changes were not executed. This work proves diagnostics in isolated local chains, not a successful repair or deployment of the running sandbox.

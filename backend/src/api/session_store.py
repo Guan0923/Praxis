@@ -10,12 +10,21 @@ from .state import WebAppState
 def session_store(state: WebAppState):
     from backend.storage.sqlite import SQLiteSessionStore
 
-    return SQLiteSessionStore(state.paths, getattr(state, "agent_thread_index", None))
+    class AccessedSessionStore(SQLiteSessionStore):
+        def _connection(self, session_id: str, **kwargs):
+            if kwargs.get("initialize"):
+                with state._session_access_lock:
+                    state._accessed_sessions.add(session_id)
+            else:
+                state.access_session(session_id)
+            return super()._connection(session_id, **kwargs)
+
+    return AccessedSessionStore(state.paths, getattr(state, "agent_thread_index", None))
 
 
 def require_session(store, session_id: str):
     try:
-        summary = store.get_session_summary(session_id)
+        summary = store.get_session(session_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Session id 无效。") from exc
     if summary is None:

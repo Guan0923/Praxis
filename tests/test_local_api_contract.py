@@ -55,11 +55,11 @@ def test_local_apis_need_no_session_credentials_and_removed_routes_are_absent(tm
         assert client.post("/api/sync/push", json={}).status_code == 404
 
 
-def test_health_stays_live_while_ready_and_queue_mutations_fail_when_redis_is_unavailable(tmp_path: Path) -> None:
+def test_readiness_only_checks_database_and_closed_queue_rejects_mutations(tmp_path: Path) -> None:
     state = WebAppState(tmp_path / ".praxis", message_queue=UnavailableMessageQueue())
     with TestClient(create_app(state)) as client:
         assert client.get("/api/health").status_code == 200
-        assert client.get("/api/ready").status_code == 503
+        assert client.get("/api/ready").json() == {"status": "ready", "service": "praxis-backend", "database": "ok"}
         sidebar = client.post("/api/sidebar-threads", json={}).json()
         sidebar_list = client.get("/api/sidebar-threads")
         assert sidebar_list.status_code == 200
@@ -69,7 +69,7 @@ def test_health_stays_live_while_ready_and_queue_mutations_fail_when_redis_is_un
         create_turn = client.post(
             "/api/turns",
             json={
-                "id": "turn-no-redis",
+                "id": "turn-closed-queue",
                 "session_id": sidebar["session_id"],
                 "thread_id": sidebar["thread_id"],
                 "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]},

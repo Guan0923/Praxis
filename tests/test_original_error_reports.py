@@ -269,7 +269,9 @@ def test_real_command_failure_keeps_exit_code_and_redacted_stderr(tmp_path):
     assert "stderr:" in info.error_report["traceback"]
     assert "command-fixture-secret" not in json.dumps(info.error_report)
     with pytest.raises(CommandError) as failure:
-        WorkspaceCommand._result(job, max_output_chars=20000)
+        from backend.tools import ToolInvocationContext
+
+        WorkspaceCommand(tmp_path)._read(job, ToolInvocationContext(), 0, 2000)
     assert failure.value is job.failure_exception
     assert failure.value.__cause__ is None
 

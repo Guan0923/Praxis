@@ -198,6 +198,7 @@ def test_create_directory_is_recursive_idempotent_and_registered_as_approved_wri
         "write_file",
         "edit_file",
         "run_command",
+        "write_stdin",
     }
     with pytest.raises(ConfirmationRequired):
         registry.invoke("create_directory", {"path": str(tmp_path / "approved")})

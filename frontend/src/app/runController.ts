@@ -105,7 +105,7 @@ export function createRunController(callbacks: RunControllerCallbacks) {
       let turn: RuntimeStateNode;
       try {
         if (message.type === "turn.snapshot") {
-          // Every Redis-backed reconnect begins with a fresh SQLite
+          // Every in-memory reconnect begins with a fresh SQLite
           // authority snapshot. Rebase this Turn before applying subsequent
           // connection-local revisions; other continuation Turns keep their
           // own accumulators.

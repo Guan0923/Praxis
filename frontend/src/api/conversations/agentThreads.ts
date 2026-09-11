@@ -57,7 +57,7 @@ export async function streamAgentThread(
   signal: AbortSignal,
   lastEventId = "",
   onCursor?: (eventId: string) => void,
-): Promise<"aborted" | "ended"> {
+): Promise<"aborted" | "ended" | "evicted"> {
   let response: Response;
   try {
     response = await fetch(
@@ -93,7 +93,12 @@ export async function streamAgentThread(
             continue;
           }
           if (!line.startsWith("data: ")) continue;
-          const payload = JSON.parse(line.slice(6)) as AgentThreadStreamEvent;
+          const raw = JSON.parse(line.slice(6));
+          if (raw.type === "thread.evicted") {
+            await reader.cancel();
+            return "evicted";
+          }
+          const payload = raw as AgentThreadStreamEvent;
           if (!["thread.ready", "turn.snapshot", "turn.delta", "turn.terminal"].includes(payload.type)) {
             throw new Error(`Unsupported Agent Thread SSE event: ${String((payload as { type?: unknown }).type)}`);
           }

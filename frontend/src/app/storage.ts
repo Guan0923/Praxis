@@ -4,7 +4,7 @@ import type { Conversation } from "../types";
 export const STORAGE_KEY = "praxis-conversations";
 export const ARCHIVE_READ_KEY = "praxis-archive-read";
 export const BROWSER_STATE_VERSION_KEY = "praxis-browser-state-version";
-export const BROWSER_STATE_VERSION = "redis-message-transport-v1";
+export const BROWSER_STATE_VERSION = "local-message-transport-v1";
 export type ArchiveReadState = Record<string, string>;
 
 const LEGACY_BROWSER_PREFIXES = [STORAGE_KEY];
@@ -78,6 +78,8 @@ export function summaryToConversation(summary: SessionInfo, existing?: Conversat
     archivedAt: summary.archived_at ?? undefined,
     deletedAt: summary.deleted_at ?? undefined,
     messagesLoaded: existing?.messagesLoaded ?? false,
+    historyCursor: existing?.historyCursor,
+    historyHasMore: existing?.historyHasMore,
     lastNodeId: summary.last_node_id !== undefined ? summary.last_node_id ?? undefined : existing?.lastNodeId,
     activeTurnId: existing?.activeTurnId,
     runtimeNodes: existing?.runtimeNodes,

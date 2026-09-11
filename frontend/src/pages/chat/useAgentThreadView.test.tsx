@@ -167,6 +167,17 @@ beforeEach(() => {
 });
 
 describe("useAgentThreadView", () => {
+  it("appends child history without replacing the root conversation", async () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "select child A" }));
+    await waitFor(() => expect(streams).toHaveLength(1));
+    const older = turn("session_a", "thread_a_child", "turn_a_older");
+    act(() => latestView!.applyHistoryPage({ turns: [older], next_cursor: "child-cursor", has_more: true }));
+    expect(latestView!.conversation?.runtimeNodes?.some((node) => node.id === older.id)).toBe(true);
+    expect(latestView!.conversation?.historyCursor).toBe("child-cursor");
+    expect(screen.getByTestId("canonical-thread")).toHaveTextContent("session_a");
+    expect(screen.getByTestId("canonical-messages")).toHaveTextContent("root task|root answer");
+  });
   it("invalidates the current root tree when its canonical Turn set changes", async () => {
     render(<Harness />);
     expect(screen.getByTestId("tree-invalidation")).toHaveTextContent("0");

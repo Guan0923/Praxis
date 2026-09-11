@@ -205,7 +205,7 @@ export function projectRuntimeNode(turn: RuntimeStateNode, messageIdx = assistan
   };
 }
 
-function ancestry(nodes: Map<string, RuntimeTreeNode>, active: RuntimeStateNode): RuntimeTreeNode[] {
+function ancestry(nodes: Map<string, RuntimeTreeNode>, active: RuntimeStateNode, allowPartial: boolean | ReadonlySet<string>): RuntimeTreeNode[] {
   const path: RuntimeTreeNode[] = [];
   const seen = new Set<string>();
   let current: RuntimeTreeNode | undefined = active;
@@ -216,16 +216,18 @@ function ancestry(nodes: Map<string, RuntimeTreeNode>, active: RuntimeStateNode)
     path.push(current);
     if (!isRuntimeTurnNode(current)) break;
     if (!current.parent_id) break;
-    current = nodes.get(`${current.parent_session_id}:${current.parent_id}`);
-    if (!current) throw new Error("Turn ancestry is incomplete");
+    const parentKey = `${current.parent_session_id}:${current.parent_id}`;
+    current = nodes.get(parentKey);
+    const permittedBoundary = allowPartial === true || (typeof allowPartial !== "boolean" && allowPartial.has(parentKey));
+    if (!current && !permittedBoundary) throw new Error("Turn ancestry is incomplete");
   }
   return path.reverse();
 }
 
-export function projectTurnPath(nodes: Map<string, RuntimeTreeNode>, activeTurnId: string): ChatMessage[] {
+export function projectTurnPath(nodes: Map<string, RuntimeTreeNode>, activeTurnId: string, allowPartial: boolean | ReadonlySet<string> = false): ChatMessage[] {
   const active = [...nodes.values()].find((turn) => turn.id === activeTurnId);
   if (!active || !isRuntimeTurnNode(active)) return [];
-  return ancestry(nodes, active).flatMap((turn) => {
+  return ancestry(nodes, active, allowPartial).flatMap((turn) => {
     if (!isRuntimeTurnNode(turn)) return [];
     const selected = turn.data[turn.current_data_idx];
     if (!selected) return [];
@@ -323,6 +325,9 @@ export function integrateRuntimeNodeUpdates(
   forcePathProjection: boolean,
 ): Conversation {
   const current = new Map((conversation.runtimeNodes ?? []).map((node) => [keyOf(node), node] as const));
+  const pageBoundaries = new Set([...current.values()].filter(isRuntimeTurnNode)
+    .filter((node) => node.parent_id && !current.has(`${node.parent_session_id}:${node.parent_id}`))
+    .map((node) => `${node.parent_session_id}:${node.parent_id}`));
   for (const turn of turns) {
     const hasSessionTurn = [...current.values()].some((node) =>
       isRuntimeTurnNode(node) && node.session_id === turn.session_id
@@ -355,7 +360,7 @@ export function integrateRuntimeNodeUpdates(
     : -1;
   const latestRunEndsTurn = latestRun?.end === activeTurn.data[activeTurn.current_data_idx].length - 1;
   if (forcePathProjection || !latestRun || assistantIndex < 0 || !latestRunEndsTurn) {
-    messages = projectTurnPath(current, activeTurnId);
+    messages = projectTurnPath(current, activeTurnId, pageBoundaries);
     const delivered = new Set(messages.map((item) => item.deliveryId).filter(Boolean));
     const retained = conversation.messages.filter((item) =>
       item.role === "user" && (item.pending || item.error)

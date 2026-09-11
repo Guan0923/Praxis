@@ -56,6 +56,31 @@ def list_turns(session_id: str, request: Request) -> list[dict[str, object]]:
     ]
 
 
+@router.get("/history")
+def turn_history(
+    request: Request,
+    session_id: str,
+    thread_id: str,
+    before: str | None = None,
+    limit: int = Query(default=5, ge=1, le=100),
+) -> dict[str, object]:
+    state = request.app.state.web
+    store = session_store(state)
+    require_active_session(store, session_id)
+    try:
+        page, cursor = store.load_turn_page(session_id, thread_id, before=before, limit=limit)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    state.conversation_cache.touch(session_id, thread_id, [node.id for node in page])
+    return {
+        "turns": [project_turn(store, node) for node in page],
+        "next_cursor": cursor,
+        "has_more": cursor is not None,
+    }
+
+
 @router.get("/trace/export")
 def export_thread_trace(
     request: Request,

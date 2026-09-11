@@ -8,7 +8,7 @@ from pathlib import Path
 from threading import RLock
 
 from backend.configuration import ClientPaths
-from backend.domain import AssistantMessage, MessageQueueUnavailable
+from backend.domain import AssistantMessage
 from backend.domain.runtime_state import (
     RuntimeState,
     message_payload,
@@ -21,11 +21,11 @@ from backend.runtime.agent_thread_index import AgentThreadIndex
 from backend.runtime.capability_settings import SubagentSettings
 from backend.runtime.subagents import SubagentCoordinator
 from backend.sandbox import BrokerConfiguration, SandboxMaintenanceGate, WindowsBrokerClient
-from backend.storage.message_queue import MemoryMessageQueue, RedisMessageQueue
+from backend.storage.message_queue import MemoryMessageQueue
 from backend.storage.projects import ProjectStore
-from backend.storage.runtime_event_stream import MemoryRuntimeEventStream, RedisRuntimeEventStream
+from backend.storage.runtime_event_stream import MemoryRuntimeEventStream
 from backend.storage.settings import LocalSettingsStore
-from backend.storage.todo_list import MemoryTodoListStore, RedisTodoListStore
+from backend.storage.todo_list import MemoryTodoListStore
 from backend.tools.terminal import available_terminal_executables, effective_terminal_type
 
 from .agent_report_projection import project_frame
@@ -45,7 +45,7 @@ class WebAppState:
         project_picker: Callable[[], Path | None] | None = None,
         job_registry: JobRegistry | None = None,
         sandbox_broker: WindowsBrokerClient | None = None,
-        message_queue: RedisMessageQueue | MemoryMessageQueue | None = None,
+        message_queue: MemoryMessageQueue | None = None,
     ) -> None:
         root = Path(data_root)
         if root.is_symlink():
@@ -68,23 +68,21 @@ class WebAppState:
         self.sandbox_maintenance = SandboxMaintenanceGate()
         self.sandbox_manifest_path = BrokerConfiguration.create().manifest_path
         self.system_job_scope = self.job_registry.root_scope()
-        self.message_queue = message_queue or RedisMessageQueue.from_url()
-        self.redis_pool = getattr(getattr(self.message_queue, "client", None), "connection_pool", None)
-        redis_client = getattr(self.message_queue, "client", None)
-        self.runtime_event_stream = (
-            RedisRuntimeEventStream(redis_client, key_prefix=self.message_queue.key_prefix)
-            if redis_client is not None
-            else MemoryRuntimeEventStream()
-        )
-        self.todo_store = (
-            RedisTodoListStore(redis_client, key_prefix=self.message_queue.key_prefix)
-            if redis_client is not None
-            else MemoryTodoListStore()
-        )
+        self.message_queue = message_queue if message_queue is not None else MemoryMessageQueue()
+        self.runtime_event_stream = MemoryRuntimeEventStream()
+        self.todo_store = MemoryTodoListStore()
+        self.started_at = utc_iso()
+        self.closing = False
+        self._session_access_lock = RLock()
+        self._accessed_sessions: set[str] = set()
         self.mailbox = self.message_queue
         from .terminal_manager import TerminalManager
 
-        self.terminal_manager = TerminalManager(self.message_queue)
+        self.terminal_manager = TerminalManager()
+        from .conversation_cache import ConversationCache
+
+        self.conversation_cache = ConversationCache(self)
+        self.message_queue.on_change = self.conversation_cache.trim
         self.agent_thread_index = AgentThreadIndex()
 
         self.active_runtime_configs: dict[str, dict[str, object]] = {}
@@ -113,8 +111,6 @@ class WebAppState:
                 message="Agent execution or local persistence failed." if turn.status == "failed" else "",
             ),
         )
-        self._reconcile_message_queue()
-        self.agent_thread_index.rebuild(agent_store)
         self.subagent_coordinator = SubagentCoordinator(
             settings=SubagentSettings.from_config(self.settings.config_store.read()),
             store=agent_store,
@@ -123,10 +119,6 @@ class WebAppState:
             job_registry=self.job_registry,
             thread_events=self.agent_thread_events,
         )
-        from .runtime_event_transport import RuntimeEventRelay
-
-        self.runtime_event_relay = RuntimeEventRelay(self)
-        self.runtime_event_relay.start()
         from .turn_message_worker import TurnMessageWorker
 
         self.turn_message_worker = TurnMessageWorker(self)
@@ -202,96 +194,17 @@ class WebAppState:
             store.save_runtime(runtime)
         store.finish_turn(session_id, run_id, "failed", INTERRUPTED_TURN_MESSAGE)
 
-    @staticmethod
-    def _append_delivery_to_node(store, node: RuntimeState, envelope) -> RuntimeState:
-        item: dict[str, object] = {
-            "type": "text",
-            "text": envelope.content,
-            "status": "success",
-        }
-        if envelope.references:
-            item["references"] = [dict(reference) for reference in envelope.references]
-        message = message_payload("user", [item], delivery_id=envelope.delivery_id)
-        repaired = RuntimeState.from_dict(node.to_dict())
-        repaired.data[repaired.current_data_idx].append(message)
-        repaired.timestamp = utc_iso()
-        repaired = RuntimeState.from_dict(repaired.to_dict())
-        store.update_node(repaired)
-        return repaired
-
-    def _reconcile_message_queue(self) -> None:
-        from backend.runtime.conversation.recovery.todo_receipts import reconcile_todo_receipts
-        from backend.storage.sqlite import SQLiteSessionStore
-
-        store = SQLiteSessionStore(self.paths, self.agent_thread_index)
-        running_nodes: list[RuntimeState] = []
-        for summary in store.list_sessions(state="all"):
-            for node in store.load_nodes(summary.session_id):
-                if isinstance(node, RuntimeState) and node.status == "running":
-                    running_nodes.append(reconcile_todo_receipts(store, self.todo_store, node))
-        try:
-            pending = self.message_queue.pending_deliveries()
-        except MessageQueueUnavailable:
-            pending = []
-        released_turns: set[str] = set()
-        for claimed in pending:
-            envelope = claimed.envelope
-            if envelope.target_kind in {"thread", "report", "turn_start"}:
-                continue
-            node = store.find_node(envelope.target_id)
-            sqlite_persisted = store.has_turn_delivery(envelope.session_id, envelope.delivery_id)
-            canonical_persisted = isinstance(node, RuntimeState) and self._delivery_in_node(node, envelope.delivery_id)
-            if (
-                sqlite_persisted
-                and isinstance(node, RuntimeState)
-                and not canonical_persisted
-                and node.status == "running"
-            ):
-                node = self._append_delivery_to_node(store, node, envelope)
-                canonical_persisted = True
-            if (
-                canonical_persisted
-                and not sqlite_persisted
-                and isinstance(node, RuntimeState)
-                and node.status == "running"
-            ):
-                run_id = store.running_run_id(envelope.session_id, thread_id=envelope.thread_id)
-                if run_id is not None:
-                    store.append_turn_input(
-                        envelope.session_id,
-                        run_id,
-                        envelope.content,
-                        delivery_id=envelope.delivery_id,
-                    )
-                    sqlite_persisted = True
-            if sqlite_persisted and canonical_persisted:
-                try:
-                    self.message_queue.ack(claimed)
-                except MessageQueueUnavailable:
-                    pass
-                continue
-            if isinstance(node, RuntimeState) and node.status == "paused":
-                continue
-            released_turns.add(envelope.target_id)
-
-        for session_id, thread_id in {(node.session_id, node.thread_id) for node in running_nodes}:
-            self._fail_interrupted_run(store, session_id, thread_id)
-        for node in running_nodes:
-            current = store.find_node(node.id)
-            runtime_thread = store.get_runtime_thread(node.session_id, node.thread_id)
-            if (
-                isinstance(current, RuntimeState)
-                and current.status == "running"
-                and (runtime_thread is None or runtime_thread.origin_kind != "subagent")
-            ):
-                self._fail_interrupted_node(store, current)
-                self.todo_store.expire_turn(current.session_id, current.id)
-
-        for turn_id in released_turns:
-            try:
-                self.message_queue.release_turn(turn_id)
-            except MessageQueueUnavailable:
-                break
+    def access_session(self, session_id: str) -> None:
+        with self._session_access_lock:
+            if session_id in self._accessed_sessions:
+                return
+            store = self.session_store
+            for node in store.load_running_nodes(session_id):
+                if isinstance(node, RuntimeState) and node.status == "running" and node.timestamp < self.started_at:
+                    self._fail_interrupted_run(store, session_id, node.thread_id)
+                    self._fail_interrupted_node(store, node)
+            self.agent_thread_index.refresh_session(store, session_id)
+            self._accessed_sessions.add(session_id)
 
     def session_workspace(self, session_id: str) -> Path:
         """Resolve the effective cwd for a session and validate project access."""
@@ -364,24 +277,45 @@ class WebAppState:
     def runtime_config(self) -> dict[str, object]:
         return {"runtime": self.settings.runtime_config()}
 
+    def _finish_active_sessions(self) -> None:
+        for session_id in tuple(self._accessed_sessions):
+            for node in self.session_store.load_running_nodes(session_id):
+                if isinstance(node, RuntimeState) and node.status == "running":
+                    self._fail_interrupted_run(self.session_store, session_id, node.thread_id)
+                    self._fail_interrupted_node(self.session_store, node)
+
     def close(self) -> None:
-        self.memory_automation.close()
+        with self._session_access_lock:
+            if self.closing:
+                return
+            self.closing = True
+        actions = [
+            self.turn_message_worker.close,
+            self.subagent_coordinator.close,
+            self.message_queue.close,
+            self.memory_automation.close,
+        ]
         if self.benchmark_service is not None:
-            self.benchmark_service.close()
-        self.turn_message_worker.close()
-        self.runtime_event_relay.close()
-        self.subagent_coordinator.close()
-        self.job_registry.close_all(reason="web application closed", timeout=5.0)
-        self.agent_thread_events.close()
-        self.terminal_manager.close_all()
-        closed: set[int] = set()
-        for resource in (self.settings, self.projects, self.message_queue):
-            if id(resource) in closed:
-                continue
-            closed.add(id(resource))
-            close = getattr(resource, "close", None)
-            if callable(close):
-                close()
+            actions.append(self.benchmark_service.close)
+        actions.extend(
+            [
+                lambda: self.job_registry.close_all(reason="web application closed", timeout=5.0),
+                self._finish_active_sessions,
+                self.agent_thread_events.close,
+                self.terminal_manager.close_all,
+                self.runtime_event_stream.close,
+                self.todo_store.close,
+                self.settings.close,
+            ]
+        )
+        errors: list[Exception] = []
+        for action in actions:
+            try:
+                action()
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
 
 
 __all__ = ["DEFAULT_DATA_ROOT", "WebAppState"]

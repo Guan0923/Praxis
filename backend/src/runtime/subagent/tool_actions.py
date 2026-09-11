@@ -46,7 +46,9 @@ class _SubagentToolActionsMixin:
 
     def _require_services(self) -> None:
         if self._store is None or self._queue is None or self._index is None or self._job_registry is None:
-            raise ToolError("Persistent Subagents require WebAppState SQLite, Redis, index, and job services.")
+            raise ToolError(
+                "Persistent Subagents require WebAppState SQLite, in-memory queue, index, and job services."
+            )
 
     def _actual_source(self, runtime: AgentRuntime, requested: object, *, optional: bool) -> str:
         actual = str(runtime.run.thread_id or runtime.state.session_id)

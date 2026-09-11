@@ -22,7 +22,7 @@ class MessageQueueError(RuntimeError):
 
 
 class MessageQueueUnavailable(MessageQueueError):
-    """Redis is unavailable, so queue-dependent work must fail closed."""
+    """The process-owned queue has stopped accepting work."""
 
 
 class QueueItemNotFound(MessageQueueError):

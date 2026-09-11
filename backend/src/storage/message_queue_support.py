@@ -9,13 +9,6 @@ from dataclasses import replace
 
 from backend.domain.message_queue import MessageEnvelope, QueuedMessage
 
-DEFAULT_REDIS_URL = "redis://127.0.0.1:6379/0"
-DEFAULT_KEY_PREFIX = "praxis:v1"
-DELIVERY_RECEIPT_TTL_SECONDS = 7 * 24 * 60 * 60
-STALE_CLAIM_MS = 60_000
-CONSUMER_GROUP = "runtime"
-TURN_START_CONSUMER_GROUP = "turn-start-runtime"
-
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)

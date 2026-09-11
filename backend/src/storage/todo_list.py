@@ -1,4 +1,4 @@
-"""Redis-authoritative, Turn-scoped Todo storage."""
+"""Process-owned, Turn-scoped Todo storage."""
 
 from __future__ import annotations
 
@@ -9,13 +9,8 @@ from threading import RLock
 from typing import Any
 from uuid import uuid4
 
-from redis import Redis
-from redis.exceptions import RedisError, WatchError
-
-from backend.domain import MessageQueueUnavailable
 from backend.domain.todo import TodoSnapshot, TodoStateError, TodoUpdateResult, apply_todo_operations
 
-TODO_TTL_SECONDS = 24 * 60 * 60
 _MAX_TRANSACTION_RETRIES = 16
 
 
@@ -28,217 +23,8 @@ def _fingerprint(expected_revision: int, operations: Sequence[Mapping[str, Any]]
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-class RedisTodoListStore:
-    """Store one authoritative Todo state and its idempotency receipts per Turn."""
-
-    def __init__(self, client: Redis, *, key_prefix: str) -> None:
-        self.client = client
-        self.key_prefix = key_prefix.rstrip(":")
-
-    def _key(self, session_id: str, turn_id: str) -> str:
-        return f"{self.key_prefix}:session:{session_id}:turn:{turn_id}:todo"
-
-    @staticmethod
-    def _receipt_field(call_id: str) -> str:
-        return f"receipt:{call_id}"
-
-    @staticmethod
-    def _unavailable(exc: BaseException) -> MessageQueueUnavailable:
-        return MessageQueueUnavailable("message_queue_unavailable")
-
-    @staticmethod
-    def _snapshot(raw: Mapping[str, str]) -> TodoSnapshot:
-        value = raw.get("snapshot")
-        if not value:
-            return TodoSnapshot()
-        decoded = json.loads(value)
-        if not isinstance(decoded, Mapping):
-            raise ValueError("Stored Todo snapshot is invalid.")
-        return TodoSnapshot.from_dict(decoded)
-
-    def update(
-        self,
-        *,
-        session_id: str,
-        turn_id: str,
-        call_id: str,
-        expected_revision: int,
-        operations: Sequence[Mapping[str, Any]],
-    ) -> TodoUpdateResult:
-        if not isinstance(expected_revision, int) or isinstance(expected_revision, bool) or expected_revision < 0:
-            raise TodoStateError("invalid_revision", "Expected revision must be a non-negative integer.")
-        key = self._key(session_id, turn_id)
-        receipt_field = self._receipt_field(call_id)
-        fingerprint = _fingerprint(expected_revision, operations)
-        generated_ids = tuple(f"todo_{uuid4().hex}" for operation in operations if operation.get("op") == "add")
-        try:
-            with self.client.pipeline() as pipe:
-                for _attempt in range(_MAX_TRANSACTION_RETRIES):
-                    try:
-                        pipe.watch(key)
-                        raw = pipe.hgetall(key)
-                        existing = raw.get(receipt_field)
-                        if existing:
-                            receipt = json.loads(existing)
-                            if receipt.get("fingerprint") != fingerprint:
-                                raise TodoStateError(
-                                    "call_id_conflict",
-                                    f"Call ID {call_id!r} was already used with different arguments.",
-                                )
-                            return TodoUpdateResult.from_dict(receipt["result"])
-                        current = self._snapshot(raw)
-                        if current.revision != expected_revision:
-                            raise TodoStateError(
-                                "revision_conflict",
-                                f"Expected revision {expected_revision}, current revision is {current.revision}.",
-                                snapshot=current,
-                            )
-                        updated, applied = apply_todo_operations(
-                            current,
-                            operations,
-                            generated_ids=generated_ids,
-                        )
-                        result = TodoUpdateResult(turn_id, updated, applied)
-                        pipe.multi()
-                        pipe.hset(
-                            key,
-                            mapping={
-                                "session_id": session_id,
-                                "turn_id": turn_id,
-                                "revision": updated.revision,
-                                "snapshot": _json(updated.to_dict()),
-                                receipt_field: _json({"fingerprint": fingerprint, "result": result.to_dict()}),
-                            },
-                        )
-                        pipe.persist(key)
-                        pipe.execute()
-                        return result
-                    except WatchError:
-                        continue
-                raise TodoStateError(
-                    "concurrent_update", "Todo list changed too frequently; retry with a new snapshot."
-                )
-        except TodoStateError:
-            raise
-        except (RedisError, TypeError, ValueError) as exc:
-            raise self._unavailable(exc) from exc
-
-    def snapshot(self, session_id: str, turn_id: str) -> TodoSnapshot:
-        try:
-            return self._snapshot(self.client.hgetall(self._key(session_id, turn_id)))
-        except (RedisError, TypeError, ValueError) as exc:
-            raise self._unavailable(exc) from exc
-
-    def receipt(self, session_id: str, turn_id: str, call_id: str) -> TodoUpdateResult | None:
-        try:
-            raw = self.client.hget(self._key(session_id, turn_id), self._receipt_field(call_id))
-            if not raw:
-                return None
-            decoded = json.loads(raw)
-            return TodoUpdateResult.from_dict(decoded["result"])
-        except (RedisError, KeyError, TypeError, ValueError) as exc:
-            raise self._unavailable(exc) from exc
-
-    def copy_for_compaction(
-        self,
-        session_id: str,
-        source_turn_id: str,
-        target_turn_id: str,
-        *,
-        expected_revision: int,
-    ) -> TodoSnapshot | None:
-        source_key = self._key(session_id, source_turn_id)
-        target_key = self._key(session_id, target_turn_id)
-        try:
-            with self.client.pipeline() as pipe:
-                for _attempt in range(_MAX_TRANSACTION_RETRIES):
-                    try:
-                        pipe.watch(source_key, target_key)
-                        source_raw = pipe.hgetall(source_key)
-                        if "snapshot" not in source_raw:
-                            return None
-                        source = self._snapshot(source_raw)
-                        if source.revision != expected_revision:
-                            raise TodoStateError(
-                                "revision_conflict",
-                                f"Expected revision {expected_revision}, current revision is {source.revision}.",
-                                snapshot=source,
-                            )
-                        target_raw = pipe.hgetall(target_key)
-                        if "snapshot" in target_raw:
-                            if target_raw.get("compaction_source_turn_id") != source_turn_id:
-                                raise TodoStateError(
-                                    "target_conflict",
-                                    f"Target Turn {target_turn_id!r} already has unrelated Todo state.",
-                                )
-                            return self._snapshot(target_raw)
-                        mapping: dict[str, object] = {
-                            "session_id": session_id,
-                            "turn_id": target_turn_id,
-                            "compaction_source_turn_id": source_turn_id,
-                            "revision": source.revision,
-                            "snapshot": _json(source.to_dict()),
-                        }
-                        if source_raw.get("finalization_claimed") == "1":
-                            mapping["finalization_claimed"] = "1"
-                        pipe.multi()
-                        pipe.hset(target_key, mapping=mapping)
-                        pipe.persist(target_key)
-                        pipe.execute()
-                        return source
-                    except WatchError:
-                        continue
-                raise TodoStateError("concurrent_update", "Todo list changed too frequently during context compaction.")
-        except TodoStateError:
-            raise
-        except (RedisError, TypeError, ValueError) as exc:
-            raise self._unavailable(exc) from exc
-
-    def claim_finalization(self, session_id: str, turn_id: str) -> bool:
-        key = self._key(session_id, turn_id)
-        try:
-            with self.client.pipeline() as pipe:
-                for _attempt in range(_MAX_TRANSACTION_RETRIES):
-                    try:
-                        pipe.watch(key)
-                        raw = pipe.hgetall(key)
-                        snapshot = self._snapshot(raw)
-                        if not snapshot.unfinished or raw.get("finalization_claimed") == "1":
-                            return False
-                        pipe.multi()
-                        pipe.hset(key, "finalization_claimed", "1")
-                        pipe.persist(key)
-                        pipe.execute()
-                        return True
-                    except WatchError:
-                        continue
-                raise TodoStateError("concurrent_update", "Todo finalization state changed too frequently.")
-        except TodoStateError:
-            raise
-        except (RedisError, TypeError, ValueError) as exc:
-            raise self._unavailable(exc) from exc
-
-    def finalization_claimed(self, session_id: str, turn_id: str) -> bool:
-        try:
-            return self.client.hget(self._key(session_id, turn_id), "finalization_claimed") == "1"
-        except RedisError as exc:
-            raise self._unavailable(exc) from exc
-
-    def persist_turn(self, session_id: str, turn_id: str) -> None:
-        try:
-            self.client.persist(self._key(session_id, turn_id))
-        except RedisError as exc:
-            raise self._unavailable(exc) from exc
-
-    def expire_turn(self, session_id: str, turn_id: str) -> None:
-        try:
-            self.client.expire(self._key(session_id, turn_id), TODO_TTL_SECONDS)
-        except RedisError as exc:
-            raise self._unavailable(exc) from exc
-
-
 class MemoryTodoListStore:
-    """Explicit test adapter with the same observable contract as Redis storage."""
+    """Thread-safe Turn-scoped Todo state."""
 
     def __init__(self) -> None:
         self._states: dict[tuple[str, str], TodoSnapshot] = {}
@@ -335,6 +121,23 @@ class MemoryTodoListStore:
         with self._lock:
             return (session_id, turn_id) in self._finalization
 
+    def release_turns(self, session_id: str, turn_ids: set[str]) -> None:
+        with self._lock:
+            for values in (self._states, self._receipts, self._compaction_sources):
+                for key in list(values):
+                    if key[0] == session_id and key[1] in turn_ids:
+                        del values[key]
+            self._finalization.difference_update(
+                {key for key in self._finalization if key[0] == session_id and key[1] in turn_ids}
+            )
+
+    def close(self) -> None:
+        with self._lock:
+            self._states.clear()
+            self._receipts.clear()
+            self._finalization.clear()
+            self._compaction_sources.clear()
+
     def persist_turn(self, session_id: str, turn_id: str) -> None:
         return None
 
@@ -342,4 +145,4 @@ class MemoryTodoListStore:
         return None
 
 
-__all__ = ["MemoryTodoListStore", "RedisTodoListStore", "TODO_TTL_SECONDS"]
+__all__ = ["MemoryTodoListStore"]

@@ -101,12 +101,12 @@ class AgentThreadEventHub:
     def _publish(self, thread_id: str, frame: NodeFrame, current: RuntimeState) -> None:
         channel_key = (current.session_id, thread_id)
         turn_key = (frame.session_id, frame.turn_id)
+        if frame.sequence and self._frame_publisher is not None:
+            self._frame_publisher(frame, current)
         with self._lock:
             channel = self._channels.setdefault(channel_key, _ThreadChannel())
             channel.latest = current
             channel.latest_source_revision = frame.revision
-            if frame.sequence and self._frame_publisher is not None:
-                self._frame_publisher(frame, current)
             for subscription in channel.subscribers.values():
                 if frame.type == "turn.snapshot":
                     snapshot = NodeFrame.snapshot(current)
@@ -133,8 +133,6 @@ class AgentThreadEventHub:
                 subscription.events.put(self._frame_projector(local_frame, current))
 
     def finish_turn(self, thread_id: str, turn: RuntimeState) -> None:
-        if self._terminal_publisher is not None:
-            self._terminal_publisher(turn)
         key = (turn.session_id, thread_id)
         terminal = {
             "type": "turn.terminal",
@@ -148,6 +146,22 @@ class AgentThreadEventHub:
             channel.latest = turn.clone()
             for subscription in channel.subscribers.values():
                 subscription.events.put(terminal)
+
+        if self._terminal_publisher is not None:
+            self._terminal_publisher(turn)
+
+    def release_thread(self, session_id: str, thread_id: str) -> None:
+        with self._lock:
+            channel = self._channels.pop((session_id, thread_id), None)
+            if channel is not None:
+                for subscription in channel.subscribers.values():
+                    subscription.closed = True
+                    while not subscription.events.empty():
+                        try:
+                            subscription.events.get_nowait()
+                        except queue.Empty:
+                            break
+                channel.subscribers.clear()
 
     def close(self) -> None:
         with self._lock:

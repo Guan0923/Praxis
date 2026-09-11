@@ -69,6 +69,8 @@ export interface Conversation {
   archivedAt?: string;
   deletedAt?: string;
   messagesLoaded?: boolean;
+  historyCursor?: string | null;
+  historyHasMore?: boolean;
   lastNodeId?: string;
   runtimeNodes?: RuntimeTreeNode[];
   threadId?: string;

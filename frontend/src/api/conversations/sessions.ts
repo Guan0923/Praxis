@@ -68,8 +68,8 @@ export async function deleteSession(threadId: string, sessionId?: string): Promi
   return summary(await deleteSidebarThread(threadId, sessionId));
 }
 
-export async function getSessionNodes(sessionId: string): Promise<RuntimeTreeNode[]> {
-  return (await listTurns(sessionId)).map(normalizeRuntimeNode);
+export async function getSessionNodes(sessionId: string, threadId = sessionId): Promise<RuntimeTreeNode[]> {
+  return (await listTurns(sessionId, threadId)).map(normalizeRuntimeNode);
 }
 
 export async function getSessionLeaves(sessionId: string): Promise<RuntimeStateNode[]> {

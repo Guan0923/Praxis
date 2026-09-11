@@ -63,7 +63,7 @@ class RuleBasedPlanner:
         command = re.search(r"(?:run|execute)\s+(?:command\s+)?(.+)$|执行命令\s+(.+)$", task, re.IGNORECASE)
         if command:
             value = next(group for group in command.groups() if group is not None).strip()
-            return self._tool("run_command", {"command": value}, runtime)
+            return self._tool("run_command", {"cmd": value}, runtime)
         return None
 
     @staticmethod

@@ -19,6 +19,7 @@ EXPECTED_LOCAL_TOOLS = [
     "write_file",
     "edit_file",
     "run_command",
+    "write_stdin",
     "delegate_tasks",
     "send_agent_message",
     "set_thread_node_status",

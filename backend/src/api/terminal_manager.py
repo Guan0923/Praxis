@@ -1,4 +1,4 @@
-"""Process-owned Windows PTY sessions with Redis-backed output replay."""
+"""Process-owned Windows PTY sessions with in-memory output replay."""
 
 from __future__ import annotations
 
@@ -6,16 +6,14 @@ import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Condition, RLock, Thread, Timer, current_thread
+from threading import Condition, RLock, Thread, current_thread
 from typing import Any
 from uuid import uuid4
 
 from backend.domain import MessageQueueUnavailable
 from backend.domain.terminal import TERMINAL_LABELS, TerminalType, normalize_terminal_type
-from backend.storage.terminal_stream import RedisTerminalOutputStream, TerminalOutputChunk
+from backend.storage.terminal_stream import MemoryTerminalOutputStream, TerminalOutputChunk
 from backend.tools.terminal import terminal_executable, windows_workspace_to_wsl
-
-TERMINAL_DISCONNECT_SECONDS = 30 * 60
 
 
 def _terminal_argv(terminal_type: TerminalType, executable: str, cwd: Path) -> list[str]:
@@ -57,7 +55,7 @@ class TerminalSession:
     terminal_type: TerminalType
     cwd: str
     process: Any
-    output: RedisTerminalOutputStream
+    output: MemoryTerminalOutputStream
     reader_thread: Thread | None = None
     current_sequence: int = 0
     exit_code: int | None = None
@@ -65,7 +63,7 @@ class TerminalSession:
     closed: bool = False
     condition: Condition = field(default_factory=Condition)
     lock: RLock = field(default_factory=RLock)
-    disconnect_timer: Timer | None = None
+    thread_id: str | None = None
 
     @property
     def alive(self) -> bool:
@@ -84,19 +82,14 @@ class TerminalSession:
 
 
 class TerminalManager:
-    def __init__(self, message_queue: object) -> None:
-        client = getattr(message_queue, "client", None)
-        key_prefix = getattr(message_queue, "key_prefix", "praxis:v1")
-        self.output = RedisTerminalOutputStream(client, key_prefix=key_prefix) if client is not None else None
+    def __init__(self) -> None:
+        self.output = MemoryTerminalOutputStream()
         self._sessions: dict[str, TerminalSession] = {}
         self._lock = RLock()
 
-    def create(self, terminal_type: object, cwd: str) -> TerminalSession:
+    def create(self, terminal_type: object, cwd: str, *, thread_id: str | None = None) -> TerminalSession:
         if os.name != "nt":
             raise RuntimeError("Interactive terminals are supported only on Windows.")
-        if self.output is None:
-            raise MessageQueueUnavailable("message_queue_unavailable")
-        self.output.ping()
         selected = normalize_terminal_type(terminal_type)
         executable = terminal_executable(selected)
         if executable is None:
@@ -111,7 +104,7 @@ class TerminalManager:
         except (ImportError, OSError) as exc:
             raise RuntimeError("Unable to start the interactive terminal.") from exc
         terminal_id = f"terminal_{uuid4().hex}"
-        session = TerminalSession(terminal_id, selected, str(workspace), process, self.output)
+        session = TerminalSession(terminal_id, selected, str(workspace), process, self.output, thread_id=thread_id)
         with self._lock:
             self._sessions[terminal_id] = session
         reader = Thread(target=self._read_loop, args=(session,), name=f"terminal-reader-{terminal_id}", daemon=True)
@@ -144,10 +137,6 @@ class TerminalManager:
                 session.process.close(force=True)
             except (OSError, RuntimeError):
                 pass
-            try:
-                session.output.expire(session.id)
-            except MessageQueueUnavailable:
-                pass
             with session.condition:
                 session.condition.notify_all()
 
@@ -160,9 +149,6 @@ class TerminalManager:
         if session is None or session.closed:
             raise KeyError(terminal_id)
         with session.lock:
-            if session.disconnect_timer is not None:
-                session.disconnect_timer.cancel()
-                session.disconnect_timer = None
             session.clients += 1
         return session
 
@@ -172,14 +158,6 @@ class TerminalManager:
             return
         with session.lock:
             session.clients = max(0, session.clients - 1)
-            if session.clients == 0 and not session.closed:
-                try:
-                    session.output.expire(session.id)
-                except MessageQueueUnavailable:
-                    pass
-                session.disconnect_timer = Timer(TERMINAL_DISCONNECT_SECONDS, self.close, args=(terminal_id,))
-                session.disconnect_timer.daemon = True
-                session.disconnect_timer.start()
 
     def write(self, terminal_id: str, data: str) -> None:
         session = self.get(terminal_id)
@@ -217,8 +195,6 @@ class TerminalManager:
             return
         with session.lock:
             session.closed = True
-            if session.disconnect_timer is not None:
-                session.disconnect_timer.cancel()
             _terminate_process_tree(session.process)
         if session.reader_thread is not None and session.reader_thread is not current_thread():
             session.reader_thread.join(timeout=5)
@@ -229,11 +205,18 @@ class TerminalManager:
         with session.condition:
             session.condition.notify_all()
 
+    def close_thread(self, thread_id: str) -> None:
+        with self._lock:
+            ids = [key for key, session in self._sessions.items() if session.thread_id == thread_id]
+        for terminal_id in ids:
+            self.close(terminal_id)
+
     def close_all(self) -> None:
         with self._lock:
             terminal_ids = list(self._sessions)
         for terminal_id in terminal_ids:
             self.close(terminal_id)
+        self.output.close()
 
 
-__all__ = ["TERMINAL_DISCONNECT_SECONDS", "TerminalManager", "TerminalSession"]
+__all__ = ["TerminalManager", "TerminalSession"]

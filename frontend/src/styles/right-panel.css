@@ -78,7 +78,13 @@
 }
 
 .right-panel-terminal-meta > :first-child {
+  flex: 1 1 0;
   min-width: 0;
+}
+
+.right-panel-terminal-meta > :last-child {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .right-panel-terminal-host {

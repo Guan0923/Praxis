@@ -49,7 +49,10 @@ function AutoRecoveryStatus({ health }: { health: SandboxHealthState }) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (health.autoRecoveryPhase !== "waiting" || health.nextRetryAt === null) return undefined;
+    if (
+      !["observing", "verifying"].includes(health.autoRecoveryPhase)
+      || health.nextRetryAt === null
+    ) return undefined;
     setNow(Date.now());
     const timer = globalThis.setInterval(() => setNow(Date.now()), 1_000);
     return () => globalThis.clearInterval(timer);
@@ -57,9 +60,13 @@ function AutoRecoveryStatus({ health }: { health: SandboxHealthState }) {
 
   if (health.autoRecoveryPhase === "repairing") return <Tag color="processing">正在自动修复</Tag>;
   if (health.autoRecoveryPhase === "paused") return <Tag color="error">自动修复已暂停</Tag>;
-  if (health.autoRecoveryPhase === "waiting" && health.nextRetryAt !== null) {
+  if (health.autoRecoveryPhase === "observing" && health.nextRetryAt !== null) {
     const seconds = Math.max(0, Math.ceil((health.nextRetryAt - now) / 1_000));
-    return <Tag color="warning">{seconds} 秒后自动重试</Tag>;
+    return <Tag color="warning">{seconds} 秒后自动修复</Tag>;
+  }
+  if (health.autoRecoveryPhase === "verifying" && health.nextRetryAt !== null) {
+    const seconds = Math.max(0, Math.ceil((health.nextRetryAt - now) / 1_000));
+    return <Tag color="processing">正在验证修复，剩余 {seconds} 秒</Tag>;
   }
   return null;
 }

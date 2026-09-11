@@ -45,7 +45,7 @@ Praxis 是运行在本机、通过浏览器使用的个人 AI 工作空间。交
 
 以下开发流程面向 **Windows**。命令隔离依赖 Windows 沙箱服务，不代表其他系统具备相同的沙箱支持。
 
-需要准备 **Python 3.11+**、**Node.js 20+**、**uv** 和用于运行 Redis 的 **Docker Desktop**。如果使用项目约定的 Conda 环境，请先执行 `conda activate dev`。你还需要一个有权使用的模型服务。
+需要准备 **Python 3.11+**、**Node.js 20+**、**uv**。如果使用项目约定的 Conda 环境，请先执行 `conda activate dev`。你还需要一个有权使用的模型服务。
 
 在仓库根目录执行：
 
@@ -54,7 +54,6 @@ uv sync --locked
 cd frontend
 npm ci
 cd ..
-docker compose up -d redis
 uv run python -m backend.api
 ```
 
@@ -71,7 +70,6 @@ npm run dev
 2. 检查**沙箱**设置。安装 Windows 沙箱需要管理员授权；就绪前，需要沙箱的命令会被阻止执行。
 3. 新建对话或打开项目，引用相关文件，再描述任务。希望先确认方案时，从 Plan 模式开始。
 
-消息队列和任务执行需要 Redis 正常运行。Redis 不可用时，应用不会自动切换到内存队列。
 
 想只运行一个应用服务，可以先在 `frontend/` 中执行 `npm run build`，再启动后端，通过 <http://127.0.0.1:8000> 使用构建好的页面。
 

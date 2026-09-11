@@ -98,7 +98,11 @@ class ToolRegistry:
         if tool is None:
             raise ToolError(f"Unknown tool: {name}")
         self.validate_arguments(name, arguments)
-        if tool.requires_confirmation and not confirmed:
+        if (
+            tool.requires_confirmation
+            and not confirmed
+            and not (name == "write_stdin" and arguments.get("chars", "") in ("", "\x03"))
+        ):
             raise ConfirmationRequired(
                 f"{name} requires confirmation before it performs a potentially destructive operation."
             )

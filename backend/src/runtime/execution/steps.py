@@ -91,6 +91,8 @@ class ToolStepExecutor:
                     runtime, message, index, tool, f"Read-only Plan mode blocked tool: {tool}", commit_lock=lock
                 )
             requires_confirmation = tools.requires_confirmation(tool)
+            if tool == "write_stdin" and tool_message.arguments.get("chars", "") in ("", "\x03"):
+                requires_confirmation = False
             read_only = tools.is_read_only(tool)
             workspace_confined = tools.is_workspace_confined(tool)
             retryable = tools.is_retryable(tool)
@@ -354,7 +356,11 @@ class ToolStepExecutor:
         commit_lock: RLock | None = None,
     ) -> ToolStepResult:
         report = error_report(error) if isinstance(error, BaseException) else None
-        error = safe_error_message(error) if isinstance(error, BaseException) else error
+        error = (
+            (getattr(error, "tool_output", None) or safe_error_message(error))
+            if isinstance(error, BaseException)
+            else error
+        )
         call_id = ""
         lock = commit_lock or RLock()
         with lock:

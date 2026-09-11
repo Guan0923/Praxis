@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Sequence
 from typing import Any
@@ -23,6 +24,10 @@ class DirectTestSandboxLauncher(SandboxLauncher):
         self.policies.append(policy)
 
         def factory(argv: Sequence[str], **kwargs: Any):
+            if os.name == "nt":
+                from backend.sandbox.native_broker_adapter.process import _windows_command_line
+
+                return subprocess.Popen(_windows_command_line(list(argv)), **kwargs)
             return subprocess.Popen(argv, **kwargs)
 
         return factory

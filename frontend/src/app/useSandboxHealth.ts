@@ -7,7 +7,7 @@ import {
 } from "../api";
 
 export type SandboxHealthPhase = "checking" | "healthy" | "unhealthy";
-export type SandboxAutoRecoveryPhase = "idle" | "repairing" | "waiting" | "paused";
+export type SandboxAutoRecoveryPhase = "idle" | "observing" | "repairing" | "verifying" | "paused";
 
 export interface SandboxHealthState {
   phase: SandboxHealthPhase;
@@ -25,8 +25,8 @@ export interface SandboxHealthState {
 }
 
 const POLL_DELAY_MS = 30_000;
-const INITIAL_RETRY_DELAY_MS = 1_000;
-const MAX_RETRY_DELAY_MS = 30_000;
+const RECOVERY_CHECK_DELAY_MS = 1_000;
+const RECOVERY_WINDOW_MS = 10_000;
 const PAUSED_REPAIR_CODE = "broker_uac_cancelled";
 
 function failedStatus(cause: unknown): SandboxBrokerStatus {
@@ -56,33 +56,71 @@ export function useSandboxHealth(): SandboxHealthState {
   const mountedRef = useRef(false);
   const phaseRef = useRef<SandboxHealthPhase>("checking");
   const autoRecoveryPhaseRef = useRef<SandboxAutoRecoveryPhase>("idle");
-  const retryAttemptRef = useRef(0);
+  const recoveryDeadlineRef = useRef<number | null>(null);
   const manualRepairingRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const checkInFlightRef = useRef<Promise<SandboxBrokerStatus> | null>(null);
   const repairInFlightRef = useRef<Promise<void> | null>(null);
   const manualRepairInFlightRef = useRef<Promise<void> | null>(null);
+  const repairAfterCheckRef = useRef(false);
   const checkRef = useRef<() => Promise<SandboxBrokerStatus>>(() => Promise.resolve(failedStatus(null)));
   const repairRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
-  const clearScheduled = useCallback(() => {
+  const cancelTimer = useCallback(() => {
     if (timerRef.current !== null) {
       globalThis.clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    if (mountedRef.current) setNextRetryAt(null);
   }, []);
 
-  const updateAutoRecoveryPhase = useCallback((next: SandboxAutoRecoveryPhase) => {
+  const clearScheduled = useCallback(() => {
+    cancelTimer();
+    if (mountedRef.current) setNextRetryAt(null);
+  }, [cancelTimer]);
+
+  const updateAutoRecovery = useCallback((next: SandboxAutoRecoveryPhase, deadline: number | null) => {
     autoRecoveryPhaseRef.current = next;
-    if (mountedRef.current) setAutoRecoveryPhase(next);
+    recoveryDeadlineRef.current = deadline;
+    if (mountedRef.current) {
+      setAutoRecoveryPhase(next);
+      setNextRetryAt(deadline);
+    }
   }, []);
+
+  const scheduleCheck = useCallback((delay: number) => {
+    if (!mountedRef.current || manualRepairingRef.current) return;
+    if (timerRef.current !== null) globalThis.clearTimeout(timerRef.current);
+    timerRef.current = globalThis.setTimeout(() => {
+      timerRef.current = null;
+      void checkRef.current();
+    }, delay);
+  }, []);
+
+  const schedulePoll = useCallback(() => {
+    if (!mountedRef.current || manualRepairingRef.current) return;
+    if (!(["idle", "paused"] as SandboxAutoRecoveryPhase[]).includes(autoRecoveryPhaseRef.current)) return;
+    clearScheduled();
+    scheduleCheck(POLL_DELAY_MS);
+  }, [clearScheduled, scheduleCheck]);
+
+  const scheduleRecoveryCheck = useCallback(() => {
+    const deadline = recoveryDeadlineRef.current;
+    if (!mountedRef.current || deadline === null || manualRepairingRef.current) return;
+    const remaining = Math.max(0, deadline - Date.now());
+    scheduleCheck(Math.min(RECOVERY_CHECK_DELAY_MS, remaining));
+  }, [scheduleCheck]);
+
+  const beginRecoveryWindow = useCallback((next: "observing" | "verifying") => {
+    clearScheduled();
+    const deadline = Date.now() + RECOVERY_WINDOW_MS;
+    updateAutoRecovery(next, deadline);
+    scheduleRecoveryCheck();
+  }, [clearScheduled, scheduleRecoveryCheck, updateAutoRecovery]);
 
   const resetAutoRecovery = useCallback(() => {
-    retryAttemptRef.current = 0;
     clearScheduled();
-    updateAutoRecoveryPhase("idle");
-  }, [clearScheduled, updateAutoRecoveryPhase]);
+    updateAutoRecovery("idle", null);
+  }, [clearScheduled, updateAutoRecovery]);
 
   const applyStatus = useCallback((status: SandboxBrokerStatus): boolean => {
     const healthy = statusIsHealthy(status);
@@ -113,61 +151,53 @@ export function useSandboxHealth(): SandboxHealthState {
     return failureCode;
   }, []);
 
-  const schedulePoll = useCallback(() => {
-    if (!mountedRef.current || autoRecoveryPhaseRef.current === "waiting" || manualRepairingRef.current) return;
-    clearScheduled();
-    timerRef.current = globalThis.setTimeout(() => {
-      timerRef.current = null;
-      void checkRef.current();
-    }, POLL_DELAY_MS);
-  }, [clearScheduled]);
-
-  const scheduleRetry = useCallback(() => {
-    if (!mountedRef.current || manualRepairingRef.current) return;
-    clearScheduled();
-    const delay = Math.min(
-      MAX_RETRY_DELAY_MS,
-      INITIAL_RETRY_DELAY_MS * (2 ** retryAttemptRef.current),
-    );
-    retryAttemptRef.current += 1;
-    updateAutoRecoveryPhase("waiting");
-    setNextRetryAt(Date.now() + delay);
-    timerRef.current = globalThis.setTimeout(() => {
-      timerRef.current = null;
-      setNextRetryAt(null);
-      void repairRef.current();
-    }, delay);
-  }, [clearScheduled, updateAutoRecoveryPhase]);
+  const handleCheckedStatus = useCallback((healthy: boolean) => {
+    if (!mountedRef.current) return;
+    if (healthy) {
+      repairAfterCheckRef.current = false;
+      resetAutoRecovery();
+      schedulePoll();
+      return;
+    }
+    if (manualRepairingRef.current || autoRecoveryPhaseRef.current === "repairing") return;
+    if (autoRecoveryPhaseRef.current === "paused") {
+      schedulePoll();
+      return;
+    }
+    if (autoRecoveryPhaseRef.current === "idle") {
+      beginRecoveryWindow("observing");
+      return;
+    }
+    const deadline = recoveryDeadlineRef.current;
+    if (deadline !== null && Date.now() >= deadline) {
+      clearScheduled();
+      repairAfterCheckRef.current = true;
+      return;
+    }
+    scheduleRecoveryCheck();
+  }, [beginRecoveryWindow, clearScheduled, resetAutoRecovery, schedulePoll, scheduleRecoveryCheck]);
 
   const check = useCallback((): Promise<SandboxBrokerStatus> => {
     if (checkInFlightRef.current) return checkInFlightRef.current;
-    clearScheduled();
-    if (mountedRef.current) {
-      phaseRef.current = "checking";
-      setPhase("checking");
-      setChecking(true);
-    }
-    let healthy = false;
+    cancelTimer();
+    if (mountedRef.current) setChecking(true);
     const request = getSandboxStatus()
       .catch((cause) => failedStatus(cause))
       .then((status) => {
-        healthy = applyStatus(status);
-        if (healthy) resetAutoRecovery();
+        handleCheckedStatus(applyStatus(status));
         return status;
       })
       .finally(() => {
         checkInFlightRef.current = null;
-        if (!mountedRef.current) return;
-        setChecking(false);
-        if (healthy || autoRecoveryPhaseRef.current === "paused") {
-          schedulePoll();
-        } else if (autoRecoveryPhaseRef.current !== "repairing" && !manualRepairingRef.current) {
+        if (mountedRef.current) setChecking(false);
+        if (repairAfterCheckRef.current) {
+          repairAfterCheckRef.current = false;
           void repairRef.current();
         }
       });
     checkInFlightRef.current = request;
     return request;
-  }, [applyStatus, clearScheduled, resetAutoRecovery, schedulePoll]);
+  }, [applyStatus, cancelTimer, handleCheckedStatus]);
   checkRef.current = check;
 
   const repair = useCallback((): Promise<void> => {
@@ -189,88 +219,79 @@ export function useSandboxHealth(): SandboxHealthState {
         || autoRecoveryPhaseRef.current === "paused"
       ) return;
       clearScheduled();
-      updateAutoRecoveryPhase("repairing");
+      updateAutoRecovery("repairing", null);
       try {
         await repairSandboxBroker();
-        if (!mountedRef.current) return;
-        if (checkInFlightRef.current) await checkInFlightRef.current;
-        if (!mountedRef.current) return;
-        const status = await check();
-        if (!statusIsHealthy(status)) scheduleRetry();
       } catch (cause) {
         if (!mountedRef.current) return;
         const failureCode = applyRepairFailure(cause);
         if (failureCode === PAUSED_REPAIR_CODE) {
-          clearScheduled();
-          updateAutoRecoveryPhase("paused");
+          updateAutoRecovery("paused", null);
           schedulePoll();
-        } else {
-          scheduleRetry();
+          return;
         }
       }
+      if (mountedRef.current) beginRecoveryWindow("verifying");
     })().finally(() => {
       repairInFlightRef.current = null;
     });
     repairInFlightRef.current = request;
     return request;
-  }, [applyRepairFailure, check, clearScheduled, schedulePoll, scheduleRetry, updateAutoRecoveryPhase]);
+  }, [applyRepairFailure, beginRecoveryWindow, clearScheduled, schedulePoll, updateAutoRecovery]);
   repairRef.current = repair;
 
   const notifyUserBackendRequest = useCallback(() => {
-    if (!mountedRef.current || manualRepairingRef.current) return;
+    if (
+      !mountedRef.current
+      || manualRepairingRef.current
+      || autoRecoveryPhaseRef.current === "repairing"
+    ) return;
     if (phaseRef.current !== "unhealthy" && autoRecoveryPhaseRef.current === "idle") return;
-    retryAttemptRef.current = 0;
-    clearScheduled();
-    if (autoRecoveryPhaseRef.current !== "repairing") updateAutoRecoveryPhase("idle");
-    void repairRef.current();
-  }, [clearScheduled, updateAutoRecoveryPhase]);
+    cancelTimer();
+    void checkRef.current();
+  }, [cancelTimer]);
 
   const repairManually = useCallback((): Promise<void> => {
     if (manualRepairInFlightRef.current) return manualRepairInFlightRef.current;
     manualRepairingRef.current = true;
-    retryAttemptRef.current = 0;
     clearScheduled();
-    updateAutoRecoveryPhase("idle");
     if (mountedRef.current) setManualRepairing(true);
     const request = (async () => {
       if (repairInFlightRef.current) await repairInFlightRef.current;
       if (checkInFlightRef.current) await checkInFlightRef.current;
       if (!mountedRef.current) return;
-      let shouldResumeAutoRecovery = false;
+      let paused = false;
       try {
         await repairSandboxBroker();
-        if (!mountedRef.current) return;
-        if (checkInFlightRef.current) await checkInFlightRef.current;
-        if (!mountedRef.current) return;
-        const status = await check();
-        shouldResumeAutoRecovery = !statusIsHealthy(status);
       } catch (cause) {
         if (!mountedRef.current) return;
         const failureCode = applyRepairFailure(cause);
         if (failureCode === PAUSED_REPAIR_CODE) {
-          updateAutoRecoveryPhase("paused");
-        } else {
-          shouldResumeAutoRecovery = true;
+          updateAutoRecovery("paused", null);
+          paused = true;
         }
       } finally {
         manualRepairingRef.current = false;
         if (mountedRef.current) setManualRepairing(false);
       }
-      if (autoRecoveryPhaseRef.current === "paused") schedulePoll();
-      else if (shouldResumeAutoRecovery) void repairRef.current();
-      else schedulePoll();
+      if (paused) {
+        schedulePoll();
+        return;
+      }
+      if (mountedRef.current) beginRecoveryWindow("verifying");
     })().finally(() => {
       manualRepairInFlightRef.current = null;
     });
     manualRepairInFlightRef.current = request;
     return request;
-  }, [applyRepairFailure, check, clearScheduled, schedulePoll, updateAutoRecoveryPhase]);
+  }, [applyRepairFailure, beginRecoveryWindow, clearScheduled, schedulePoll, updateAutoRecovery]);
 
   useEffect(() => {
     mountedRef.current = true;
     void check();
     return () => {
       mountedRef.current = false;
+      repairAfterCheckRef.current = false;
       if (timerRef.current !== null) {
         globalThis.clearTimeout(timerRef.current);
         timerRef.current = null;

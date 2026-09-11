@@ -47,6 +47,8 @@ class _SubagentReportDeliveryMixin:
         if context is None:
             raise RuntimeError("reply_subagent_message has no bound terminal Agent Turn.")
         session_id, turn_id, thread_status = context
+        with self._state_lock:
+            self._published_report_turns.add(turn_id)
         getattr(self._store, "finalize_agent_turn_reports")(
             session_id,
             turn_id,
@@ -85,6 +87,8 @@ class _SubagentReportDeliveryMixin:
         )
         now = monotonic()
         for report in reports:
+            if report.turn_id not in self._published_report_turns:
+                continue
             if report.thread_status not in {"success", "failed"}:
                 continue
             attempts, next_at = self._report_retry.get(report.delivery_id, (0, 0.0))
@@ -142,22 +146,25 @@ class _SubagentReportDeliveryMixin:
             claimed = getattr(self._queue, "claim_report")(
                 thread_id,
                 f"agent-report-inactive-{thread_id}-{uuid4().hex}",
-                recover=True,
             )
             if claimed is None:
                 break
-            envelope = claimed.envelope
-            first_sender = first_sender or envelope.source_thread_id
-            if not getattr(self._store, "has_canonical_delivery")(session_id, envelope.delivery_id):
-                turn = getattr(self._store, "append_agent_report")(
-                    session_id,
-                    thread_id,
-                    delivery_id=envelope.delivery_id,
-                    reply_content=envelope.content,
-                )
-                if self._thread_events is not None:
-                    self._thread_events.publish_frame(thread_id, NodeFrame.snapshot(turn), turn)
-            self._ack_report(session_id, claimed)
+            try:
+                envelope = claimed.envelope
+                first_sender = first_sender or envelope.source_thread_id
+                if not getattr(self._store, "has_canonical_delivery")(session_id, envelope.delivery_id):
+                    turn = getattr(self._store, "append_agent_report")(
+                        session_id,
+                        thread_id,
+                        delivery_id=envelope.delivery_id,
+                        reply_content=envelope.content,
+                    )
+                    if self._thread_events is not None:
+                        self._thread_events.publish_frame(thread_id, NodeFrame.snapshot(turn), turn)
+                self._ack_report(session_id, claimed)
+            except Exception:
+                self._queue.retry(claimed)
+                raise
         if was_paused and first_sender:
             current = getattr(self._store, "get_node")(session_id, turn.id)
             if isinstance(current, RuntimeState) and current.status == "paused":
@@ -181,34 +188,38 @@ class _SubagentReportDeliveryMixin:
             )
             if claimed is None:
                 break
-            envelope = claimed.envelope
-            if not getattr(self._store, "has_canonical_delivery")(runtime.state.session_id, envelope.delivery_id):
-                publish = runtime.services.publish or (lambda _event: None)
-                publish(
-                    RuntimeEvent(
-                        "subagent_report",
-                        envelope.content,
-                        {
-                            "reply_content": envelope.content,
-                            "delivery_id": envelope.delivery_id,
-                            "report_status": envelope.payload.get("report_status"),
-                        },
+            try:
+                envelope = claimed.envelope
+                if not getattr(self._store, "has_canonical_delivery")(runtime.state.session_id, envelope.delivery_id):
+                    publish = runtime.services.publish or (lambda _event: None)
+                    publish(
+                        RuntimeEvent(
+                            "subagent_report",
+                            envelope.content,
+                            {
+                                "reply_content": envelope.content,
+                                "delivery_id": envelope.delivery_id,
+                                "report_status": envelope.payload.get("report_status"),
+                            },
+                        )
                     )
-                )
-                runtime.state.messages.append(AssistantMessage(name="subagent_report", content=envelope.content))
-                runtime.run.history = runtime.state.messages
-                if not getattr(self._store, "has_canonical_delivery")(
-                    runtime.state.session_id,
-                    envelope.delivery_id,
-                ):
-                    getattr(self._store, "append_agent_report")(
+                    runtime.state.messages.append(AssistantMessage(name="subagent_report", content=envelope.content))
+                    runtime.run.history = runtime.state.messages
+                    if not getattr(self._store, "has_canonical_delivery")(
                         runtime.state.session_id,
-                        thread_id,
-                        delivery_id=envelope.delivery_id,
-                        reply_content=envelope.content,
-                    )
-            self._ack_report(runtime.state.session_id, claimed)
-            count += 1
+                        envelope.delivery_id,
+                    ):
+                        getattr(self._store, "append_agent_report")(
+                            runtime.state.session_id,
+                            thread_id,
+                            delivery_id=envelope.delivery_id,
+                            reply_content=envelope.content,
+                        )
+                self._ack_report(runtime.state.session_id, claimed)
+                count += 1
+            except Exception:
+                self._queue.retry(claimed)
+                raise
         if count:
             runtime.save()
         return count

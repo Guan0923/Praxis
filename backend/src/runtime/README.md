@@ -9,7 +9,7 @@
 - `node_bridge/`：Runtime 事件到持久化 Node/Item 的桥接。
 - `persistence/`、`planning/`：checkpoint/recording 与 Plan mode。
 - `capability_settings.py`：`SkillSettings`、`SubagentSettings` 解析并校验可选能力配置。
-- `subagent/`：按 contracts、执行、报告投递、父 Runtime 桥接和工具锁拆分子 Agent 协作；其 README 记录 Redis/SQLite ACK 顺序。
+- `subagent/`：按 contracts、执行、报告投递、父 Runtime 桥接和工具锁拆分子 Agent 协作；其 README 记录 内存队列与 SQLite 的确认顺序。
 - 根文件 `executor.py`、`state_tree.py`、`job_events.py` 提供 Runtime 组合入口；`subagents.py` 保留 `SubagentCoordinator` 稳定门面并组合 `subagent/` mixin。
 
 Runtime 发布事件而不渲染；跨层依赖通过 ports/contracts，Sandbox 不可用时必须 fail closed。

@@ -29,23 +29,23 @@ class TurnMessageWorker:
 
     def close(self) -> None:
         self._stop.set()
+        self.state.message_queue.wake()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
 
     def _run(self) -> None:
-        recover = True
-        while not self._stop.wait(0.05):
+        while not self._stop.is_set():
+            claimed = None
             try:
-                claimed = self.state.message_queue.claim_turn_start(self.consumer, recover=recover)
-                recover = False
+                claimed = self.state.message_queue.wait_turn_start(self.consumer, self._stop)
                 if claimed is None:
-                    continue
+                    return
                 self._start(claimed)
             except Exception:
-                # Claimed messages remain pending and are reclaimed after the
-                # worker-safe idle boundary. Canonical failures are persisted
-                # by the Runtime once admission has succeeded.
-                continue
+                if claimed is not None:
+                    self.state.message_queue.retry(claimed)
+                if self._stop.wait(0.1):
+                    return
 
     def _start(self, claimed) -> None:
         envelope = claimed.envelope

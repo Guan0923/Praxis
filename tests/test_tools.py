@@ -1,3 +1,5 @@
+import io
+import json
 import os
 import subprocess
 import threading
@@ -37,8 +39,12 @@ class FakeProcess:
         returncode: int = 0,
         times_out: bool = False,
     ) -> None:
-        self.stdout = stdout.encode()
-        self.stderr = stderr.encode()
+        self.stdout = io.BytesIO(stdout.encode())
+        self.stderr = io.BytesIO(stderr.encode())
+        self.stdin = io.BytesIO()
+        self.exited = threading.Event()
+        if not times_out:
+            self.exited.set()
         self.returncode: int | None = None if times_out else returncode
         self.times_out = times_out
         self.pid = 1234
@@ -49,7 +55,7 @@ class FakeProcess:
         self.communicate_calls.append(timeout)
         if self.times_out and len(self.communicate_calls) == 1 and timeout is not None:
             raise subprocess.TimeoutExpired(["shell"], timeout)
-        return self.stdout, self.stderr
+        return self.stdout.getvalue(), self.stderr.getvalue()
 
     def poll(self) -> int | None:
         return self.returncode
@@ -57,8 +63,10 @@ class FakeProcess:
     def kill(self) -> None:
         self.killed = True
         self.returncode = -9
+        self.exited.set()
 
     def wait(self, timeout: float | None = None) -> int | None:
+        self.exited.wait(timeout)
         return self.returncode
 
 
@@ -78,7 +86,7 @@ def test_command_tool_uses_powershell_on_windows_and_workspace_cwd(tmp_path: Pat
         environment={"PATH": "C:\\Windows\\System32", "API_KEY": "secret"},
     ).run("New-Item -ItemType Directory demo")
 
-    assert output == "created\n"
+    assert json.loads(output)["output"] == "created\n"
     assert calls[0][0] == [
         "powershell.exe",
         "-NoLogo",
@@ -91,13 +99,13 @@ def test_command_tool_uses_powershell_on_windows_and_workspace_cwd(tmp_path: Pat
     ]
     options = calls[0][1]
     assert options["cwd"] == str(tmp_path.resolve())
-    assert options["stdin"] == subprocess.DEVNULL
+    assert options["stdin"] == subprocess.PIPE
     assert options["stdout"] == subprocess.PIPE
     assert options["stderr"] == subprocess.PIPE
     assert options["env"] == {"PATH": "C:\\Windows\\System32"}
     assert options["creationflags"] == getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
     assert "start_new_session" not in options
-    assert process.communicate_calls == [60]
+    assert process.communicate_calls == []
 
 
 @pytest.mark.parametrize(
@@ -190,7 +198,7 @@ def test_command_tool_uses_bash_on_unix_and_reports_command_failures(tmp_path: P
     with pytest.raises(CommandError, match="code 7") as exc_info:
         command.run("mkdir demo")
 
-    assert "stderr:\nbad command" in "\n".join(exc_info.value.__notes__)
+    assert "[stderr] bad command" in json.loads(exc_info.value.tool_output)["output"]
     assert calls[0][0] == ["bash", "-c", "mkdir demo"]
     assert calls[0][1]["start_new_session"] is True
     assert "creationflags" not in calls[0][1]
@@ -208,15 +216,16 @@ def test_command_failure_reports_status_and_labeled_streams(tmp_path: Path) -> N
         command.run("failing command")
 
     assert str(exc_info.value) == "Command exited with code 7."
-    assert exc_info.value.__notes__ == ["stdout:\n0\n\nstderr:\nbad"]
+    assert "0\n" in json.loads(exc_info.value.tool_output)["output"]
+    assert "[stderr] bad" in json.loads(exc_info.value.tool_output)["output"]
 
 
 @pytest.mark.parametrize(
     ("stdout", "stderr", "expected"),
     [
         ("0\r\n", "", "0\r\n"),
-        ("", "warning", ""),
-        (" \r\n", "warning", " \r\n"),
+        ("", "warning", "[stderr] warning"),
+        (" \r\n", "warning", " \r\n[stderr] warning"),
     ],
 )
 def test_command_success_returns_raw_stdout(
@@ -231,67 +240,53 @@ def test_command_success_returns_raw_stdout(
         environment={},
     )
 
-    assert command.run("successful command") == expected
+    assert json.loads(command.run("successful command"))["output"] == expected
 
 
 @pytest.mark.parametrize("is_windows", [False, True])
-def test_command_timeout_terminates_the_process_tree(tmp_path: Path, is_windows: bool) -> None:
+def test_command_wait_deadline_does_not_terminate_the_process(tmp_path: Path, is_windows: bool) -> None:
     process = FakeProcess(stdout="partial", times_out=True)
-    terminated: list[int] = []
+    terminated = []
 
-    def terminate(candidate: FakeProcess) -> None:
+    def terminate(candidate):
         terminated.append(candidate.pid)
-        candidate.returncode = -9
+        candidate.kill()
 
     command = WorkspaceCommand(
-        tmp_path,
-        is_windows=is_windows,
-        popen_factory=lambda _args, **_kwargs: process,
-        tree_terminator=terminate,
+        tmp_path, is_windows=is_windows, popen_factory=lambda *_args, **_kwargs: process, tree_terminator=terminate
     )
-
-    with pytest.raises(CommandError, match="timed out") as exc_info:
-        command.run("slow", timeout_seconds=2)
-
-    assert "stdout:\npartial" in "\n".join(exc_info.value.__notes__)
+    try:
+        result = json.loads(command.run("slow", yield_time_ms=0))
+        assert "session_id" in result
+        assert terminated == []
+    finally:
+        command.close()
     assert terminated == [1234]
-    assert process.communicate_calls == [2, 30.0]
 
 
-def test_command_success_output_limits_raw_stdout_and_ignores_stderr(tmp_path: Path) -> None:
-    process = FakeProcess(stdout="x" * 30_000, stderr="y" * 30_000)
+def test_command_success_output_limits_both_output_streams(tmp_path: Path) -> None:
+    command = WorkspaceCommand(
+        tmp_path, popen_factory=lambda *_args, **_kwargs: FakeProcess(stdout="x" * 30000, stderr="y" * 30000)
+    )
+    result = json.loads(command.run("large output"))
+    assert len(result["output"]) <= 20000
+    assert "bytes omitted" in result["output"]
+    assert "x" in result["output"] and "y" in result["output"]
+    command.close()
+
+
+def test_command_failure_output_limit_preserves_structured_exit(tmp_path: Path) -> None:
     command = WorkspaceCommand(
         tmp_path,
-        popen_factory=lambda _args, **_kwargs: process,
-        environment={},
+        popen_factory=lambda *_args, **_kwargs: FakeProcess(stdout="x" * 30000, stderr="y" * 30000, returncode=7),
     )
-
-    output = command.run("large output")
-
-    assert len(output) <= 20_000
-    assert output.startswith("x")
-    assert "stdout:" not in output
-    assert "stderr:" not in output
-    assert "y" not in output
-    assert "output truncated" in output
-
-
-def test_command_failure_output_limit_includes_status_and_stream_labels(tmp_path: Path) -> None:
-    process = FakeProcess(stdout="x" * 30_000, stderr="y" * 30_000, returncode=7)
-    command = WorkspaceCommand(
-        tmp_path,
-        popen_factory=lambda _args, **_kwargs: process,
-        environment={},
-    )
-
-    with pytest.raises(CommandError) as exc_info:
+    with pytest.raises(CommandError) as caught:
         command.run("large failing output")
-
-    output = str(exc_info.value) + "\n" + "\n".join(exc_info.value.__notes__)
-    assert len(output) <= 20_000
-    assert output.startswith("Command exited with code 7.\nstdout:\n")
-    assert "\nstderr:\n" in output
-    assert "output truncated" in output
+    result = json.loads(caught.value.tool_output)
+    assert result["exit_code"] == 7
+    assert len(result["output"]) <= 20000
+    assert "bytes omitted" in result["output"]
+    command.close()
 
 
 def test_command_job_reuses_parent_slot_and_is_visible_in_shared_registry(tmp_path: Path) -> None:
@@ -317,7 +312,7 @@ def test_command_job_reuses_parent_slot_and_is_visible_in_shared_registry(tmp_pa
     def invoke_command() -> None:
         result["output"] = tools.invoke_with_context(
             "run_command",
-            {"command": "echo managed"},
+            {"cmd": "echo managed"},
             ToolInvocationContext(
                 session_id="session-1",
                 job_scope=run_scope,
@@ -335,7 +330,7 @@ def test_command_job_reuses_parent_slot_and_is_visible_in_shared_registry(tmp_pa
 
     assert parent_job.wait(2.0)
     assert parent_job.info().state is JobState.SUCCEEDED
-    assert result["output"] == "managed\n"
+    assert json.loads(result["output"])["output"] == "managed\n"
     command_records = [
         item for item in registry.list(JobQuery(session_id="session-1")) if item.info.kind is JobKind.SUBPROCESS
     ]
@@ -353,6 +348,9 @@ def test_command_runtime_cancellation_terminates_managed_process(tmp_path: Path)
     terminated: list[int] = []
 
     class BlockingProcess:
+        stdin = io.BytesIO()
+        stdout = io.BytesIO(b"partial")
+        stderr = io.BytesIO()
         pid = 4321
         returncode: int | None = None
 
@@ -365,6 +363,7 @@ def test_command_runtime_cancellation_terminates_managed_process(tmp_path: Path)
             return self.returncode
 
         def wait(self, timeout: float | None = None) -> int | None:
+            started.set()
             stopped.wait(timeout)
             return self.returncode
 
@@ -394,7 +393,7 @@ def test_command_runtime_cancellation_terminates_managed_process(tmp_path: Path)
         )
 
     assert terminated == [4321]
-    assert "stdout:\npartial" in str(exc_info.value)
+    assert "partial" in json.loads(exc_info.value.tool_output)["output"]
 
 
 def test_non_cooperative_tool_late_result_is_not_published_after_pause() -> None:
@@ -443,19 +442,18 @@ def test_non_cooperative_tool_late_result_is_not_published_after_pause() -> None
     assert "tool_failed" not in published_kinds
 
 
-def test_command_tool_requires_confirmation_and_validates_timeout(tmp_path: Path) -> None:
-    tools = ToolRegistry(tmp_path)
-
-    tools.invoke("run_command", {"command": "mkdir demo"}, confirmed=True)
-    WorkspaceCommand(
-        tmp_path,
-        is_windows=False,
-        popen_factory=lambda _args, **_kwargs: FakeProcess(),
-    ).run("true", timeout_seconds=600)
-    with pytest.raises(ToolError, match="between 1 and 600"):
-        WorkspaceCommand(tmp_path, is_windows=False).run("mkdir demo", timeout_seconds=0)
-    with pytest.raises(ToolError, match="between 1 and 600"):
-        WorkspaceCommand(tmp_path, is_windows=False).run("mkdir demo", timeout_seconds=601)
+def test_command_tool_requires_confirmation_and_validates_wait(tmp_path: Path) -> None:
+    command = WorkspaceCommand(tmp_path, popen_factory=lambda *_args, **_kwargs: FakeProcess())
+    tools = ToolRegistry([command_tool(command)])
+    with pytest.raises(ToolError, match="confirmation"):
+        tools.invoke("run_command", {"cmd": "echo test"})
+    tools.invoke("run_command", {"cmd": "echo test"}, confirmed=True)
+    for wait in (-1, 300001):
+        with pytest.raises(ToolError, match="between 0 and 300000"):
+            command.run("echo test", yield_time_ms=wait)
+    with pytest.raises(ToolError, match="positive integer"):
+        command.run("echo test", max_output_tokens=0)
+    command.close()
 
 
 def test_default_job_admission_wait_is_ninety_seconds() -> None:

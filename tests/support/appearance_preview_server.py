@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from backend.api.app import create_app
 from backend.api.state import WebAppState
 from backend.domain.runtime_state import RuntimeState
-from backend.storage.message_queue import MemoryMessageQueue, RedisMessageQueue
+from backend.storage.message_queue import MemoryMessageQueue
 from backend.storage.sqlite import SQLiteSessionStore
 
 
@@ -25,18 +25,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--port", type=int, default=18143)
-    parser.add_argument("--redis-url", help="Optional Redis connection for real terminal checks")
-    parser.add_argument("--redis-prefix", default="praxis:appearance-preview")
     args = parser.parse_args()
     root = args.data_root.resolve()
     if root == (Path.home() / ".praxis").resolve():
         parser.error("Use an isolated test data directory, not the live application data.")
     os.environ["PRAXIS_ALLOWED_ORIGINS"] = f"http://127.0.0.1:{args.port},http://localhost:{args.port}"
-    queue = (
-        RedisMessageQueue.from_url(args.redis_url, key_prefix=args.redis_prefix)
-        if args.redis_url
-        else MemoryMessageQueue()
-    )
+    queue = MemoryMessageQueue()
     state = WebAppState(root, message_queue=queue)
     store = SQLiteSessionStore(state.paths, state.agent_thread_index)
     if not store.list_sessions():

@@ -6,15 +6,14 @@
 Praxis 使用新的安装名称，不读取、复制或迁移旧安装的数据和密钥。升级后请在设置页重新配置模型服务、Skills、MCP 和沙箱；旧数据不会自动显示，也不会被启动流程删除。
 
 - 全局数据目录为 `~/.praxis`，项目 Skills 位于项目的 `.praxis/skills/`。
-- 环境变量统一使用 `PRAXIS_`，例如 `PRAXIS_REDIS_URL`、`PRAXIS_ALLOWED_ORIGINS` 和 `PRAXIS_FRONTEND_DIST`；旧变量不生效。
-- 浏览器状态、Redis 默认前缀 `praxis:v1`、Compose 卷 `praxis-redis-data` 和系统凭据条目使用独立名称。不要将旧数据库或密文直接复制到新目录。
+- 环境变量统一使用 `PRAXIS_`，例如 `PRAXIS_ALLOWED_ORIGINS` 和 `PRAXIS_FRONTEND_DIST`；旧变量不生效。
 - Windows 沙箱服务为 `PraxisSandboxBroker`，账户为 `PraxisSbxOffline` / `PraxisSbxOnline`，用户组为 `PraxisSandboxUsers`。安装数据位于 `%ProgramData%/Praxis/SandboxBroker`，命名管道为 `\\.\pipe\praxis-sandbox-broker`。
 - Praxis 使用独立的网络规则标识，不清理旧服务、账户或网络规则。不要同时运行新旧沙箱服务；默认代理端口可能冲突。停用旧安装和安装新沙箱属于单独的管理员操作，不属于改名或普通启动流程。
 - 浏览器操作控制头为 `X-Praxis-*`。前后端必须使用同一版本，不支持与旧前端混用。
 
 ### English installation notes
 
-Praxis starts with a new installation identity. It does not import or delete previous data, credentials, browser state, or Redis queues. Reconfigure your model providers, Skills, MCP servers, and sandbox in Settings. Do not copy old databases or encrypted credentials into `~/.praxis`.
+Praxis starts with a new installation identity. It does not import or delete previous data, credentials, browser state. Reconfigure your model providers, Skills, MCP servers, and sandbox in Settings. Do not copy old databases or encrypted credentials into `~/.praxis`.
 
 Use the new `PRAXIS_*` environment variables and matching frontend/backend versions. The Windows service is `PraxisSandboxBroker`, with separate accounts and network rule identities. Do not run both sandbox installations simultaneously: their default proxy ports can conflict. Retiring the old installation and installing the new sandbox are separate administrator actions, not automatic startup steps.
 
@@ -33,7 +32,6 @@ cd ..
 启动本地 backend 与前端：
 
 ```powershell
-docker compose up -d redis
 uv run python -m backend.api
 ```
 
@@ -42,7 +40,6 @@ cd frontend
 npm run dev
 ```
 
-需要 Docker Desktop 启动仓库内 Redis；不需要 PostgreSQL、SMTP、Cloud URL 或账户密钥。backend、frontend、Sandbox 与 GPU 任务仍直接运行在 Windows 主机。
 
 ## 配置和数据
 
@@ -52,12 +49,11 @@ npm run dev
 
 不要实现旧 `user.db`、旧目录、旧密文、账户或同步数据迁移。用户旧数据的备份、移动和删除不属于应用启动流程。
 
-Redis 保存待发送草稿、正在执行的消息和短期回执；正式聊天历史以 SQLite 为准。未完成的消息回执不过期，已确认或已退回的回执保留 7 天。Compose 使用命名卷和 AOF（`appendfsync everysec`），只绑定 `127.0.0.1:6379`。待发送消息以明文保存，不应暴露 Redis 到公网。
+消息、运行事件、Todo 和终端输出保存在当前后端进程内。重启不恢复未处理消息；正式聊天历史保存在 SQLite。
 
 ### 启动排查
 
-- `/api/health` 仅表示后端进程存活；`/api/ready` 同时检查本地数据库和 Redis。
-- Redis 不可用时 `/api/ready` 返回 503，历史仍可读取，但新任务、恢复任务和待发送消息操作受阻；运行中的任务会在安全边界以 `message_queue_unavailable` 失败，不回退到内存队列。
+- `/api/health` 仅表示后端进程存活；`/api/ready` 检查本地数据库。
 - 沙箱不可用时，在设置页检查安装状态。安装或修复需要管理员确认；不要为绕过错误关闭安全边界。
 - 模型调用失败时，检查所选服务的地址、模型和权限，不在 Issue 或日志中粘贴 API Key。
 
@@ -99,7 +95,6 @@ npm run build
 
 HTTP 与 Provider transport 测试使用 mock 或本地假服务，不调用付费模型 API。
 
-真实 Redis 测试可通过 `PRAXIS_TEST_REDIS_URL` 指向独立测试实例；未指定时使用本地默认端口。与正在使用的安装并行验证时，必须指定独立实例，不要复用生产队列。
 
 重点契约：
 

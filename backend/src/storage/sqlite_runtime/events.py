@@ -1,48 +1,15 @@
-"""Transactional Runtime frame outbox stored inside the existing JSON-object schema."""
+"""Persistent Runtime frame sequence and canonical deltas."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any
 
 from backend.domain.runtime_state import NodeFrame, RuntimeState, runtime_node_from_dict, utc_iso
 
 
 class SQLiteRuntimeEventMixin:
-    def _put_runtime_event(
-        self,
-        connection: sqlite3.Connection,
-        node: RuntimeState,
-        frame: NodeFrame,
-    ) -> int:
-        return self._put_frame_event(
-            connection,
-            frame,
-            thread_id=node.thread_id,
-            status=node.status,
-            report_delivery_ids=sorted(
-                {
-                    str(item["delivery_id"])
-                    for version in node.data
-                    for message in version
-                    for item in message.get("content", [])
-                    if item.get("type") == "subagent"
-                    and item.get("event") == "agent_report"
-                    and item.get("delivery_id")
-                }
-            ),
-        )
-
-    def _put_frame_event(
-        self,
-        connection: sqlite3.Connection,
-        frame: NodeFrame,
-        *,
-        thread_id: str,
-        status: str,
-        report_delivery_ids: list[str] | None = None,
-    ) -> int:
+    def _advance_frame_sequence(self, connection: sqlite3.Connection, frame: NodeFrame) -> int:
         state_row = connection.execute(
             "SELECT payload_json FROM json_objects WHERE session_id=? AND namespace='runtime_event_state' AND object_id=?",
             (frame.session_id, frame.turn_id),
@@ -55,24 +22,6 @@ class SQLiteRuntimeEventMixin:
         sequence = last_sequence + 1
         if frame.sequence and frame.sequence != sequence:
             raise ValueError("Runtime persistence sequence is out of order.")
-        payload: dict[str, Any] = {
-            "event_id": frame.event_id,
-            "session_id": frame.session_id,
-            "thread_id": thread_id,
-            "turn_id": frame.turn_id,
-            "sequence": sequence,
-            "frame": frame.to_dict(),
-            "status": status,
-            "report_delivery_ids": report_delivery_ids or [],
-        }
-        self._put_json_object(
-            connection,
-            frame.session_id,
-            "runtime_event_outbox",
-            frame.event_id,
-            payload,
-            utc_iso(),
-        )
         self._put_json_object(
             connection,
             frame.session_id,
@@ -94,7 +43,7 @@ class SQLiteRuntimeEventMixin:
             ).fetchone()
             if exists is None:
                 raise KeyError(frame.turn_id)
-            sequence = self._put_frame_event(connection, frame, thread_id=thread_id, status=status)
+            sequence = self._advance_frame_sequence(connection, frame)
             self._put_json_object(
                 connection,
                 frame.session_id,
@@ -129,26 +78,6 @@ class SQLiteRuntimeEventMixin:
             return None, int(state.get("last_sequence") or 0)
         node = runtime_node_from_dict(node_payload)
         return (node if isinstance(node, RuntimeState) else None), int(state.get("last_sequence") or 0)
-
-    def pending_runtime_events(self, session_id: str) -> list[dict[str, object]]:
-        if not self.paths.session_db(session_id).exists():
-            return []
-        with self._connection(session_id) as connection:
-            values = self._json_values(connection, session_id, "runtime_event_outbox")
-        return sorted(values, key=lambda item: (int(item.get("sequence") or 0), str(item.get("event_id") or "")))
-
-    def runtime_event(self, session_id: str, event_id: str) -> dict[str, object] | None:
-        if not self.paths.session_db(session_id).exists():
-            return None
-        with self._connection(session_id) as connection:
-            return self._json_object(connection, session_id, "runtime_event_outbox", event_id)
-
-    def ack_runtime_event(self, session_id: str, event_id: str) -> None:
-        with self._connection(session_id, refresh_index=False, write=True) as connection:
-            connection.execute(
-                "DELETE FROM json_objects WHERE session_id=? AND namespace='runtime_event_outbox' AND object_id=?",
-                (session_id, event_id),
-            )
 
 
 __all__ = ["SQLiteRuntimeEventMixin"]

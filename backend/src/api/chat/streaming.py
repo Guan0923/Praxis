@@ -24,7 +24,7 @@ from backend.providers import ModelConfig, ModelConfigurationError
 from backend.runtime.node_bridge import RuntimeEventNodeBridge
 from backend.runtime.persistence.streaming import RuntimeFramePersistence
 from backend.sandbox import ApprovalStore
-from backend.storage.message_queue import RedisAgentMailbox
+from backend.storage.message_queue import AgentMailbox
 from backend.storage.settings.crypto import SecretDecryptionError
 
 from ..active_turn_stream import ActiveTurnStream
@@ -137,6 +137,10 @@ def _stream(
             raise HTTPException(status_code=409, detail="当前 Thread 已有 running Turn。")
         stream_locks["keys"].add(stream_key)
 
+    cache = getattr(state, "conversation_cache", None)
+    if cache is not None:
+        cache.begin(session_id, thread_id, turn_id)
+
     def registry_key(active_thread_id: str) -> str:
         return active_thread_id
 
@@ -165,7 +169,7 @@ def _stream(
         setattr(state, "active_turn_cancellations", active_turn_cancellations)
     cancellation_key = turn_id
     active_turn_cancellations[cancellation_key] = pause_controller
-    steering_inbox = RedisAgentMailbox(
+    steering_inbox = AgentMailbox(
         state.message_queue,
         turn_id,
         thread_id,
@@ -610,6 +614,8 @@ def _stream(
                         for alias in active_stream_aliases:
                             if active_turn_streams.get(alias) is active_stream:
                                 active_turn_streams.pop(alias, None)
+                    if cache is not None:
+                        cache.finish(thread_id, turn_id)
 
     if job_registry is not None:
         parent_scope = getattr(state, "system_job_scope", job_registry.root_scope())

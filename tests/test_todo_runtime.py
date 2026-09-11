@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
-from redis import Redis
 
-from backend.domain import AssistantMessage, MessageQueueUnavailable, ToolMessage, UserMessage
+from backend.domain import AssistantMessage, ToolMessage, UserMessage
 from backend.planning.llm import LLMPlanner
 from backend.runtime import AgentRunner, ConversationService
 from backend.runtime.core.context import AgentRuntime, PreparedResponse
 from backend.runtime.execution.todo_finalization import TODO_FINALIZATION_INSTRUCTION
-from backend.storage.todo_list import MemoryTodoListStore, RedisTodoListStore
+from backend.storage.todo_list import MemoryTodoListStore
 from backend.tools import build_tool_registry
 from tests.local_store import session_store
 
@@ -131,7 +128,7 @@ class FatalAfterTodoPlanner:
 
 
 class CrashAfterCommitStore:
-    def __init__(self, delegate: RedisTodoListStore) -> None:
+    def __init__(self, delegate: MemoryTodoListStore) -> None:
         self.delegate = delegate
 
     def update(self, **kwargs):
@@ -142,20 +139,19 @@ class CrashAfterCommitStore:
         return getattr(self.delegate, name)
 
 
-class TrackingRedisTodoListStore(RedisTodoListStore):
-    def __init__(self, client: Redis, *, key_prefix: str) -> None:
-        super().__init__(client, key_prefix=key_prefix)
-        self.persisted_ttls: list[int] = []
+class TrackingMemoryTodoListStore(MemoryTodoListStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.persisted_turns: list[tuple[str, str]] = []
 
     def persist_turn(self, session_id: str, turn_id: str) -> None:
-        super().persist_turn(session_id, turn_id)
-        self.persisted_ttls.append(self.client.ttl(self._key(session_id, turn_id)))
+        self.persisted_turns.append((session_id, turn_id))
 
 
 class AutoCompactionTodoClient:
     context_size = 100
 
-    def __init__(self, todo_store: RedisTodoListStore) -> None:
+    def __init__(self, todo_store: MemoryTodoListStore) -> None:
         self.todo_store = todo_store
         self.estimates = [10, 10, 100, 20, 10]
         self.decisions = 0
@@ -222,20 +218,10 @@ class AutoCompactionTodoClient:
 
 
 @pytest.fixture
-def redis_store() -> tuple[TrackingRedisTodoListStore, Redis]:
-    client = Redis.from_url(os.environ.get("PRAXIS_TEST_REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True)
-    try:
-        client.ping()
-    except Exception as exc:
-        client.close()
-        pytest.skip(f"real Redis unavailable: {exc}")
-    prefix = f"praxis:test:todo-runtime:{uuid4().hex}"
-    store = TrackingRedisTodoListStore(client, key_prefix=prefix)
-    yield store, client
-    keys = list(client.scan_iter(f"{prefix}:*"))
-    if keys:
-        client.delete(*keys)
-    client.close()
+def memory_store():
+    store = TrackingMemoryTodoListStore()
+    yield store
+    store.close()
 
 
 def test_finalization_streams_candidate_and_appends_authoritative_unfinished_list(tmp_path: Path) -> None:
@@ -278,11 +264,11 @@ def test_completed_todos_end_without_a_finalization_pass(tmp_path: Path) -> None
     assert store.finalization_claimed(runtime.state.session_id, result.turn_id) is False
 
 
-def test_redis_receipt_repairs_sqlite_before_generic_resume_recovery(
+def test_memory_receipt_repairs_sqlite_before_generic_resume_recovery(
     tmp_path: Path,
-    redis_store: tuple[TrackingRedisTodoListStore, Redis],
+    memory_store: TrackingMemoryTodoListStore,
 ) -> None:
-    todo_store, _client = redis_store
+    todo_store = memory_store
     sqlite_store = session_store(tmp_path / "sqlite")
     runner = AgentRunner(
         CrashRecoveryPlanner(),
@@ -320,11 +306,11 @@ def test_redis_receipt_repairs_sqlite_before_generic_resume_recovery(
     assert json.loads(tool_items[1]["content"])["revision"] == 1
 
 
-def test_pause_resume_persists_then_completed_turn_expires(
+def test_pause_resume_keeps_todo_state_until_process_close(
     tmp_path: Path,
-    redis_store: tuple[TrackingRedisTodoListStore, Redis],
+    memory_store: TrackingMemoryTodoListStore,
 ) -> None:
-    todo_store, client = redis_store
+    todo_store = memory_store
     planner = CrashRecoveryPlanner()
     sqlite_store = session_store(tmp_path / "sqlite")
     runner = AgentRunner(
@@ -349,9 +335,6 @@ def test_pause_resume_persists_then_completed_turn_expires(
     )
 
     assert paused.status == "cancelled"
-    key = todo_store._key(service.runtime.state.session_id, paused.turn_id)  # type: ignore[union-attr]
-    assert client.ttl(key) == -1
-    client.expire(key, 60)
 
     resumed = ConversationService(runner, sqlite_store).resume_session(
         service.runtime.state.session_id,  # type: ignore[union-attr]
@@ -359,15 +342,14 @@ def test_pause_resume_persists_then_completed_turn_expires(
     )
 
     assert resumed is not None and resumed.status == "completed"
-    assert -1 in todo_store.persisted_ttls
-    assert 0 < client.ttl(key) <= 24 * 60 * 60
+    assert todo_store.persisted_turns
 
 
 def test_real_runtime_automatic_compaction_copies_todo_and_continues_with_the_new_turn(
     tmp_path: Path,
-    redis_store: tuple[TrackingRedisTodoListStore, Redis],
+    memory_store: TrackingMemoryTodoListStore,
 ) -> None:
-    todo_store, redis_client = redis_store
+    todo_store = memory_store
     registry = build_tool_registry(tmp_path / "workspace")
     client = AutoCompactionTodoClient(todo_store)
     planner = LLMPlanner(client, registry.specs(), registry.read_only_specs())
@@ -393,10 +375,6 @@ def test_real_runtime_automatic_compaction_copies_todo_and_continues_with_the_ne
     assert target.revision == 2
     assert [todo.status for todo in target.todos] == ["completed"]
     assert any(target.todos[0].id in str(message.content) for message in client.compacted_request)
-    source_key = todo_store._key(service.runtime.state.session_id, client.source_turn_id)  # type: ignore[union-attr]
-    target_key = todo_store._key(service.runtime.state.session_id, client.compacted_turn_id)  # type: ignore[union-attr]
-    assert 0 < redis_client.ttl(source_key) <= 24 * 60 * 60
-    assert 0 < redis_client.ttl(target_key) <= 24 * 60 * 60
     compacted_node = sqlite_store.find_node(client.compacted_turn_id)
     assert compacted_node is not None
     assert [item["type"] for item in compacted_node.assistant_items[:2]] == ["compaction", "todo_snapshot"]
@@ -404,9 +382,9 @@ def test_real_runtime_automatic_compaction_copies_todo_and_continues_with_the_ne
 
 def test_real_runtime_resumes_on_the_compacted_todo_turn(
     tmp_path: Path,
-    redis_store: tuple[TrackingRedisTodoListStore, Redis],
+    memory_store: TrackingMemoryTodoListStore,
 ) -> None:
-    todo_store, redis_client = redis_store
+    todo_store = memory_store
     registry = build_tool_registry(tmp_path / "workspace")
     client = AutoCompactionTodoClient(todo_store)
     planner = LLMPlanner(client, registry.specs(), registry.read_only_specs())
@@ -436,26 +414,20 @@ def test_real_runtime_resumes_on_the_compacted_todo_turn(
     assert paused.turn_id == client.compacted_turn_id
     assert service.runtime is not None
     session_id = service.runtime.state.session_id
-    source_key = todo_store._key(session_id, client.source_turn_id)
-    target_key = todo_store._key(session_id, client.compacted_turn_id)
-    assert 0 < redis_client.ttl(source_key) <= 24 * 60 * 60
-    assert redis_client.ttl(target_key) == -1
-    redis_client.expire(target_key, 60)
 
     resumed = ConversationService(runner, sqlite_store).resume_session(session_id, resume_confirmed=True)
 
     assert resumed is not None and resumed.status == "completed"
     assert resumed.turn_id == client.compacted_turn_id
     assert todo_store.snapshot(session_id, client.compacted_turn_id).revision == 2
-    assert -1 in todo_store.persisted_ttls
-    assert 0 < redis_client.ttl(target_key) <= 24 * 60 * 60
+    assert todo_store.persisted_turns
 
 
-def test_failed_turn_expires_redis_state(
+def test_failed_turn_retains_memory_state(
     tmp_path: Path,
-    redis_store: tuple[TrackingRedisTodoListStore, Redis],
+    memory_store: TrackingMemoryTodoListStore,
 ) -> None:
-    todo_store, client = redis_store
+    todo_store = memory_store
     sqlite_store = session_store(tmp_path / "sqlite")
     runner = AgentRunner(
         FatalAfterTodoPlanner(),
@@ -470,18 +442,3 @@ def test_failed_turn_expires_redis_state(
         service.run_task("fail after Todo", mode="agent")
 
     assert service.runtime is not None and service.runtime.state.current_run is not None
-    key = todo_store._key(service.runtime.state.session_id, service.runtime.state.current_run.turn_id)
-    assert 0 < client.ttl(key) <= 24 * 60 * 60
-
-
-def test_unavailable_redis_fails_without_memory_fallback(tmp_path: Path) -> None:
-    client = Redis(host="127.0.0.1", port=1, decode_responses=True, socket_connect_timeout=0.05, socket_timeout=0.05)
-    store = RedisTodoListStore(client, key_prefix=f"praxis:test:unavailable:{uuid4().hex}")
-    runner = AgentRunner(CrashRecoveryPlanner(), build_tool_registry(tmp_path), todo_store=store)
-    runtime = runner.new_runtime(task="must use Redis")
-    runtime.run.turn_id = "turn_unavailable"
-
-    with pytest.raises(MessageQueueUnavailable, match="message_queue_unavailable"):
-        runner.run(runtime)
-
-    client.close()

@@ -16,8 +16,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.api.error_handlers import error_response
-
 from .error_handlers import install_error_handlers
 from .security import LocalWebSettings, origin_allowed
 from .state import DEFAULT_DATA_ROOT, WebAppState
@@ -42,6 +40,8 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def enforce_local_browser_origin(request: Request, call_next):
+        if resolved.closing:
+            return JSONResponse({"detail": "Backend is shutting down."}, status_code=503)
         if request.method not in {"GET", "HEAD", "OPTIONS"} and not origin_allowed(request, web_settings):
             return JSONResponse(
                 {"detail": "不允许的请求来源。"},
@@ -141,17 +141,9 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
 
     @app.get("/api/ready")
     def ready() -> dict:
-        try:
-            resolved.settings.ping()
-            resolved.projects.list("all")
-            resolved.message_queue.ping()
-        except Exception as exc:
-            from backend.domain import MessageQueueUnavailable
-
-            if isinstance(exc, MessageQueueUnavailable):
-                return error_response(exc, status_code=503, detail="message_queue_unavailable")
-            raise
-        return {"status": "ready", "service": "praxis-backend", "database": "ok", "redis": "ok"}
+        resolved.settings.ping()
+        resolved.projects.list("all")
+        return {"status": "ready", "service": "praxis-backend", "database": "ok"}
 
     @app.api_route(
         "/api/{missing_path:path}",

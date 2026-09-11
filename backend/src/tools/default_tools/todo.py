@@ -1,4 +1,4 @@
-"""Turn-scoped, Redis-authoritative Todo update tool."""
+"""Turn-scoped, in-memory Todo update tool."""
 
 from __future__ import annotations
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sqlite3
 import threading
 from pathlib import Path
@@ -9,20 +8,17 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from redis import Redis
 
 from backend.api.app import create_app
 from backend.api.chat import routes as chat_routes
 from backend.api.chat import streaming as chat_streaming
 from backend.api.session_store import session_store
 from backend.api.state import WebAppState
-from backend.configuration import ClientPaths
 from backend.domain import AssistantMessage, DeliveryConflict, MessageEnvelope, QueuedMessage
 from backend.domain.runtime_state import RuntimeState
 from backend.providers import ModelConfig
 from backend.runtime import AgentApplication, AgentRunner
-from backend.storage.message_queue import STALE_CLAIM_MS, RedisMessageQueue
-from backend.storage.sqlite import SQLiteSessionStore
+from backend.storage.message_queue import MemoryMessageQueue
 from backend.tools import ToolRegistry
 
 
@@ -127,7 +123,7 @@ def test_create_turn_accepts_exactly_one_message_source_and_enqueues_queued_deli
             "delivery_id": "delivery-create",
             "status": "accepted",
         }
-        initial = state.message_queue.claim_turn_start("test", recover=True)
+        initial = state.message_queue.claim_turn_start("test")
         assert initial is not None
         assert initial.envelope.content == "queued turn"
         assert initial.envelope.references == ()
@@ -172,7 +168,7 @@ def test_create_turn_validates_and_normalizes_absolute_file_references(tmp_path:
             },
         )
         assert accepted.status_code == 202, accepted.text
-        claimed = state.message_queue.claim_turn_start("test-reference", recover=True)
+        claimed = state.message_queue.claim_turn_start("test-reference")
         assert claimed is not None
         assert claimed.envelope.references == (
             {
@@ -232,10 +228,11 @@ def test_create_turn_keeps_accepted_delivery_pending_until_worker_admission(tmp_
             },
         )
 
-    assert response.status_code == 202
-    assert [(item.id, item.state) for item in queue.list(sidebar["thread_id"])] == [(message_id, "dispatched")]
-    claimed = queue.claim_turn_start("replacement", recover=True)
-    assert claimed is not None and claimed.envelope.delivery_id == "delivery-stream-failure"
+        assert response.status_code == 202
+        assert [(item.id, item.state) for item in queue.list(sidebar["thread_id"])] == [(message_id, "dispatched")]
+        claimed = queue.claim_turn_start("replacement")
+        assert claimed is not None and claimed.envelope.delivery_id == "delivery-stream-failure"
+    assert queue.list(sidebar["thread_id"]) == []
 
 
 @pytest.mark.parametrize("operation", ["unsupported", "rewind"])
@@ -267,12 +264,12 @@ def test_turn_start_worker_acknowledges_permanent_invalid_command(tmp_path: Path
                 ("delivery-invalid-command",),
             )
             queue.dispatch_turn_start(envelope)
-            claimed = queue.claim_turn_start("test-worker", recover=True)
+            claimed = queue.claim_turn_start("test-worker")
             assert claimed is not None
 
             state.turn_message_worker._start(claimed)
 
-            assert queue.claim_turn_start("replacement", recover=True) is None
+            assert queue.claim_turn_start("replacement") is None
             terminal = state.runtime_event_stream.latest_turn_event("turn-invalid-command")
             assert terminal is not None
             assert terminal.payload["type"] == "turn.terminal"
@@ -308,23 +305,14 @@ def test_create_turn_fails_closed_when_message_queue_is_unavailable(tmp_path: Pa
 
 
 @pytest.fixture
-def redis_queue() -> RedisMessageQueue:
-    prefix = f"praxis:test:{uuid4().hex}"
-    client = Redis.from_url(os.environ.get("PRAXIS_TEST_REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True)
-    try:
-        client.ping()
-    except Exception as exc:
-        pytest.skip(f"real Redis unavailable: {exc}")
-    queue = RedisMessageQueue(client, key_prefix=prefix)
+def memory_queue():
+    queue = MemoryMessageQueue()
     yield queue
-    keys = list(client.scan_iter(f"{prefix}:*"))
-    if keys:
-        client.delete(*keys)
-    client.close()
+    queue.close()
 
 
-def test_real_redis_side_chat_runs_while_main_turn_is_running(
-    tmp_path: Path, monkeypatch, redis_queue: RedisMessageQueue
+def test_memory_side_chat_runs_while_main_turn_is_running(
+    tmp_path: Path, monkeypatch, memory_queue: MemoryMessageQueue
 ) -> None:
     main_started = threading.Event()
     release_main = threading.Event()
@@ -351,7 +339,7 @@ def test_real_redis_side_chat_runs_while_main_turn_is_running(
                 raise RuntimeError("Expected local test failure.")
             return AssistantMessage(content=f"done: {runtime.run.task}")
 
-    state = WebAppState(tmp_path / "web", message_queue=redis_queue)
+    state = WebAppState(tmp_path / "web", message_queue=memory_queue)
     state.model_config = lambda provider_name=None: ModelConfig(
         api_key="local-test-only", base_url="http://127.0.0.1:1", model="local-test"
     )
@@ -469,46 +457,52 @@ def test_real_redis_side_chat_runs_while_main_turn_is_running(
         assert all(all(observation) for observation in terminal_observations), terminal_observations
 
 
-def test_real_redis_dispatch_claim_ack_and_receipt_replay(redis_queue: RedisMessageQueue) -> None:
+def test_memory_dispatch_claim_ack_and_receipt_replay(memory_queue: MemoryMessageQueue) -> None:
     thread_id = "thread-real"
     reference = {"source": "project", "path": "project:a", "display_path": "a"}
-    redis_queue.create(QueuedMessage("one", thread_id, "one", (reference,)))
-    redis_queue.create(QueuedMessage("two", thread_id, "two", (reference,)))
-    redis_queue.create(QueuedMessage("three", thread_id, "three"))
+    memory_queue.create(QueuedMessage("one", thread_id, "one", (reference,)))
+    memory_queue.create(QueuedMessage("two", thread_id, "two", (reference,)))
+    memory_queue.create(QueuedMessage("three", thread_id, "three"))
 
-    first = redis_queue.dispatch(
+    first = memory_queue.dispatch(
         delivery_id="delivery-one",
         message_ids=["two", "one"],
         session_id="session-real",
         thread_id=thread_id,
         turn_id="turn-real",
     )
-    assert redis_queue.client.ttl(redis_queue._receipt_key("delivery-one")) == -1
-    redis_queue.dispatch(
+    memory_queue.dispatch(
         delivery_id="delivery-two",
         message_ids=["three"],
         session_id="session-real",
         thread_id=thread_id,
         turn_id="turn-real",
     )
+    assert (
+        memory_queue.dispatch(
+            delivery_id="delivery-one",
+            message_ids=["one", "two"],
+            session_id="session-real",
+            thread_id=thread_id,
+            turn_id="turn-real",
+        )
+        == first
+    )
     assert first.source_message_ids == ("one", "two")
     assert first.content == "one\n\ntwo"
     assert first.references == (reference,)
 
-    claimed_first = redis_queue.claim("turn-real", "consumer-a")
+    claimed_first = memory_queue.claim("turn-real", "consumer-a")
     assert claimed_first is not None and claimed_first.envelope.delivery_id == "delivery-one"
-    redis_queue.ack(claimed_first)
-    assert 0 < redis_queue.client.ttl(redis_queue._receipt_key("delivery-one")) <= 7 * 24 * 60 * 60
-    claimed_second = redis_queue.claim("turn-real", "consumer-a")
+    memory_queue.ack(claimed_first)
+    claimed_second = memory_queue.claim("turn-real", "consumer-a")
     assert claimed_second is not None and claimed_second.envelope.delivery_id == "delivery-two"
-    redis_queue.ack(claimed_second)
-    assert redis_queue.list(thread_id) == []
-    assert redis_queue.client.exists(redis_queue._stream_key("turn-real")) == 0
-    redis_queue.ack(claimed_second)
-    assert redis_queue.client.exists(redis_queue._stream_key("turn-real")) == 0
+    memory_queue.ack(claimed_second)
+    assert memory_queue.list(thread_id) == []
+    memory_queue.ack(claimed_second)
 
     assert (
-        redis_queue.dispatch(
+        memory_queue.dispatch(
             delivery_id="delivery-one",
             message_ids=["one", "two"],
             session_id="session-real",
@@ -518,7 +512,7 @@ def test_real_redis_dispatch_claim_ack_and_receipt_replay(redis_queue: RedisMess
         == first
     )
     with pytest.raises(DeliveryConflict):
-        redis_queue.dispatch(
+        memory_queue.dispatch(
             delivery_id="delivery-one",
             message_ids=["three"],
             session_id="session-real",
@@ -527,7 +521,7 @@ def test_real_redis_dispatch_claim_ack_and_receipt_replay(redis_queue: RedisMess
         )
 
 
-def test_real_redis_turn_start_xautoclaim_recovers_one_delivery(redis_queue: RedisMessageQueue) -> None:
+def test_memory_turn_start_xautoclaim_recovers_one_delivery(memory_queue: MemoryMessageQueue) -> None:
     envelope = MessageEnvelope(
         "turn-start-delivery",
         "user",
@@ -546,31 +540,22 @@ def test_real_redis_turn_start_xautoclaim_recovers_one_delivery(redis_queue: Red
         },
         ("turn-start-delivery",),
     )
-    redis_queue.dispatch_turn_start(envelope)
-    crashed = redis_queue.claim_turn_start("crashed-worker", recover=True)
+    memory_queue.dispatch_turn_start(envelope)
+    crashed = memory_queue.claim_turn_start("crashed-worker")
     assert crashed is not None and crashed.envelope.attempts == 1
-    stream = redis_queue._turn_start_stream_key()
-    redis_queue.client.xclaim(
-        stream,
-        "turn-start-runtime",
-        "crashed-worker",
-        min_idle_time=0,
-        message_ids=[crashed.stream_id],
-        idle=STALE_CLAIM_MS + 1,
-    )
+    memory_queue.retry(crashed)
 
-    replacement = redis_queue.claim_turn_start("replacement-worker")
+    replacement = memory_queue.claim_turn_start("replacement-worker")
     assert replacement is not None
     assert replacement.stream_id == crashed.stream_id
     assert replacement.envelope.delivery_id == envelope.delivery_id
     assert replacement.envelope.attempts == 2
-    redis_queue.ack(replacement)
-    assert redis_queue.claim_turn_start("after-ack", recover=True) is None
-    assert redis_queue.client.xlen(stream) == 0
+    memory_queue.ack(replacement)
+    assert memory_queue.claim_turn_start("after-ack") is None
 
 
-def test_real_redis_turn_start_pending_delivery_does_not_block_another_session(
-    redis_queue: RedisMessageQueue,
+def test_memory_turn_start_pending_delivery_does_not_block_another_session(
+    memory_queue: MemoryMessageQueue,
 ) -> None:
     def envelope(delivery_id: str, session_id: str) -> MessageEnvelope:
         return MessageEnvelope(
@@ -592,88 +577,19 @@ def test_real_redis_turn_start_pending_delivery_does_not_block_another_session(
             (delivery_id,),
         )
 
-    redis_queue.dispatch_turn_start(envelope("first", "session-first"))
-    redis_queue.dispatch_turn_start(envelope("second", "session-second"))
-    first = redis_queue.claim_turn_start("worker-first", recover=True)
-    second = redis_queue.claim_turn_start("worker-second")
+    memory_queue.dispatch_turn_start(envelope("first", "session-first"))
+    memory_queue.dispatch_turn_start(envelope("second", "session-second"))
+    first = memory_queue.claim_turn_start("worker-first")
+    second = memory_queue.claim_turn_start("worker-second")
 
     assert first is not None and first.envelope.session_id == "session-first"
     assert second is not None and second.envelope.session_id == "session-second"
-    redis_queue.ack(first)
-    redis_queue.ack(second)
+    memory_queue.ack(first)
+    memory_queue.ack(second)
 
 
-def test_real_redis_restart_acks_committed_turn_without_rerun_and_marks_process_stop(
-    tmp_path: Path,
-    redis_queue: RedisMessageQueue,
-) -> None:
-    paths = ClientPaths(tmp_path / "web")
-    paths.ensure()
-    store = SQLiteSessionStore(paths)
-    session = store.create_session("restart")
-    store.create_sidebar_thread(
-        session_id=session.session_id,
-        thread_id=session.session_id,
-        title="restart",
-    )
-    root = store.ensure_root_node(session.session_id, id="turn-restart-root")
-    envelope = MessageEnvelope(
-        "turn-restart-delivery",
-        "user",
-        session.session_id,
-        "turn_start",
-        "turn-restart",
-        session.session_id,
-        session.session_id,
-        {
-            "content": "do not rerun",
-            "references": [],
-            "version": 1,
-            "operation": "create",
-            "parent_id": "",
-            "config": {},
-        },
-        ("turn-restart-delivery",),
-    )
-    redis_queue.dispatch_turn_start(envelope)
-    crashed = redis_queue.claim_turn_start("crashed-worker", recover=True)
-    assert crashed is not None
-
-    node = RuntimeState.create(
-        session_id=session.session_id,
-        thread_id=session.session_id,
-        id="turn-restart",
-        parent=root,
-        user_content=[{"type": "text", "text": "do not rerun", "status": "success"}],
-    )
-    node.data[0][0]["delivery_id"] = envelope.delivery_id
-    store.create_node(RuntimeState.from_dict(node.to_dict()))
-    store.start_turn(session.session_id, "run-restart", "do not rerun", delivery_id=envelope.delivery_id)
-
-    reopened = WebAppState(tmp_path / "web", message_queue=redis_queue)
-    try:
-        deadline = monotonic() + 5
-        while monotonic() < deadline:
-            if redis_queue.client.hget(redis_queue._receipt_key(envelope.delivery_id), "status") == "acknowledged":
-                break
-            sleep(0.02)
-        else:
-            pytest.fail("restarted worker did not ACK the committed delivery")
-        failed = SQLiteSessionStore(paths).find_node(node.id)
-        assert isinstance(failed, RuntimeState) and failed.status == "failed"
-        errors = [
-            item
-            for message in failed.data[failed.current_data_idx]
-            for item in message["content"]
-            if item.get("type") == "error"
-        ]
-        assert errors and errors[-1].get("code") == "backend_process_stopped"
-    finally:
-        reopened.close()
-
-
-def test_real_redis_agent_thread_dispatch_is_fifo_deduplicated_and_acknowledged(
-    redis_queue: RedisMessageQueue,
+def test_memory_agent_thread_dispatch_is_fifo_deduplicated_and_acknowledged(
+    memory_queue: MemoryMessageQueue,
 ) -> None:
     first = MessageEnvelope(
         "agent-one",
@@ -697,11 +613,11 @@ def test_real_redis_agent_thread_dispatch_is_fifo_deduplicated_and_acknowledged(
         {"content": "second", "references": []},
         ("agent-two",),
     )
-    assert redis_queue.dispatch_agent(first) == first
-    assert redis_queue.dispatch_agent(first) == first
-    redis_queue.dispatch_agent(second)
+    assert memory_queue.dispatch_agent(first) == first
+    assert memory_queue.dispatch_agent(first) == first
+    memory_queue.dispatch_agent(second)
     with pytest.raises(DeliveryConflict):
-        redis_queue.dispatch_agent(
+        memory_queue.dispatch_agent(
             MessageEnvelope(
                 "agent-one",
                 "agent",
@@ -715,24 +631,23 @@ def test_real_redis_agent_thread_dispatch_is_fifo_deduplicated_and_acknowledged(
             )
         )
 
-    assert redis_queue.peek_thread("thread-target") == first
-    claimed_first = redis_queue.claim_thread("thread-target", "crashed-worker")
+    assert memory_queue.peek_thread("thread-target") == first
+    claimed_first = memory_queue.claim_thread("thread-target", "crashed-worker")
     assert claimed_first is not None and claimed_first.envelope.content == "first"
-    assert redis_queue.claim_thread("thread-target", "worker") is None
-    recovered_first = redis_queue.claim_thread_recovery("thread-target", "replacement-worker")
+    assert memory_queue.claim_thread("thread-target", "worker") is None
+    memory_queue.retry(claimed_first)
+    recovered_first = memory_queue.claim_thread("thread-target", "replacement-worker")
     assert recovered_first is not None and recovered_first.stream_id == claimed_first.stream_id
     assert recovered_first.envelope.delivery_id == "agent-one"
-    redis_queue.ack(recovered_first)
-    claimed_second = redis_queue.claim_thread("thread-target", "worker")
+    memory_queue.ack(recovered_first)
+    claimed_second = memory_queue.claim_thread("thread-target", "worker")
     assert claimed_second is not None and claimed_second.envelope.content == "second"
-    redis_queue.ack(claimed_second)
-    assert redis_queue.peek_thread("thread-target") is None
-    assert redis_queue.client.exists(redis_queue._thread_stream_key("thread-target")) == 0
-    assert 0 < redis_queue.client.ttl(redis_queue._receipt_key("agent-one")) <= 7 * 24 * 60 * 60
+    memory_queue.ack(claimed_second)
+    assert memory_queue.peek_thread("thread-target") is None
 
 
-def test_real_redis_assistant_report_stream_is_independent_and_idempotent(
-    redis_queue: RedisMessageQueue,
+def test_memory_assistant_report_stream_is_independent_and_idempotent(
+    memory_queue: MemoryMessageQueue,
 ) -> None:
     report = MessageEnvelope(
         "agent-report-one",
@@ -746,102 +661,16 @@ def test_real_redis_assistant_report_stream_is_independent_and_idempotent(
         ("agent-report-one",),
         created_at="2026-08-31T00:00:00+00:00",
     )
-    assert redis_queue.dispatch_report(report) == report
-    assert redis_queue.dispatch_report(report) == report
-    assert redis_queue.peek_thread("thread-parent") is None
+    assert memory_queue.dispatch_report(report) == report
+    assert memory_queue.dispatch_report(report) == report
+    assert memory_queue.peek_thread("thread-parent") is None
 
-    claimed = redis_queue.claim_report("thread-parent", "report-consumer")
+    claimed = memory_queue.claim_report("thread-parent", "report-consumer")
     assert claimed is not None
     assert claimed.envelope.content == report.content
-    assert redis_queue.claim_report("thread-parent", "second-consumer") is None
-    redis_queue.ack(claimed)
-    assert redis_queue.claim_report("thread-parent", "after-ack") is None
-
-
-def test_real_redis_reclaims_stale_delivery_and_returns_unconsumed_messages(redis_queue: RedisMessageQueue) -> None:
-    redis_queue.create(QueuedMessage("one", "thread", "one"))
-    redis_queue.create(QueuedMessage("two", "thread", "two"))
-    redis_queue.dispatch(
-        delivery_id="delivery-stale",
-        message_ids=["one"],
-        session_id="session",
-        thread_id="thread",
-        turn_id="turn",
-    )
-    redis_queue.dispatch(
-        delivery_id="delivery-pending",
-        message_ids=["two"],
-        session_id="session",
-        thread_id="thread",
-        turn_id="turn",
-    )
-    stale = redis_queue.claim("turn", "crashed-worker")
-    assert stale is not None
-    stream = redis_queue._stream_key("turn")
-    assert redis_queue.claim("turn", "replacement-worker") is None
-    redis_queue.client.xclaim(
-        stream,
-        redis_queue.consumer_group,
-        "crashed-worker",
-        min_idle_time=0,
-        message_ids=[stale.stream_id],
-        idle=STALE_CLAIM_MS + 1,
-    )
-    reclaimed = redis_queue.claim("turn", "replacement-worker")
-    assert reclaimed is not None and reclaimed.envelope.delivery_id == "delivery-stale"
-    redis_queue.ack(reclaimed)
-
-    redis_queue.release_turn("turn")
-    remaining = redis_queue.list("thread")
-    assert [(item.id, item.state) for item in remaining] == [("two", "pending")]
-    assert redis_queue.client.exists(stream) == 0
-    replay = redis_queue.dispatch(
-        delivery_id="delivery-pending",
-        message_ids=["two"],
-        session_id="session",
-        thread_id="thread",
-        turn_id="turn",
-    )
-    assert replay.delivery_id == "delivery-pending"
-    replayed_claim = redis_queue.claim("turn", "replacement-worker")
-    assert replayed_claim is not None and replayed_claim.envelope.delivery_id == "delivery-pending"
-
-
-def test_startup_reconciliation_acks_double_persisted_delivery_and_fails_running_turn(tmp_path: Path) -> None:
-    from backend.storage.message_queue import MemoryMessageQueue
-
-    queue = MemoryMessageQueue()
-    state = WebAppState(tmp_path / "web", message_queue=queue)
-    with TestClient(create_app(state)) as client:
-        sidebar = client.post("/api/sidebar-threads", json={}).json()
-    store = session_store(state)
-    queue.create(QueuedMessage("message", sidebar["thread_id"], "persist me"))
-    queue.dispatch(
-        delivery_id="delivery-persisted",
-        message_ids=["message"],
-        session_id=sidebar["session_id"],
-        thread_id=sidebar["thread_id"],
-        turn_id="turn-persisted",
-    )
-    root = store.ensure_root_node(sidebar["session_id"])
-    node = RuntimeState.create(
-        session_id=sidebar["session_id"],
-        thread_id=sidebar["thread_id"],
-        id="turn-persisted",
-        parent=root,
-        user_content=[{"type": "text", "text": "persist me", "status": "success"}],
-    )
-    node.data[0][0]["delivery_id"] = "delivery-persisted"
-    store.create_node(RuntimeState.from_dict(node.to_dict()))
-    store.start_turn(sidebar["session_id"], "run-persisted", "persist me", delivery_id="delivery-persisted")
-
-    reopened = WebAppState(tmp_path / "web", message_queue=queue)
-    reopened_store = session_store(reopened)
-    reconciled = reopened_store.find_node("turn-persisted")
-    assert isinstance(reconciled, RuntimeState) and reconciled.status == "failed"
-    assert reopened_store.get_session_summary(sidebar["session_id"]).last_run_status == "failed"
-    assert queue.list(sidebar["thread_id"]) == []
-    reopened.close()
+    assert memory_queue.claim_report("thread-parent", "second-consumer") is None
+    memory_queue.ack(claimed)
+    assert memory_queue.claim_report("thread-parent", "after-ack") is None
 
 
 def test_sqlite_turn_message_delivery_is_idempotent(tmp_path: Path) -> None:
@@ -859,141 +688,3 @@ def test_sqlite_turn_message_delivery_is_idempotent(tmp_path: Path) -> None:
             "AND json_extract(payload_json, '$.delivery_id')='delivery'"
         ).fetchone()[0]
     assert count == 1
-
-
-def test_startup_reconciliation_returns_delivery_that_never_reached_sqlite(tmp_path: Path) -> None:
-    from backend.storage.message_queue import MemoryMessageQueue
-
-    queue = MemoryMessageQueue()
-    state = WebAppState(tmp_path / "web", message_queue=queue)
-    with TestClient(create_app(state)) as client:
-        sidebar = client.post("/api/sidebar-threads", json={}).json()
-    queue.create(QueuedMessage("message", sidebar["thread_id"], "retry me"))
-    queue.dispatch(
-        delivery_id="delivery-unpersisted",
-        message_ids=["message"],
-        session_id=sidebar["session_id"],
-        thread_id=sidebar["thread_id"],
-        turn_id="turn-missing",
-    )
-
-    reopened = WebAppState(tmp_path / "web", message_queue=queue)
-    assert [(item.id, item.state) for item in queue.list(sidebar["thread_id"])] == [("message", "pending")]
-    reopened.close()
-
-
-def test_startup_reconciliation_repairs_missing_canonical_projection(tmp_path: Path) -> None:
-    from backend.storage.message_queue import MemoryMessageQueue
-
-    queue = MemoryMessageQueue()
-    state = WebAppState(tmp_path / "web", message_queue=queue)
-    with TestClient(create_app(state)) as client:
-        sidebar = client.post("/api/sidebar-threads", json={}).json()
-    store = session_store(state)
-    queue.create(QueuedMessage("message", sidebar["thread_id"], "repair canonical"))
-    queue.dispatch(
-        delivery_id="delivery-canonical",
-        message_ids=["message"],
-        session_id=sidebar["session_id"],
-        thread_id=sidebar["thread_id"],
-        turn_id="turn-canonical",
-    )
-    root = store.ensure_root_node(sidebar["session_id"])
-    node = RuntimeState.create(
-        session_id=sidebar["session_id"],
-        thread_id=sidebar["thread_id"],
-        id="turn-canonical",
-        parent=root,
-        user_content=[{"type": "text", "text": "start", "status": "success"}],
-    )
-    store.create_node(node)
-    store.start_turn(
-        sidebar["session_id"],
-        "run-canonical",
-        "repair canonical",
-        delivery_id="delivery-canonical",
-    )
-
-    reopened = WebAppState(tmp_path / "web", message_queue=queue)
-    repaired = session_store(reopened).find_node("turn-canonical")
-    assert isinstance(repaired, RuntimeState) and repaired.status == "failed"
-    assert any(
-        message.get("delivery_id") == "delivery-canonical" for message in repaired.data[repaired.current_data_idx]
-    )
-    assert queue.list(sidebar["thread_id"]) == []
-    reopened.close()
-
-
-def test_startup_reconciliation_repairs_missing_turn_message_projection(tmp_path: Path) -> None:
-    from backend.storage.message_queue import MemoryMessageQueue
-
-    queue = MemoryMessageQueue()
-    state = WebAppState(tmp_path / "web", message_queue=queue)
-    with TestClient(create_app(state)) as client:
-        sidebar = client.post("/api/sidebar-threads", json={}).json()
-    store = session_store(state)
-    queue.create(QueuedMessage("message", sidebar["thread_id"], "repair turn message"))
-    queue.dispatch(
-        delivery_id="delivery-turn-message",
-        message_ids=["message"],
-        session_id=sidebar["session_id"],
-        thread_id=sidebar["thread_id"],
-        turn_id="turn-message",
-    )
-    root = store.ensure_root_node(sidebar["session_id"])
-    node = RuntimeState.create(
-        session_id=sidebar["session_id"],
-        thread_id=sidebar["thread_id"],
-        id="turn-message",
-        parent=root,
-        user_content=[{"type": "text", "text": "repair turn message", "status": "success"}],
-    )
-    node.data[0][0]["delivery_id"] = "delivery-turn-message"
-    store.create_node(RuntimeState.from_dict(node.to_dict()))
-    store.start_turn(sidebar["session_id"], "run-turn-message", "start")
-
-    reopened = WebAppState(tmp_path / "web", message_queue=queue)
-    repaired_store = session_store(reopened)
-    assert repaired_store.has_turn_delivery(sidebar["session_id"], "delivery-turn-message")
-    assert queue.list(sidebar["thread_id"]) == []
-    reopened.close()
-
-
-def test_startup_reconciliation_does_not_block_history_when_redis_drops_during_ack(tmp_path: Path) -> None:
-    from backend.domain import MessageQueueUnavailable
-    from backend.storage.message_queue import MemoryMessageQueue
-
-    class AckUnavailableQueue(MemoryMessageQueue):
-        def ack(self, claimed) -> None:
-            del claimed
-            raise MessageQueueUnavailable("message_queue_unavailable")
-
-    queue = AckUnavailableQueue()
-    state = WebAppState(tmp_path / "web", message_queue=queue)
-    with TestClient(create_app(state)) as client:
-        sidebar = client.post("/api/sidebar-threads", json={}).json()
-    store = session_store(state)
-    queue.create(QueuedMessage("message", sidebar["thread_id"], "persist me"))
-    queue.dispatch(
-        delivery_id="delivery-ack-down",
-        message_ids=["message"],
-        session_id=sidebar["session_id"],
-        thread_id=sidebar["thread_id"],
-        turn_id="turn-ack-down",
-    )
-    root = store.ensure_root_node(sidebar["session_id"])
-    node = RuntimeState.create(
-        session_id=sidebar["session_id"],
-        thread_id=sidebar["thread_id"],
-        id="turn-ack-down",
-        parent=root,
-        user_content=[{"type": "text", "text": "persist me", "status": "success"}],
-    )
-    node.data[0][0]["delivery_id"] = "delivery-ack-down"
-    store.create_node(RuntimeState.from_dict(node.to_dict()))
-    store.start_turn(sidebar["session_id"], "run-ack-down", "persist me", delivery_id="delivery-ack-down")
-
-    reopened = WebAppState(tmp_path / "web", message_queue=queue)
-    assert isinstance(session_store(reopened).find_node("turn-ack-down"), RuntimeState)
-    assert queue.list(sidebar["thread_id"])[0].state == "dispatched"
-    reopened.close()

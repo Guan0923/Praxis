@@ -1,8 +1,22 @@
+import { normalizeRuntimeNode } from "../../app/runtime/runtimeNodeNormalization";
 import type { RuntimeStateNode, RuntimeTreeNode, SidebarThread, TurnTraceResponse } from "../../types";
 import { requestJson } from "../transport/request";
 
-export async function listTurns(sessionId: string): Promise<RuntimeTreeNode[]> {
-  return requestJson(`/api/turns?session_id=${encodeURIComponent(sessionId)}`);
+export interface TurnPage {
+  turns: RuntimeTreeNode[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+export async function getTurnPage(sessionId: string, threadId = sessionId, before?: string): Promise<TurnPage> {
+  const query = new URLSearchParams({ session_id: sessionId, thread_id: threadId, limit: "5" });
+  if (before) query.set("before", before);
+  const page = await requestJson<TurnPage>(`/api/turns/history?${query.toString()}`);
+  return { ...page, turns: page.turns.map(normalizeRuntimeNode) };
+}
+
+export async function listTurns(sessionId: string, threadId = sessionId): Promise<RuntimeTreeNode[]> {
+  return (await getTurnPage(sessionId, threadId)).turns;
 }
 
 export function threadTraceDownloadUrl(sessionId: string, threadId: string): string {

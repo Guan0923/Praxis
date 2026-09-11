@@ -67,7 +67,7 @@ def _requires_approval(context: ToolHookContext) -> bool:
 
 
 def _approval_request(context: ToolHookContext) -> InterruptRequest:
-    command = context.arguments.get("command")
+    command = context.arguments.get("cmd")
     permission_target = context.permission_mode
     return InterruptRequest(
         "tool",

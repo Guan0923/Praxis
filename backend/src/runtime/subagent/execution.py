@@ -132,7 +132,6 @@ class _SubagentExecutionMixin:
         *,
         creator_thread_id: str,
         initial_delivery_id: str | None = None,
-        recover_delivery: bool = False,
     ) -> str:
         if self._thread_events is not None:
             self._thread_events.start_turn(turn)
@@ -150,7 +149,6 @@ class _SubagentExecutionMixin:
                         turn,
                         creator_thread_id=creator_thread_id,
                         initial_delivery_id=initial_delivery_id,
-                        recover_delivery=recover_delivery,
                     )
                 finally:
                     with self._state_lock:
@@ -216,7 +214,6 @@ class _SubagentExecutionMixin:
         *,
         creator_thread_id: str,
         initial_delivery_id: str | None,
-        recover_delivery: bool,
     ) -> None:
         stored_turn = getattr(self._store, "get_node")(node.session_id, turn.id)
         if isinstance(stored_turn, RuntimeState):
@@ -292,9 +289,9 @@ class _SubagentExecutionMixin:
             runtime.run.data_idx = current.current_data_idx
             self._apply_context_prefix(runtime, node.session_id, node.thread_id)
             runtime.services.on_event = bridge.handle
-            from backend.storage.message_queue import RedisAgentMailbox
+            from backend.storage.message_queue import AgentMailbox
 
-            mailbox = RedisAgentMailbox(
+            mailbox = AgentMailbox(
                 self._queue,
                 turn.id,
                 node.thread_id,
@@ -305,8 +302,7 @@ class _SubagentExecutionMixin:
             runtime.services.complete_requested = lambda: status_requested("success")
             runtime.services.interrupt = self._approval_handler(creator_thread_id, node.thread_id)
             if initial_delivery_id:
-                claim_method = "claim_thread_recovery" if recover_delivery else "claim_thread"
-                claimed = getattr(self._queue, claim_method)(
+                claimed = getattr(self._queue, "claim_thread")(
                     node.thread_id,
                     f"agent-initial-{node.thread_id}-{uuid4().hex}",
                 )
@@ -437,36 +433,6 @@ class _SubagentExecutionMixin:
                 return False
             control.claimed = True
             return True
-
-    def recover_session(self, session_id: str) -> None:
-        if self._store is None or self._queue is None:
-            return
-        for runtime_thread in getattr(self._store, "list_runtime_threads")(session_id):
-            node = getattr(self._store, "get_thread_node")(session_id, runtime_thread.thread_id)
-            if node is None:
-                continue
-            if runtime_thread.running_turn_id:
-                if runtime_thread.origin_kind != "subagent":
-                    continue
-                turn = getattr(self._store, "get_node")(session_id, runtime_thread.running_turn_id)
-                if isinstance(turn, RuntimeState) and turn.status == "running":
-                    turn = getattr(self._store, "settle_indeterminate_tool_calls")(turn.id)
-                    delivery_id = str(turn.user_message.get("delivery_id") or "")
-                    pending = getattr(self._queue, "peek_thread")(node.thread_id)
-                    recover_delivery_id = (
-                        delivery_id if pending is not None and pending.delivery_id == delivery_id else None
-                    )
-                    self._submit_turn(
-                        node,
-                        turn,
-                        creator_thread_id=node.parent_thread_id or session_id,
-                        initial_delivery_id=recover_delivery_id,
-                        recover_delivery=recover_delivery_id is not None,
-                    )
-            else:
-                self._wake_thread(session_id, runtime_thread.thread_id)
-                self._drain_inactive_reports(session_id, runtime_thread.thread_id)
-        self._dispatch_ready_reports(session_id)
 
     @staticmethod
     def _safe_error(error: BaseException) -> str:

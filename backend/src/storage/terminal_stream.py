@@ -1,113 +1,72 @@
-"""Short-lived Redis output streams for interactive terminals."""
-
-from __future__ import annotations
+"""Process-owned terminal replay bounded by UTF-8 bytes."""
 
 from dataclasses import dataclass
+from threading import RLock
 
-from redis import Redis
-from redis.exceptions import RedisError
-
-from backend.domain import MessageQueueUnavailable
+from backend.jobs.output_buffer import OutputBuffer
 
 MAX_TERMINAL_CHUNK_BYTES = 16 * 1024
-MAX_TERMINAL_CHUNKS = 256
-TERMINAL_STREAM_TTL_SECONDS = 30 * 60
 
 
 @dataclass(frozen=True, slots=True)
 class TerminalOutputChunk:
     sequence: int
     data: str
+    segments: tuple[dict[str, object], ...] = ()
 
 
-class RedisTerminalOutputStream:
-    _append_script = """
-local sequence = redis.call('INCR', KEYS[2])
-redis.call('XADD', KEYS[1], '*', 'sequence', sequence, 'data', ARGV[1])
-redis.call('XTRIM', KEYS[1], 'MAXLEN', '=', tonumber(ARGV[2]))
-redis.call('PERSIST', KEYS[1])
-redis.call('PERSIST', KEYS[2])
-return sequence
-"""
-
-    def __init__(self, client: Redis, *, key_prefix: str) -> None:
-        self.client = client
-        self.key_prefix = key_prefix.rstrip(":")
-        self._append = client.register_script(self._append_script)
-
-    def _keys(self, terminal_id: str) -> tuple[str, str]:
-        base = f"{self.key_prefix}:terminal:{terminal_id}"
-        return f"{base}:output", f"{base}:sequence"
-
-    @staticmethod
-    def _unavailable(exc: BaseException) -> MessageQueueUnavailable:
-        return MessageQueueUnavailable("message_queue_unavailable")
-
-    def ping(self) -> None:
-        try:
-            self.client.ping()
-        except RedisError as exc:
-            raise self._unavailable(exc) from exc
+class MemoryTerminalOutputStream:
+    def __init__(self) -> None:
+        self._buffers: dict[str, OutputBuffer] = {}
+        self._lock = RLock()
 
     def append(self, terminal_id: str, data: str) -> list[TerminalOutputChunk]:
-        encoded = data.encode("utf-8")
-        chunks: list[TerminalOutputChunk] = []
-        offset = 0
-        try:
-            while offset < len(encoded):
-                end = min(offset + MAX_TERMINAL_CHUNK_BYTES, len(encoded))
-                while end > offset:
-                    try:
-                        part = encoded[offset:end].decode("utf-8")
-                        break
-                    except UnicodeDecodeError:
-                        end -= 1
-                if end == offset:
-                    end = min(offset + MAX_TERMINAL_CHUNK_BYTES, len(encoded))
-                    part = encoded[offset:end].decode("utf-8", errors="replace")
-                stream, sequence = self._keys(terminal_id)
-                value = self._append(keys=[stream, sequence], args=[part, MAX_TERMINAL_CHUNKS])
-                chunks.append(TerminalOutputChunk(int(value), part))
+        with self._lock:
+            buffer = self._buffers.setdefault(terminal_id, OutputBuffer())
+            chunks = []
+            raw = data.encode("utf-8")
+            offset = 0
+            while offset < len(raw):
+                end = min(len(raw), offset + MAX_TERMINAL_CHUNK_BYTES)
+                while end < len(raw) and raw[end] & 0xC0 == 0x80:
+                    end -= 1
+                part = raw[offset:end]
+                buffer.append(part)
+                chunks.append(TerminalOutputChunk(buffer.total, part.decode("utf-8")))
                 offset = end
-        except RedisError as exc:
-            raise self._unavailable(exc) from exc
-        return chunks
+            return chunks
 
     def after(self, terminal_id: str, sequence: int) -> list[TerminalOutputChunk]:
-        stream, _ = self._keys(terminal_id)
-        try:
-            rows = self.client.xrange(stream, min="-", max="+")
-        except RedisError as exc:
-            raise self._unavailable(exc) from exc
-        result: list[TerminalOutputChunk] = []
-        for _, fields in rows:
-            item_sequence = int(fields.get("sequence", 0))
-            if item_sequence > sequence:
-                result.append(TerminalOutputChunk(item_sequence, str(fields.get("data", ""))))
-        return result
-
-    def expire(self, terminal_id: str) -> None:
-        stream, sequence = self._keys(terminal_id)
-        try:
-            with self.client.pipeline() as pipe:
-                pipe.expire(stream, TERMINAL_STREAM_TTL_SECONDS)
-                pipe.expire(sequence, TERMINAL_STREAM_TTL_SECONDS)
-                pipe.execute()
-        except RedisError as exc:
-            raise self._unavailable(exc) from exc
+        with self._lock:
+            buffer = self._buffers.get(terminal_id)
+            if buffer is None or buffer.total <= sequence:
+                return []
+            parts, position = buffer.snapshot_parts()
+            segments: list[dict[str, object]] = []
+            cursor = sequence
+            omitted = False
+            for part in parts:
+                if part.end <= sequence:
+                    continue
+                start = max(sequence, part.start)
+                if start > cursor:
+                    segments.append({"omitted_bytes": start - cursor})
+                    omitted = True
+                segments.append({"data": part.data[start - part.start :].decode("utf-8", errors="replace")})
+                cursor = part.end
+            if cursor < position:
+                segments.append({"omitted_bytes": position - cursor})
+                omitted = True
+            text = "".join(
+                str(part["data"]) if "data" in part else f"\n[... {part['omitted_bytes']} bytes omitted ...]\n"
+                for part in segments
+            )
+            return [TerminalOutputChunk(position, text, tuple(segments) if omitted else ())]
 
     def delete(self, terminal_id: str) -> None:
-        stream, sequence = self._keys(terminal_id)
-        try:
-            self.client.delete(stream, sequence)
-        except RedisError as exc:
-            raise self._unavailable(exc) from exc
+        with self._lock:
+            self._buffers.pop(terminal_id, None)
 
-
-__all__ = [
-    "MAX_TERMINAL_CHUNK_BYTES",
-    "MAX_TERMINAL_CHUNKS",
-    "RedisTerminalOutputStream",
-    "TERMINAL_STREAM_TTL_SECONDS",
-    "TerminalOutputChunk",
-]
+    def close(self) -> None:
+        with self._lock:
+            self._buffers.clear()

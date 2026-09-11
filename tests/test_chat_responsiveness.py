@@ -177,8 +177,8 @@ def test_parallel_real_commands_stop_before_their_natural_completion(tmp_path: P
                 name="run_command",
                 call_id=f"command-{index}",
                 arguments={
-                    "command": f"{sys.executable} {Path(__file__).parent / 'support' / 'slow_command.py'} {index}",
-                    "timeout_seconds": 45,
+                    "cmd": f"{sys.executable} {Path(__file__).parent / 'support' / 'slow_command.py'} {index}",
+                    "yield_time_ms": 45000,
                 },
             )
             for index in range(3)

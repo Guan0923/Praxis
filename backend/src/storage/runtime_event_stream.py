@@ -1,34 +1,17 @@
-"""Redis-backed fan-out streams for browser Runtime observation and replay."""
+"""Process-owned, bounded fan-out streams for browser observation."""
 
 from __future__ import annotations
 
-import json
+from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass
-from threading import RLock
+from threading import Condition, RLock
 
-from redis import Redis
-from redis.exceptions import RedisError
-
-from backend.domain import MessageQueueUnavailable
-
-EVENT_STREAM_TTL_SECONDS = 24 * 60 * 60
 EVENT_STREAM_MAXLEN = 10_000
 
-_PUBLISH_SCRIPT = r"""
-local existing = redis.call('GET', KEYS[1])
-if existing then
-  local ids = cjson.decode(existing)
-  return {ids[1], ids[2]}
-end
-local turn_id = redis.call('XADD', KEYS[2], 'MAXLEN', ARGV[1], '*',
-  'event_id', ARGV[2], 'sequence', ARGV[3], 'payload', ARGV[4])
-local thread_id = redis.call('XADD', KEYS[3], 'MAXLEN', ARGV[1], '*',
-  'event_id', ARGV[2], 'sequence', ARGV[3], 'turn_id', ARGV[5], 'payload', ARGV[4])
-redis.call('EXPIRE', KEYS[2], ARGV[6])
-redis.call('EXPIRE', KEYS[3], ARGV[6])
-redis.call('SET', KEYS[1], cjson.encode({turn_id, thread_id}), 'EX', ARGV[7])
-return {turn_id, thread_id}
-"""
+
+class RuntimeEventCursorExpired(LookupError):
+    """A reader must reload a snapshot after its replay window was evicted."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,130 +22,19 @@ class RuntimeStreamEntry:
     payload: dict[str, object]
 
 
-class RedisRuntimeEventStream:
-    def __init__(self, client: Redis, *, key_prefix: str) -> None:
-        self.client = client
-        self.key_prefix = key_prefix.rstrip(":")
-        self._publish = client.register_script(_PUBLISH_SCRIPT)
-
-    def _turn_key(self, turn_id: str) -> str:
-        return f"{self.key_prefix}:turn:{turn_id}:events"
-
-    def _thread_key(self, thread_id: str) -> str:
-        return f"{self.key_prefix}:thread:{thread_id}:events"
-
-    def _receipt_key(self, event_id: str) -> str:
-        return f"{self.key_prefix}:runtime-event:{event_id}"
-
-    @staticmethod
-    def _unavailable(exc: BaseException) -> MessageQueueUnavailable:
-        return MessageQueueUnavailable("message_queue_unavailable")
-
-    def publish(
-        self,
-        *,
-        event_id: str,
-        turn_id: str,
-        thread_id: str,
-        sequence: int,
-        payload: dict[str, object],
-    ) -> tuple[str, str]:
-        try:
-            result = self._publish(
-                keys=[self._receipt_key(event_id), self._turn_key(turn_id), self._thread_key(thread_id)],
-                args=[
-                    EVENT_STREAM_MAXLEN,
-                    event_id,
-                    sequence,
-                    json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                    turn_id,
-                    EVENT_STREAM_TTL_SECONDS,
-                    7 * 24 * 60 * 60,
-                ],
-            )
-        except RedisError as exc:
-            raise self._unavailable(exc) from exc
-        return str(result[0]), str(result[1])
-
-    def latest_turn_id(self, turn_id: str) -> str:
-        try:
-            entries = self.client.xrevrange(self._turn_key(turn_id), count=1)
-        except RedisError as exc:
-            raise self._unavailable(exc) from exc
-        return str(entries[0][0]) if entries else "0-0"
-
-    def latest_turn_event(self, turn_id: str) -> RuntimeStreamEntry | None:
-        """Return the newest retained event for one Turn without blocking."""
-
-        try:
-            entries = self.client.xrevrange(self._turn_key(turn_id), count=1)
-        except RedisError as exc:
-            raise self._unavailable(exc) from exc
-        if not entries:
-            return None
-        stream_id, fields = entries[0]
-        raw = fields.get("payload")
-        payload = json.loads(raw) if raw else None
-        if not isinstance(payload, dict):
-            return None
-        return RuntimeStreamEntry(
-            str(stream_id),
-            str(fields.get("event_id") or ""),
-            int(fields.get("sequence") or 0),
-            dict(payload),
-        )
-
-    def has_event(self, event_id: str) -> bool:
-        try:
-            return bool(self.client.exists(self._receipt_key(event_id)))
-        except RedisError as exc:
-            raise self._unavailable(exc) from exc
-
-    def latest_thread_id(self, thread_id: str) -> str:
-        try:
-            entries = self.client.xrevrange(self._thread_key(thread_id), count=1)
-        except RedisError as exc:
-            raise self._unavailable(exc) from exc
-        return str(entries[0][0]) if entries else "0-0"
-
-    def read_turn(self, turn_id: str, after_id: str, *, block_ms: int = 1000) -> list[RuntimeStreamEntry]:
-        return self._read(self._turn_key(turn_id), after_id, block_ms=block_ms)
-
-    def read_thread(self, thread_id: str, after_id: str, *, block_ms: int = 1000) -> list[RuntimeStreamEntry]:
-        return self._read(self._thread_key(thread_id), after_id, block_ms=block_ms)
-
-    def _read(self, key: str, after_id: str, *, block_ms: int) -> list[RuntimeStreamEntry]:
-        try:
-            response = self.client.xread({key: after_id}, count=100, block=block_ms)
-        except RedisError as exc:
-            raise self._unavailable(exc) from exc
-        result: list[RuntimeStreamEntry] = []
-        for _stream, entries in response:
-            for stream_id, fields in entries:
-                raw = fields.get("payload")
-                payload = json.loads(raw) if raw else None
-                if not isinstance(payload, dict):
-                    continue
-                result.append(
-                    RuntimeStreamEntry(
-                        str(stream_id),
-                        str(fields.get("event_id") or ""),
-                        int(fields.get("sequence") or 0),
-                        dict(payload),
-                    )
-                )
-        return result
-
-
 class MemoryRuntimeEventStream:
-    """Deterministic fan-out stream for focused API tests."""
+    """Thread-safe fan-out with blocking readers and bounded replay."""
 
     def __init__(self) -> None:
-        self._turns: dict[str, list[RuntimeStreamEntry]] = {}
-        self._threads: dict[str, list[RuntimeStreamEntry]] = {}
-        self._events: set[str] = set()
+        self._turns: dict[str, deque[RuntimeStreamEntry]] = {}
+        self._threads: dict[str, deque[RuntimeStreamEntry]] = {}
+        self._events: dict[str, RuntimeStreamEntry] = {}
+        self._event_uses: dict[str, int] = {}
+        self._thread_floors: dict[str, int] = {}
+        self._condition = Condition(RLock())
+        self._closed = False
         self._counter = 0
-        self._lock = RLock()
+        self._lock = self._condition
 
     def publish(
         self,
@@ -174,28 +46,44 @@ class MemoryRuntimeEventStream:
         payload: dict[str, object],
     ) -> tuple[str, str]:
         with self._lock:
+            if self._closed:
+                raise RuntimeError("Runtime event stream is closed.")
             if event_id in self._events:
-                existing = next(item for item in self._turns.get(turn_id, []) if item.event_id == event_id)
+                existing = self._events[event_id]
                 return existing.stream_id, existing.stream_id
             self._counter += 1
-            stream_id = f"{self._counter}-0"
-            entry = RuntimeStreamEntry(stream_id, event_id, sequence, dict(payload))
-            self._turns.setdefault(turn_id, []).append(entry)
-            self._threads.setdefault(thread_id, []).append(entry)
-            self._events.add(event_id)
+            stream_id = str(self._counter)
+            entry = RuntimeStreamEntry(stream_id, event_id, sequence, deepcopy(payload))
+            self._events[event_id] = entry
+            self._append(self._turns.setdefault(turn_id, deque(maxlen=EVENT_STREAM_MAXLEN)), entry)
+            thread_entries = self._threads.setdefault(thread_id, deque(maxlen=EVENT_STREAM_MAXLEN))
+            if len(thread_entries) == thread_entries.maxlen:
+                self._thread_floors[thread_id] = int(thread_entries[0].stream_id)
+            self._append(thread_entries, entry)
+            self._condition.notify_all()
             return stream_id, stream_id
+
+    def _append(self, entries: deque[RuntimeStreamEntry], entry: RuntimeStreamEntry) -> None:
+        if len(entries) == entries.maxlen:
+            removed = entries[0].event_id
+            self._event_uses[removed] -= 1
+            if self._event_uses[removed] == 0:
+                del self._event_uses[removed]
+                del self._events[removed]
+        entries.append(entry)
+        self._event_uses[entry.event_id] = self._event_uses.get(entry.event_id, 0) + 1
 
     def latest_turn_id(self, turn_id: str) -> str:
         with self._lock:
             entries = self._turns.get(turn_id, [])
-            return entries[-1].stream_id if entries else "0-0"
+            return entries[-1].stream_id if entries else "0"
 
     def latest_turn_event(self, turn_id: str) -> RuntimeStreamEntry | None:
         """Return the newest retained event for one Turn without blocking."""
 
         with self._lock:
             entries = self._turns.get(turn_id, [])
-            return entries[-1] if entries else None
+            return deepcopy(entries[-1]) if entries else None
 
     def has_event(self, event_id: str) -> bool:
         with self._lock:
@@ -204,29 +92,58 @@ class MemoryRuntimeEventStream:
     def latest_thread_id(self, thread_id: str) -> str:
         with self._lock:
             entries = self._threads.get(thread_id, [])
-            return entries[-1].stream_id if entries else "0-0"
+            return entries[-1].stream_id if entries else "0"
 
     @staticmethod
-    def _after(entries: list[RuntimeStreamEntry], after_id: str) -> list[RuntimeStreamEntry]:
-        if after_id == "0-0":
+    def _after(
+        entries: deque[RuntimeStreamEntry] | list[RuntimeStreamEntry], after_id: str
+    ) -> list[RuntimeStreamEntry]:
+        if after_id == "0":
             return list(entries)
-        return [entry for entry in entries if int(entry.stream_id.split("-", 1)[0]) > int(after_id.split("-", 1)[0])]
+        return [entry for entry in entries if int(entry.stream_id) > int(after_id)]
 
     def read_turn(self, turn_id: str, after_id: str, *, block_ms: int = 1000) -> list[RuntimeStreamEntry]:
-        del block_ms
-        with self._lock:
-            return self._after(self._turns.get(turn_id, []), after_id)
+        return self._read(self._turns, turn_id, after_id, block_ms)
 
     def read_thread(self, thread_id: str, after_id: str, *, block_ms: int = 1000) -> list[RuntimeStreamEntry]:
-        del block_ms
+        return self._read(self._threads, thread_id, after_id, block_ms)
+
+    def _read(self, streams, key: str, after_id: str, block_ms: int) -> list[RuntimeStreamEntry]:
+        with self._condition:
+            self._condition.wait_for(
+                lambda: self._closed or bool(self._after(streams.get(key, []), after_id)),
+                timeout=max(0, block_ms) / 1000,
+            )
+            if streams is self._threads and int(after_id) < self._thread_floors.get(key, 0):
+                raise RuntimeEventCursorExpired("Runtime event replay window was evicted.")
+            return deepcopy(self._after(streams.get(key, []), after_id)[:100])
+
+    @property
+    def closed(self) -> bool:
         with self._lock:
-            return self._after(self._threads.get(thread_id, []), after_id)
+            return self._closed
 
+    def release_thread(self, thread_id: str, turn_ids: set[str]) -> None:
+        with self._condition:
+            groups = [self._threads.pop(thread_id, ())]
+            groups.extend(self._turns.pop(turn_id, ()) for turn_id in turn_ids)
+            for entries in groups:
+                for entry in entries:
+                    uses = self._event_uses.get(entry.event_id, 0) - 1
+                    if uses <= 0:
+                        self._event_uses.pop(entry.event_id, None)
+                        self._events.pop(entry.event_id, None)
+                    else:
+                        self._event_uses[entry.event_id] = uses
+            self._thread_floors.pop(thread_id, None)
+            self._condition.notify_all()
 
-__all__ = [
-    "EVENT_STREAM_MAXLEN",
-    "EVENT_STREAM_TTL_SECONDS",
-    "MemoryRuntimeEventStream",
-    "RedisRuntimeEventStream",
-    "RuntimeStreamEntry",
-]
+    def close(self) -> None:
+        with self._condition:
+            self._closed = True
+            self._turns.clear()
+            self._threads.clear()
+            self._events.clear()
+            self._event_uses.clear()
+            self._thread_floors.clear()
+            self._condition.notify_all()

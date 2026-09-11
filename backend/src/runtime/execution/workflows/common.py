@@ -217,7 +217,8 @@ def _truncate(value: str) -> str:
 
 
 def _tool_failure_content(tool: ToolMessage, error: str) -> str:
-    del tool
+    if tool.name in {"run_command", "write_stdin"}:
+        return error
     return _truncate(error)
 
 

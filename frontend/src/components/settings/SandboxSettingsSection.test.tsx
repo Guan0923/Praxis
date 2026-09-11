@@ -64,13 +64,16 @@ describe("brokerErrorTitle", () => {
     expect(brokerErrorTitle(null, false)).toBe("沙箱 Broker 未安装");
   });
 
-  it("removes the repair button and shows automatic recovery states", () => {
+  it("shows automatic recovery states", () => {
     const { rerender } = render(<SandboxSettingsSection state={makeState("unhealthy", "repairing")} />);
     expect(screen.queryByRole("button", { name: "修复" })).not.toBeInTheDocument();
     expect(screen.getByText("正在自动修复")).toBeInTheDocument();
 
-    rerender(<SandboxSettingsSection state={makeState("unhealthy", "waiting", Date.now() + 5_000)} />);
-    expect(screen.getByText("5 秒后自动重试")).toBeInTheDocument();
+    rerender(<SandboxSettingsSection state={makeState("unhealthy", "observing", Date.now() + 5_000)} />);
+    expect(screen.getByText("5 秒后自动修复")).toBeInTheDocument();
+
+    rerender(<SandboxSettingsSection state={makeState("unhealthy", "verifying", Date.now() + 5_000)} />);
+    expect(screen.getByText("正在验证修复，剩余 5 秒")).toBeInTheDocument();
 
     rerender(<SandboxSettingsSection state={makeState("unhealthy", "paused")} />);
     expect(screen.getByText("自动修复已暂停")).toBeInTheDocument();

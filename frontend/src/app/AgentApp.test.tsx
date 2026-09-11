@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn(),
   getSandboxStatus: vi.fn(),
   getSessionNodes: vi.fn(),
+  getTurnPage: vi.fn(),
   listSessions: vi.fn(),
   listQueuedMessages: vi.fn(),
   renameSession: vi.fn(),
@@ -142,6 +143,7 @@ async function expectKnownEmptySession(sessionId: string): Promise<void> {
 
 describe("AgentApp new conversation initialization", () => {
   beforeEach(() => {
+    api.getTurnPage.mockImplementation(async (sid: string, tid?: string) => ({ turns: await api.getSessionNodes(sid, tid), next_cursor: null, has_more: false }));
     localStorage.clear();
     vi.clearAllMocks();
     shell.props = null;

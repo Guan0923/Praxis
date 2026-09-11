@@ -701,12 +701,12 @@ describe("ChatPage rewind projection", () => {
     render(<Harness onRun={onRun} onRewind={vi.fn()} />);
 
     const composer = screen.getByLabelText("聊天输入");
-    await userEvent.type(composer, "redis unavailable draft");
+    await userEvent.type(composer, "queue unavailable draft");
     await userEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
     expect(composer.textContent).toBe("");
-    expect(screen.getByText("redis unavailable draft")).toBeVisible();
+    expect(screen.getByText("queue unavailable draft")).toBeVisible();
     expect(screen.getByRole("button", { name: "重试发送" })).toBeVisible();
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({
       deliveryId: expect.any(String),
@@ -1176,7 +1176,7 @@ describe("ChatPage queued message flushing", () => {
     expect(onStopRun).toHaveBeenCalledTimes(1);
   });
 
-  it("clears the queue draft before Redis replies and preserves the next draft", async () => {
+  it("clears the queue draft before the backend replies and preserves the next draft", async () => {
     let resolve!: (value: QueuedMessage) => void;
     const gate = new Promise<QueuedMessage>((done) => { resolve = done; });
     vi.mocked(createQueuedMessage).mockReturnValueOnce(gate);
@@ -1578,7 +1578,7 @@ describe("ChatPage Agent Thread navigation", () => {
   });
 
   it("keeps the failed Subagent message outside the cleared composer", async () => {
-    vi.mocked(sendAgentThreadMessage).mockRejectedValueOnce(new Error("redis offline"));
+    vi.mocked(sendAgentThreadMessage).mockRejectedValueOnce(new Error("backend offline"));
     const user = userEvent.setup();
     render(<SubagentHarness />);
     await selectChild(user);
@@ -1587,7 +1587,7 @@ describe("ChatPage Agent Thread navigation", () => {
     await user.type(composer, "keep this draft");
     await user.click(screen.getByRole("button", { name: "发送" }));
 
-    expect((await screen.findAllByText("redis offline")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("backend offline")).length).toBeGreaterThan(0);
     expect(composer.textContent).toBe("");
     expect(screen.getByText("keep this draft")).toBeVisible();
     expect(screen.getByRole("button", { name: "重试发送" })).toBeVisible();
