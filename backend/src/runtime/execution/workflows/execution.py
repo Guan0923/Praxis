@@ -129,6 +129,9 @@ class ExecutionWorkflow:
                 _publish_tool_recovery(runtime, tool, error)
             if cancel_if_requested(runtime):
                 return runtime.run
+            if _consume_agent_reports(runtime):
+                _finish_assistant(runtime)
+                continue
             if batch.steering is not None:
                 _apply_tool_batch_steering(
                     runtime, batch.steering, next_tool_index=len(response.tool_messages), phase="after_tool_batch"

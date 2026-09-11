@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from backend.domain import TracePersistenceError
+from backend.domain.execution_config import RuntimeConfigUpdate
 from backend.domain.runtime_state import RuntimeState, RuntimeStateValidationError
 from backend.providers.token_usage import normalize_provider_usage
 from backend.runtime.persistence.recording import turn_trace_audit_value
@@ -209,21 +210,21 @@ class _ItemProjectionMixin:
         self.assistant = self.writer.update_config(current, usage=merged)
         self.last_node = self.assistant
 
-    def apply_runtime_config(self, config: Mapping[str, Any]) -> RuntimeState | None:
+    def apply_runtime_config(self, config: RuntimeConfigUpdate) -> RuntimeState | None:
         """Merge one PATCH atomically and queue it for the next runtime boundary."""
 
         with self._runtime_config_lock:
             return self._apply_runtime_config_unlocked(config)
 
-    def _apply_runtime_config_unlocked(self, config: Mapping[str, Any]) -> RuntimeState | None:
-        provider_name = str(config.get("provider_name") or self.provider_name)
+    def _apply_runtime_config_unlocked(self, config: RuntimeConfigUpdate) -> RuntimeState | None:
+        provider_name = str(config.provider_name or self.provider_name)
         if not provider_name.strip():
             raise RuntimeStateValidationError("provider_name must be a non-empty string.")
         model = dict(self.model_config)
-        if isinstance(config.get("model"), Mapping):
-            model.update(dict(config["model"]))
-        permission = str(config.get("permission_mode") or self.permission_mode)
-        running = str(config.get("running_mode") or self.running_mode)
+        if config.model is not None:
+            model.update(config.model.model_dump(exclude_none=True))
+        permission = str(config.permission_mode or self.permission_mode)
+        running = str(config.running_mode or self.running_mode)
         if permission not in {"read_only", "workspace_write", "full_access"}:
             raise RuntimeStateValidationError("permission_mode must be read_only, workspace_write, or full_access.")
         if running not in {"agent", "plan"}:
@@ -237,7 +238,6 @@ class _ItemProjectionMixin:
         )
         self.last_node = self.assistant
         if self.runtime is not None:
-            pending = dict(self.runtime.services.pending_runtime_config or {})
-            pending.update(dict(config))
-            self.runtime.services.pending_runtime_config = pending
+            pending = self.runtime.services.pending_runtime_config
+            self.runtime.services.pending_runtime_config = pending.merged(config) if pending is not None else config
         return self.assistant

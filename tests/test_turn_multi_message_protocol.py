@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.domain.input_message import InputMessage
 from backend.domain.runtime_state import (
     InMemoryNodeStore,
     NodeFrame,
@@ -12,7 +13,6 @@ from backend.domain.runtime_state import (
     RuntimeState,
     RuntimeStateValidationError,
 )
-from backend.runtime.conversation.steering import _model_content_with_references
 from backend.runtime.core.context import _chat_messages_from_nodes
 from backend.runtime.core.events import RuntimeEvent
 from backend.runtime.node_bridge import RuntimeEventNodeBridge
@@ -91,7 +91,7 @@ def test_runtime_bridge_appends_canonical_user_before_starting_the_next_assistan
         session_id="session_1",
         thread_id="session_1",
         turn_id="turn_1",
-        prompt="start",
+        message=InputMessage.from_input("start"),
         provider_name="local",
         emit=frames.append,
     )
@@ -191,7 +191,7 @@ def test_plain_text_at_path_is_not_expanded_before_model_projection() -> None:
 
 
 def test_running_steering_model_content_uses_validated_scoped_references() -> None:
-    content = _model_content_with_references(
+    message = InputMessage.from_input(
         "redirect",
         (
             {"source": "workspace", "path": "workspace:README.md", "display_path": "workspace:README.md"},
@@ -199,6 +199,6 @@ def test_running_steering_model_content_uses_validated_scoped_references() -> No
         ),
     )
 
-    assert content == (
+    assert message.model_text() == (
         "redirect\n\nFile references:\n- @workspace:README.md (workspace)\n- @workspace:uploads/notes.txt (upload)"
     )

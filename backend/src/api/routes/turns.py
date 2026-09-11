@@ -9,6 +9,9 @@ from fastapi.responses import StreamingResponse
 
 from backend.api.error_handlers import error_response
 from backend.domain import MessageEnvelope, PlanningError
+from backend.domain.execution_config import RuntimeConfigUpdate
+from backend.domain.input_message import InputMessage
+from backend.domain.message_queue import TurnStart
 from backend.domain.runtime_state import (
     RuntimeState,
     RuntimeStateValidationError,
@@ -198,20 +201,7 @@ def create_turn(body: CreateTurnRequest, request: Request) -> dict[str, object]:
         state.message_queue.ping()
     except Exception as exc:
         return error_response(exc, status_code=_queue_http_error(exc).status_code)
-    command_payload = {
-        "version": 1,
-        "operation": "create",
-        "parent_id": body.parent_id,
-        "config": body.model_dump(
-            include={
-                "provider_name",
-                "model",
-                "permission_mode",
-                "running_mode",
-                "full_access_acknowledged",
-            }
-        ),
-    }
+    start = TurnStart("create", body.execution_config(), body.parent_id or None)
     if body.queued_delivery is not None:
         try:
             state.message_queue.dispatch(
@@ -220,7 +210,7 @@ def create_turn(body: CreateTurnRequest, request: Request) -> dict[str, object]:
                 session_id=body.session_id,
                 thread_id=body.thread_id,
                 turn_id=body.id,
-                command_payload=command_payload,
+                start=start,
             )
         except Exception as exc:
             return error_response(exc, status_code=_queue_http_error(exc).status_code)
@@ -235,11 +225,8 @@ def create_turn(body: CreateTurnRequest, request: Request) -> dict[str, object]:
             target_id=body.id,
             session_id=body.session_id,
             thread_id=body.thread_id,
-            payload={
-                "content": str(item["text"]).strip(),
-                "references": _references(item, files),
-                **command_payload,
-            },
+            message=InputMessage.from_input(str(item["text"]).strip(), _references(item, files)),
+            start=start,
             source_message_ids=(delivery_id,),
         )
         try:
@@ -269,21 +256,8 @@ def rewind_turn(turn_id: str, body: RewindTurnRequest, request: Request) -> dict
         target_id=source.id,
         session_id=source.session_id,
         thread_id=source.thread_id,
-        payload={
-            "content": str(item["text"]).strip(),
-            "references": _references(item, files),
-            "version": 1,
-            "operation": "rewind",
-            "config": body.model_dump(
-                include={
-                    "provider_name",
-                    "model",
-                    "permission_mode",
-                    "running_mode",
-                    "full_access_acknowledged",
-                }
-            ),
-        },
+        message=InputMessage.from_input(str(item["text"]).strip(), _references(item, files)),
+        start=TurnStart("rewind", body.execution_config()),
         source_message_ids=(delivery_id,),
     )
     try:
@@ -335,7 +309,7 @@ def resume_turn(turn_id: str, body: TurnExecutionConfig, request: Request) -> di
         session_id=source.session_id,
         thread_id=source.thread_id,
         turn_id=source.id,
-        prompt="",
+        message=None,
         source_id=source.id,
         config=body,
         adopt_existing=True,
@@ -498,19 +472,19 @@ def patch_turn_config(turn_id: str, body: TurnConfigPatch, request: Request) -> 
     node = _turn(store, turn_id)
     if node.status != "running":
         raise HTTPException(status_code=409, detail="只有 running Turn 可以修改运行配置。")
-    changes: dict[str, object] = {}
-    if body.provider_name is not None:
-        changes["provider_name"] = body.provider_name
+    model = None
     if body.model is not None:
         merged_model = {**node.model, **body.model.model_dump(exclude_none=True)}
         try:
-            changes["model"] = RuntimeModelRequest.model_validate(merged_model).model_dump()
+            model = RuntimeModelRequest.model_validate(merged_model)
         except ValueError as exc:
             return error_response(exc, status_code=422, detail=str(exc))
-    if body.permission_mode is not None:
-        changes["permission_mode"] = body.permission_mode
-    if body.running_mode is not None:
-        changes["running_mode"] = body.running_mode
+    changes = RuntimeConfigUpdate.model_construct(
+        provider_name=body.provider_name,
+        model=model,
+        permission_mode=body.permission_mode,
+        running_mode=body.running_mode,
+    )
     bridge = getattr(state, "active_runtime_bridges", {}).get(node.thread_id)
     try:
         updated = bridge.apply_runtime_config(changes) if bridge is not None else None
@@ -518,7 +492,7 @@ def patch_turn_config(turn_id: str, body: TurnConfigPatch, request: Request) -> 
             updated = state.subagent_coordinator.apply_runtime_config(node.session_id, node.thread_id, changes)
         if updated is None:
             writer_node = node.clone()
-            for key, value in changes.items():
+            for key, value in changes.stored_changes().items():
                 setattr(writer_node, key, value)
             writer_node = RuntimeState.from_dict(writer_node.to_dict())
             store.update_node(writer_node)

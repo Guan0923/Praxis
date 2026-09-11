@@ -2,35 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
+from backend.domain.execution_config import ReasoningEffort, RuntimeModelRequest
 from backend.providers import ModelConfig, ModelConfigurationError
 from backend.storage.settings.crypto import SecretDecryptionError
 
 from ..state import WebAppState
-
-ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
-
-
-class RuntimeModelRequest(BaseModel):
-    """Complete provider-neutral model settings captured at a request boundary."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    reasoning_effort: ReasoningEffort
-    current_model: str = Field(min_length=1, max_length=500)
-    context_length: int = Field(gt=1)
-    output_length: int = Field(ge=1)
-    thinking: Literal["enable", "disable"]
-    temperature: float = Field(ge=0, le=2)
-
-    @model_validator(mode="after")
-    def validate_limits(self) -> RuntimeModelRequest:
-        if self.context_length <= self.output_length:
-            raise ValueError("model.context_length must be greater than model.output_length")
-        return self
 
 
 def _reasoning_parameters(effort: ReasoningEffort) -> dict[str, object]:

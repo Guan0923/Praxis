@@ -8,6 +8,7 @@ from backend.api.app import create_app
 from backend.api.session_store import session_store
 from backend.api.state import WebAppState
 from backend.domain import QueuedMessage
+from backend.domain.input_message import InputMessage
 from backend.domain.runtime_state import RuntimeState
 from backend.storage.message_queue import MemoryMessageQueue, TurnMailbox
 
@@ -15,7 +16,7 @@ from backend.storage.message_queue import MemoryMessageQueue, TurnMailbox
 def test_turn_mailbox_consumes_one_fifo_delivery_per_boundary() -> None:
     queue = MemoryMessageQueue()
     for message_id, content in (("first", "one"), ("second", "two")):
-        queue.create(QueuedMessage(message_id, "thread", content))
+        queue.create(QueuedMessage(message_id, "thread", InputMessage.from_input(content)))
         queue.dispatch(
             delivery_id=f"delivery-{message_id}",
             message_ids=[message_id],
@@ -26,13 +27,13 @@ def test_turn_mailbox_consumes_one_fifo_delivery_per_boundary() -> None:
     inbox = TurnMailbox(queue, "turn", "worker")
 
     first = inbox.take()[0]
-    assert first["delivery_id"] == "delivery-first"
-    assert first["content"] == "one"
-    first["_ack"]()
+    assert first.delivery_id == "delivery-first"
+    assert first.message.text == "one"
+    first.acknowledge()
     second = inbox.take()[0]
-    assert second["delivery_id"] == "delivery-second"
-    assert second["content"] == "two"
-    second["_ack"]()
+    assert second.delivery_id == "delivery-second"
+    assert second.message.text == "two"
+    second.acknowledge()
     assert inbox.take() == []
     inbox.close()
 
@@ -83,8 +84,8 @@ def test_steer_endpoint_accepts_only_an_active_running_turn_and_normalizes_refer
         claimed = state.message_queue.claim(turn.id, "worker")
         assert claimed is not None
         assert claimed.envelope.delivery_id == "delivery-1"
-        assert claimed.envelope.content == "redirect"
-        assert list(claimed.envelope.references) == [
+        assert claimed.envelope.message.text == "redirect"
+        assert list(tuple(claimed.envelope.message.reference_dicts())) == [
             {"source": "workspace", "path": "workspace:README.md", "display_path": "workspace:README.md"},
             {"source": "upload", "path": "workspace:uploads/notes.txt", "display_path": "workspace:uploads/notes.txt"},
         ]

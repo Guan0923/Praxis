@@ -15,6 +15,7 @@ from backend.domain import (
     ToolSpec,
     UserMessage,
 )
+from backend.domain.execution_config import RuntimeConfigUpdate
 from backend.domain.runtime_state import RuntimeState as RuntimeTreeNode
 from backend.domain.state import utc_now
 
@@ -59,6 +60,8 @@ class RuntimeServices:
     complete_requested: CancellationHandler | None = None
     register_operation_abort: Callable[[Callable[[], None]], Callable[[], None]] | None = None
     operation_interrupted: CancellationHandler | None = None
+    persist_agent_report: Callable[[str, str], None] | None = None
+    agent_report_pending: Callable[[], bool] | None = None
     confirm: Confirm | None = None
     id_factory: Callable[[], str] = new_tool_call_id
     clock: Callable[[], str] = utc_now
@@ -71,7 +74,7 @@ class RuntimeServices:
     # non-serializable service bundle so provider credentials never enter a
     # RuntimeState or persisted node.
     provider_config_resolver: Callable[[str], object] | None = None
-    pending_runtime_config: dict[str, Any] | None = None
+    pending_runtime_config: RuntimeConfigUpdate | None = None
     # The NodeBridge ignores pre-decision Items until the immutable Turn Trace
     # context and initial User Item have been committed together.
     turn_trace_initialized: bool = False
@@ -195,10 +198,10 @@ class AgentRuntime:
         """
 
         pending = self.services.pending_runtime_config
-        if not isinstance(pending, dict) or not pending:
+        if pending is None:
             return False
         self.services.pending_runtime_config = None
-        provider_name = pending.get("provider_name")
+        provider_name = pending.provider_name
         provider_changed = False
         if provider_name is not None:
             selected_provider = str(provider_name)
@@ -258,9 +261,9 @@ class AgentRuntime:
                     "thinking": "enable",
                     "temperature": 0.0,
                 }
-        model = pending.get("model")
-        if isinstance(model, dict):
-            self.state.model_snapshot = {**self.state.model_snapshot, **model}
+        model = pending.model
+        if model is not None:
+            self.state.model_snapshot = {**self.state.model_snapshot, **model.model_dump(exclude_none=True)}
             current_model = self.state.model_snapshot.get("current_model")
             if isinstance(current_model, str) and current_model:
                 self.state.model = current_model
@@ -291,10 +294,10 @@ class AgentRuntime:
                 "reasoning_effort", "medium"
             )
             self.state.request_parameters["thinking"] = {"type": "enabled"}
-        permission_mode = pending.get("permission_mode")
+        permission_mode = pending.permission_mode
         if permission_mode is not None:
             self.state.permission_mode = str(permission_mode)
-        running_mode = pending.get("running_mode")
+        running_mode = pending.running_mode
         if running_mode is not None:
             self.state.running_mode = str(running_mode)
             if self.state.current_run is not None:

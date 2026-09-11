@@ -15,13 +15,14 @@ from backend.domain import (
     QueueItemNotFound,
     QueueItemStateConflict,
 )
+from backend.domain.execution_config import TurnExecutionConfig
+from backend.domain.input_message import InputMessage
 from backend.domain.runtime_state import RuntimeRootState, RuntimeState
 
 from ..chat import routes as chat_routes
 from ..chat.routes import _model_config_snapshot, _stream
 from ..session_files.store import SessionFileError, SessionFileStore
 from ..state import WebAppState
-from .turn_models import TurnExecutionConfig
 
 
 def _turn(store, turn_id: str) -> RuntimeState:
@@ -77,34 +78,26 @@ def _stream_turn(
     session_id: str,
     thread_id: str,
     turn_id: str,
-    prompt: str,
+    message: InputMessage | None,
     source_id: str | None,
     config: TurnExecutionConfig,
-    references: list[dict[str, str]] | None = None,
     adopt_existing: bool = False,
     operation=None,
     initial_delivery=None,
     stream_response: bool = True,
 ) -> StreamingResponse | None:
-    model = config.model
     stream = _stream(
         state,
-        prompt,
+        message,
         application_builder=chat_routes.build_local_application,
         session_id=session_id,
         thread_id=thread_id,
         turn_id=turn_id,
         source_node_id=source_id,
         adopt_existing=adopt_existing,
-        mode=config.running_mode or "agent",
-        permission_mode=config.permission_mode or "read_only",
-        reasoning_effort=model.reasoning_effort if model is not None else "medium",
-        provider_name=config.provider_name,
-        model_snapshot=model.model_dump() if model is not None else None,
-        request_model=model,
+        config=config,
         user_preferences=state.agent_preferences(),
         model_config=_model_config_snapshot(state),
-        references=references,
         operation=operation,
         initial_delivery=initial_delivery,
         subscribe=stream_response,

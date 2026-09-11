@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.api.error_handlers import error_response
 from backend.domain import MessageQueueUnavailable
+from backend.domain.execution_config import TurnExecutionConfig
 from backend.tools import ToolError
 
 from ..runtime_event_transport import thread_sse
@@ -17,7 +18,6 @@ from ..session_files.routes import _store_for as session_file_store
 from ..session_files.store import SessionFileError
 from ..session_store import require_active_session, session_store
 from ..state import WebAppState
-from .turns import TurnExecutionConfig
 
 router = APIRouter(prefix="/api/agent-threads", tags=["agent-threads"])
 
@@ -67,12 +67,6 @@ def send_agent_thread_message(
     state: WebAppState = request.app.state.web
     store = session_store(state)
     require_active_session(store, body.session_id)
-    runtime_config = {
-        "provider_name": body.provider_name,
-        "model": body.model.model_dump() if body.model is not None else None,
-        "permission_mode": body.permission_mode,
-        "running_mode": body.running_mode,
-    }
     try:
         references = session_file_store(state, body.session_id).normalize_references(
             [item.model_dump() for item in body.references]
@@ -82,7 +76,7 @@ def send_agent_thread_message(
             target_thread_id,
             body.content,
             references=references,
-            runtime_config={key: value for key, value in runtime_config.items() if value is not None},
+            runtime_config=body.execution_config(),
         )
     except SessionFileError as exc:
         return error_response(exc, status_code=422, detail=str(exc))

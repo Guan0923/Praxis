@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 from backend.domain import RunMode, RuntimeStateNode
+from backend.domain.input_message import InputMessage
 
 from ..core.context import text_messages
 from ..core.contracts import EventHandler
@@ -46,7 +45,7 @@ class ConversationNodeBridgeMixin:
         bridge = self.runtime_node_bridge
         if bridge is None or bridge.closed:
             bridge = self._node_bridge_for_runtime(
-                "",
+                None,
                 source_node_id=source_node_id,
                 compaction_turn_id=compact_turn_id,
             )
@@ -111,8 +110,7 @@ class ConversationNodeBridgeMixin:
 
     def _node_bridge_for_runtime(
         self,
-        prompt: str,
-        references: list[Mapping[str, str]] | None = None,
+        message: InputMessage | None,
         *,
         source_node_id: str | None = None,
         compaction_turn_id: str | None = None,
@@ -180,7 +178,7 @@ class ConversationNodeBridgeMixin:
             source_node_id=latest.id if source_node_id and latest is not None else None,
             compaction_turn_id=compaction_turn_id,
             adopt_existing=adopt_existing,
-            prompt=prompt,
+            message=message,
             user=str(getattr(self.runtime.state, "user", "") or ""),
             provider_name=provider_name,
             model=str(model_config.get("current_model") or "unknown"),
@@ -189,7 +187,6 @@ class ConversationNodeBridgeMixin:
             running_mode=running_mode,
             cwd=str(getattr(self.runtime.state, "workspace_root", "") or ""),
             project_cwd=str(getattr(self.runtime.state, "project_cwd", "") or ""),
-            references=references,
             emit=lambda _frame: None,
         )
 
@@ -201,7 +198,7 @@ class ConversationNodeBridgeMixin:
         bridge = self.runtime_node_bridge
         if bridge is None or bridge.closed:
             bridge = self._node_bridge_for_runtime(
-                "",
+                None,
                 source_node_id=turn_id,
                 adopt_existing=True,
             )
@@ -266,9 +263,8 @@ class ConversationNodeBridgeMixin:
 
     def _bind_node_bridge(
         self,
-        prompt: str,
+        message: InputMessage | None,
         on_event: EventHandler | None,
-        references: list[Mapping[str, str]] | None = None,
         *,
         running_mode: RunMode | None = None,
     ) -> None:
@@ -276,7 +272,7 @@ class ConversationNodeBridgeMixin:
 
         bridge = self.runtime_node_bridge
         if bridge is None or bridge.closed:
-            bridge = self._node_bridge_for_runtime(prompt, references)
+            bridge = self._node_bridge_for_runtime(message)
             self.runtime_node_bridge = bridge
             self._node_bridge_events_external = False
         if bridge is None or self.runtime is None:

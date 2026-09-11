@@ -20,6 +20,7 @@ from backend.domain import (
     new_session_id,
     safe_error_message,
 )
+from backend.domain.input_message import InputMessage
 
 from ..core.context import text_messages
 from ..core.contracts import CancellationHandler, EventHandler, InterruptHandler, SteeringHandler
@@ -77,8 +78,9 @@ class ConversationService(ConversationNodeBridgeMixin, ConversationSessionContro
         delivery_id: str | None = None,
         on_started: Callable[[], None] | None = None,
     ) -> RunState:
-        state = self._run_single_turn(
-            task,
+        """Normalize input at the public embedding boundary."""
+        return self.run_message(
+            InputMessage.from_input(task, references),
             mode=mode,
             on_event=on_event,
             interrupt=interrupt,
@@ -87,7 +89,35 @@ class ConversationService(ConversationNodeBridgeMixin, ConversationSessionContro
             suspend_requested=suspend_requested,
             trigger=trigger,
             request_parameters=request_parameters,
-            references=list(references),
+            delivery_id=delivery_id,
+            on_started=on_started,
+        )
+
+    def run_message(
+        self,
+        message: InputMessage,
+        *,
+        mode: RunMode,
+        on_event: EventHandler | None = None,
+        interrupt: InterruptHandler | None = None,
+        steering: SteeringHandler | None = None,
+        cancel_requested: CancellationHandler | None = None,
+        suspend_requested: CancellationHandler | None = None,
+        trigger: RunTrigger = "embedding",
+        request_parameters: Mapping[str, Any] | None = None,
+        delivery_id: str | None = None,
+        on_started: Callable[[], None] | None = None,
+    ) -> RunState:
+        state = self._run_single_turn(
+            message,
+            mode=mode,
+            on_event=on_event,
+            interrupt=interrupt,
+            steering=steering,
+            cancel_requested=cancel_requested,
+            suspend_requested=suspend_requested,
+            trigger=trigger,
+            request_parameters=request_parameters,
             delivery_id=delivery_id,
             on_started=on_started,
         )
@@ -145,7 +175,7 @@ class ConversationService(ConversationNodeBridgeMixin, ConversationSessionContro
         if bridge is not None and not bridge.closed:
             bridge.start_child(handoff_prompt, running_mode=handoff.mode)
         follow_up = self._run_single_turn(
-            handoff_prompt,
+            InputMessage(handoff_prompt),
             mode=handoff.mode,
             on_event=on_event,
             interrupt=interrupt,
@@ -164,7 +194,7 @@ class ConversationService(ConversationNodeBridgeMixin, ConversationSessionContro
 
     def _run_single_turn(
         self,
-        prepared: str,
+        message: InputMessage,
         *,
         mode: RunMode,
         on_event: EventHandler | None,
@@ -177,10 +207,10 @@ class ConversationService(ConversationNodeBridgeMixin, ConversationSessionContro
         source_session_id: str | None = None,
         source_run_id: str | None = None,
         request_parameters: Mapping[str, Any] | None = None,
-        references: list[Mapping[str, str]] | None = None,
         delivery_id: str | None = None,
         on_started: Callable[[], None] | None = None,
     ) -> RunState:
+        prepared = message.text
         provenance = RunProvenance(
             trigger=trigger,
             workspace_root=getattr(self.runner, "workspace_root", None),
@@ -241,7 +271,7 @@ class ConversationService(ConversationNodeBridgeMixin, ConversationSessionContro
         # executions as well as Web SSE.  Web attaches a bridge
         # ahead of time so it can expose the active dynamic leaf to PATCH;
         # local callers get an equivalent bridge here.
-        self._bind_node_bridge(prepared, on_event, references, running_mode=mode)
+        self._bind_node_bridge(message, on_event, running_mode=mode)
         # ``mode`` is the initial runtime configuration for this turn.  The
         # runner refreshes ``RunState.mode`` from ``state.running_mode`` at
         # dispatch time and the bridge's ``bind_runtime`` derives it from the

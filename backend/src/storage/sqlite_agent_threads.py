@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from backend.domain import RuntimeThread, ThreadContext, ThreadNode
-from backend.domain.runtime_state import RuntimeState
+from backend.domain.runtime_state import NodeFrame, RuntimeState
 from backend.domain.state import utc_now
 
 
@@ -340,40 +342,36 @@ class SQLiteAgentThreadMixin:
             assert row is not None
         return self._agent_turn_report(row)
 
-    def finalize_agent_turn_reports(
+    @contextmanager
+    def prepare_agent_turn_reports(
         self,
         session_id: str,
         turn_id: str,
         *,
         thread_status: str,
         reply_content: str,
-    ) -> list[AgentTurnReport]:
+    ) -> Iterator[list[AgentTurnReport]]:
+        """Keep report finalization uncommitted until queue/notification preparation succeeds."""
         if thread_status not in {"success", "failed"}:
             raise ValueError("Agent report status must be success or failed.")
-        timestamp = utc_now()
-        with self._connection(session_id, write=True) as connection:
+        with self._connection(session_id, write=True, refresh_index=False) as connection:
             self._assert_writable(connection)
             rows = connection.execute(
                 "SELECT * FROM agent_turn_reports WHERE session_id=? AND turn_id=? ORDER BY created_at,delivery_id",
                 (session_id, turn_id),
             ).fetchall()
-            for row in rows:
-                existing_status = row["thread_status"]
-                existing_content = str(row["reply_content"])
-                if existing_status is not None and (
-                    str(existing_status) != thread_status or existing_content != reply_content
-                ):
-                    raise ValueError("The finalized Agent report content is immutable.")
+            if any(row["state"] != "waiting" or row["thread_status"] is not None for row in rows):
+                raise ValueError("This Agent Turn's reports have already been sent.")
             connection.execute(
-                "UPDATE agent_turn_reports SET thread_status=?,reply_content=?,updated_at=? "
-                "WHERE session_id=? AND turn_id=? AND state='waiting'",
-                (thread_status, reply_content, timestamp, session_id, turn_id),
+                "UPDATE agent_turn_reports SET thread_status=?,reply_content=?,state='queued',updated_at=? "
+                "WHERE session_id=? AND turn_id=?",
+                (thread_status, reply_content, utc_now(), session_id, turn_id),
             )
             result = connection.execute(
                 "SELECT * FROM agent_turn_reports WHERE session_id=? AND turn_id=? ORDER BY created_at,delivery_id",
                 (session_id, turn_id),
             ).fetchall()
-        return [self._agent_turn_report(row) for row in result]
+            yield [self._agent_turn_report(row) for row in result]
 
     def list_agent_turn_reports(
         self,
@@ -407,33 +405,6 @@ class SQLiteAgentThreadMixin:
             ).fetchall()
         return {str(row["delivery_id"]): str(row["thread_status"]) for row in rows}
 
-    def mark_agent_turn_report_state(self, session_id: str, delivery_id: str, state: str) -> AgentTurnReport:
-        if state not in {"queued", "delivered"}:
-            raise ValueError("Agent report state must be queued or delivered.")
-        timestamp = utc_now()
-        with self._connection(session_id, write=True) as connection:
-            self._assert_writable(connection)
-            row = connection.execute(
-                "SELECT * FROM agent_turn_reports WHERE session_id=? AND delivery_id=?",
-                (session_id, delivery_id),
-            ).fetchone()
-            if row is None:
-                raise KeyError(delivery_id)
-            current = str(row["state"])
-            allowed = current == state or (current == "waiting" and state == "queued") or state == "delivered"
-            if not allowed:
-                raise ValueError(f"Cannot change Agent report state from {current} to {state}.")
-            connection.execute(
-                "UPDATE agent_turn_reports SET state=?,updated_at=? WHERE session_id=? AND delivery_id=?",
-                (state, timestamp, session_id, delivery_id),
-            )
-            updated = connection.execute(
-                "SELECT * FROM agent_turn_reports WHERE session_id=? AND delivery_id=?",
-                (session_id, delivery_id),
-            ).fetchone()
-            assert updated is not None
-        return self._agent_turn_report(updated)
-
     def append_agent_report(
         self,
         session_id: str,
@@ -441,6 +412,7 @@ class SQLiteAgentThreadMixin:
         *,
         delivery_id: str,
         reply_content: str,
+        frame: NodeFrame | None = None,
     ) -> RuntimeState:
         with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)
@@ -455,37 +427,41 @@ class SQLiteAgentThreadMixin:
             if payload is None:
                 raise ValueError("The report recipient Turn is unavailable.")
             node = RuntimeState.from_dict(payload)
-            duplicate = any(
-                item.get("type") == "subagent" and item.get("delivery_id") == delivery_id
-                for version in node.data
-                for message in version
-                for item in message.get("content", [])
+            node.data[node.current_data_idx].append(
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "subagent",
+                            "event": "agent_report",
+                            "status": "success",
+                            "text": reply_content,
+                            "delivery_id": delivery_id,
+                        }
+                    ],
+                }
             )
-            if not duplicate:
-                node.data[node.current_data_idx].append(
-                    {
-                        "role": "assistant",
-                        "content": [
-                            {
-                                "type": "subagent",
-                                "event": "agent_report",
-                                "status": "success",
-                                "text": reply_content,
-                                "delivery_id": delivery_id,
-                            }
-                        ],
-                    }
-                )
-                node = RuntimeState.from_dict(node.to_dict())
-                self._put_json_object(
-                    connection,
-                    session_id,
-                    "runtime_node",
-                    node.id,
-                    node.to_dict(),
-                    utc_now(),
-                )
-                self._touch_session(connection, session_id, utc_now())
+            node = RuntimeState.from_dict(node.to_dict())
+            self._put_json_object(
+                connection,
+                session_id,
+                "runtime_node",
+                node.id,
+                node.to_dict(),
+                utc_now(),
+            )
+            self._touch_session(connection, session_id, utc_now())
+            result = connection.execute(
+                "UPDATE agent_turn_reports SET state='delivered',updated_at=? "
+                "WHERE session_id=? AND delivery_id=? AND recipient_thread_id=? AND state='queued'",
+                (utc_now(), session_id, delivery_id, recipient_thread_id),
+            )
+            if result.rowcount != 1:
+                raise ValueError("The Agent report is not queued for this recipient.")
+            if frame is not None:
+                if frame.turn_id != turn_id or frame.session_id != session_id:
+                    raise ValueError("Report frame belongs to a different Turn.")
+                self._advance_frame_sequence(connection, frame)
         return node
 
     def has_canonical_delivery(self, session_id: str, delivery_id: str) -> bool:

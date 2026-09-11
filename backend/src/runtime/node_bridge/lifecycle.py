@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.domain.input_message import InputMessage
 from backend.domain.runtime_state import NodeStatus, RuntimeState, RuntimeStateValidationError, terminal_error_payload
 
 
@@ -28,6 +29,7 @@ class _LifecycleMixin:
         if running_mode not in {"agent", "plan"}:
             raise RuntimeStateValidationError("running_mode must be agent or plan.")
         parent = self.finalize_current("success")
+        self.input_message = InputMessage(prompt)
         self.prompt = prompt
         self.parent = parent
         self.running_mode = running_mode

@@ -261,7 +261,9 @@ class ToolStepExecutor:
                     )
                 else:
                     result = tools.invoke(tool, tool_message.arguments, confirmed=True)
-            if cancel_requested():
+            report_pending = runtime.services.agent_report_pending
+            # A report interrupts the next operation, not a result already produced.
+            if cancel_requested() and (runtime.stop_requested() or not (report_pending and report_pending())):
                 raise ToolError("Tool invocation cancelled.")
             duration_ms = round((perf_counter() - started_at) * 1000, 3)
             with commit_lock:

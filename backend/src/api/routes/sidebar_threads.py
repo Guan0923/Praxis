@@ -17,6 +17,7 @@ from backend.domain import (
     QueueItemNotFound,
     QueueItemStateConflict,
 )
+from backend.domain.input_message import InputMessage
 
 from ..session_files.routes import _store_for as session_file_store
 from ..session_files.store import SessionFileError
@@ -172,7 +173,9 @@ def create_queued_message(
     state: WebAppState = request.app.state.web
     thread = _require_queue_thread(session_store(state), thread_id)
     references = _queue_references(state, thread.session_id, body.references)
-    item = QueuedMessage(str(body.id), thread_id, _validate_queue_content(body.content, references), references)
+    item = QueuedMessage(
+        str(body.id), thread_id, InputMessage.from_input(_validate_queue_content(body.content, references), references)
+    )
     try:
         stored, created = request.app.state.web.message_queue.create(item)
     except Exception as exc:
@@ -192,8 +195,7 @@ def update_queued_message(
         item = request.app.state.web.message_queue.update(
             thread_id,
             message_id,
-            content=_validate_queue_content(body.content, references),
-            references=references,
+            message=InputMessage.from_input(_validate_queue_content(body.content, references), references),
         )
     except Exception as exc:
         return error_response(exc, status_code=_queue_error(exc).status_code)

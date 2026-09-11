@@ -15,6 +15,7 @@ import pytest
 from backend.api.runtime_event_transport import _cursor_id, _resume_cursor, _runtime_snapshot, publish_frame, turn_sse
 from backend.configuration import ClientPaths
 from backend.domain import TracePersistenceError
+from backend.domain.input_message import InputMessage
 from backend.domain.runtime_state import NodeWriter, RuntimeState
 from backend.runtime.node_bridge import RuntimeEventNodeBridge
 from backend.runtime.persistence.streaming import RuntimeFramePersistence
@@ -181,7 +182,7 @@ def test_finishing_an_item_does_not_mutate_a_previously_emitted_view(tmp_path: P
     bridge = RuntimeEventNodeBridge(
         store,
         session_id=node.session_id,
-        prompt="hello",
+        message=InputMessage.from_input("hello"),
         emit=lambda frame: views.append(bridge.writer.view(frame.session_id, frame.turn_id)),
     )
     bridge.start()

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from backend.api.app import create_app
 from backend.api.state import WebAppState
 from backend.domain import QueuedMessage, QueueItemStateConflict
+from backend.domain.input_message import InputMessage
 from backend.sandbox.runtime.aggregate import AggregateResources
 
 
@@ -20,7 +21,7 @@ def test_delete_direct_metadata_without_history_or_session_scan(tmp_path, monkey
     session = store.create_session("delete me")
     sid = session.session_id
     store.create_sidebar_thread(session_id=sid, thread_id=sid, title="delete me")
-    state.message_queue.create(QueuedMessage("message", sid, "queued"))
+    state.message_queue.create(QueuedMessage("message", sid, InputMessage.from_input("queued")))
     monkeypatch.setattr(store, "list_sessions", lambda **_: pytest.fail("delete scanned sessions"))
     monkeypatch.setattr(store, "_objects", lambda *_: pytest.fail("delete read history"))
     monkeypatch.setattr(store, "sidebar_thread_summary", lambda *_: pytest.fail("delete built summary"))
@@ -33,7 +34,7 @@ def test_delete_direct_metadata_without_history_or_session_scan(tmp_path, monkey
             assert store.get_sidebar_thread(sid, session_id=sid).deleted_at
             assert state.message_queue.list(sid) == []
             with pytest.raises(QueueItemStateConflict):
-                state.message_queue.create(QueuedMessage("late", sid, "late"))
+                state.message_queue.create(QueuedMessage("late", sid, InputMessage.from_input("late")))
             assert client.delete(f"/api/sidebar-threads/{sid}", params={"session_id": sid}).status_code == 204
     finally:
         state.close()

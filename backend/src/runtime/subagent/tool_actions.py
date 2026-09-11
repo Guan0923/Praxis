@@ -16,7 +16,9 @@ from backend.domain import (
     ThreadContext,
     ThreadNode,
 )
+from backend.domain.execution_config import TurnExecutionConfig
 from backend.domain.file_paths import ScopedPaths
+from backend.domain.input_message import InputMessage
 from backend.domain.runtime_state import (
     NodeFrame,
     RuntimeState,
@@ -301,7 +303,7 @@ class _SubagentToolActionsMixin:
         *,
         correlation_id: str | None = None,
         references: list[dict[str, str]] | None = None,
-        runtime_config: Mapping[str, object] | None = None,
+        runtime_config: TurnExecutionConfig | None = None,
         need_reply: bool = False,
     ) -> dict[str, object]:
         delivery_id = f"agent_delivery_{uuid4().hex}"
@@ -313,12 +315,9 @@ class _SubagentToolActionsMixin:
             target_id=target_thread_id,
             session_id=session_id,
             thread_id=target_thread_id,
-            payload={
-                "content": content,
-                "references": [dict(item) for item in references or []],
-                "need_reply": need_reply,
-                **({"runtime_config": dict(runtime_config)} if runtime_config else {}),
-            },
+            message=InputMessage.from_input(content, references or []),
+            need_reply=need_reply,
+            runtime_config=runtime_config,
             source_message_ids=(delivery_id,),
             correlation_id=correlation_id,
         )

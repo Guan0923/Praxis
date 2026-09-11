@@ -13,6 +13,9 @@ from backend.api.app import create_app
 from backend.api.session_store import session_store
 from backend.api.state import WebAppState
 from backend.domain import MessageEnvelope, MessageQueueUnavailable, QueuedMessage
+from backend.domain.execution_config import TurnExecutionConfig
+from backend.domain.input_message import InputMessage
+from backend.domain.message_queue import TurnStart
 from backend.domain.runtime_state import RuntimeState
 from backend.storage.message_queue import MemoryMessageQueue
 from backend.storage.runtime_event_stream import MemoryRuntimeEventStream
@@ -22,7 +25,16 @@ from backend.storage.terminal_stream import MemoryTerminalOutputStream
 
 def envelope(delivery_id: str = "delivery") -> MessageEnvelope:
     return MessageEnvelope(
-        delivery_id, "user", "thread", "turn_start", "turn", "session", "thread", {"content": "hello"}, (delivery_id,)
+        delivery_id,
+        "user",
+        "thread",
+        "turn_start",
+        "turn",
+        "session",
+        "thread",
+        InputMessage.from_input("hello"),
+        (delivery_id,),
+        start=TurnStart("create", TurnExecutionConfig()),
     )
 
 
@@ -98,7 +110,9 @@ def test_normal_shutdown_discards_queue_and_saves_interrupted_history(tmp_path: 
             user_content=[{"type": "text", "text": "saved history", "status": "success"}],
         )
         store.create_node(node)
-        state.message_queue.create(QueuedMessage("queued", sidebar["thread_id"], "discard this"))
+        state.message_queue.create(
+            QueuedMessage("queued", sidebar["thread_id"], InputMessage.from_input("discard this"))
+        )
         assert store.get_node(sid, node.id).status == "running"
     assert state.message_queue.list(sidebar["thread_id"]) == []
     saved = SQLiteSessionStore(state.paths).get_node(sid, node.id)
@@ -119,6 +133,7 @@ import os, sys
 from pathlib import Path
 from backend.api.state import WebAppState
 from backend.domain import QueuedMessage
+from backend.domain.input_message import InputMessage
 from backend.domain.runtime_state import RuntimeState
 state = WebAppState(Path(sys.argv[1]))
 state.turn_message_worker.close()
@@ -127,7 +142,7 @@ session = store.create_session("crash test")
 root = store.ensure_root_node(session.session_id)
 turn = RuntimeState.create(session_id=session.session_id, thread_id=session.session_id, id="crashed-turn", parent=root, user_content=[{"type": "text", "text": "persisted before exit", "status": "success"}])
 store.create_node(turn)
-state.message_queue.create(QueuedMessage("lost", session.session_id, "not persisted"))
+state.message_queue.create(QueuedMessage("lost", session.session_id, InputMessage("not persisted")))
 print(session.session_id, flush=True)
 os._exit(17)
 """

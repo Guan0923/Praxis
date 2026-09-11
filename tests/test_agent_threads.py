@@ -29,6 +29,8 @@ from backend.domain import (
     ThreadNode,
     ToolMessage,
 )
+from backend.domain.execution_config import RuntimeConfigUpdate
+from backend.domain.input_message import InputMessage
 from backend.domain.runtime_state import (
     NodeFrame,
     NodeWriter,
@@ -599,14 +601,14 @@ def test_agent_thread_http_navigation_and_root_mediated_message(tmp_path: Path) 
             envelope = queue.peek_thread(child.node.thread_id)
             assert envelope is not None
             assert envelope.source_thread_id == sidebar["session_id"]
-            assert envelope.references == (
+            assert tuple(envelope.message.reference_dicts()) == (
                 {
                     "source": "workspace",
                     "path": "workspace:README.md",
                     "display_path": "workspace:README.md",
                 },
             )
-            assert envelope.payload["runtime_config"]["permission_mode"] == "workspace_write"
+            assert envelope.runtime_config.permission_mode == "workspace_write"
 
             fork_message = client.post(
                 f"/api/agent-threads/{fork_child.node.thread_id}/messages",
@@ -898,117 +900,63 @@ def test_one_agent_turn_reports_once_to_every_registered_sender(tmp_path: Path) 
         registry.close_all(reason="test cleanup", timeout=2)
 
 
-def test_report_replay_after_sqlite_delivery_before_queue_ack_is_idempotent(tmp_path: Path) -> None:
+def test_report_ack_failure_does_not_rollback_history_or_resend(tmp_path: Path) -> None:
     class CrashBeforeAckQueue(MemoryMessageQueue):
-        fail_ack = True
-
         def ack(self, claimed):
-            if self.fail_ack and claimed.envelope.target_kind == "report":
-                self.fail_ack = False
-                raise RuntimeError("simulated crash before queue ACK")
-            return super().ack(claimed)
+            raise RuntimeError("simulated crash before queue ACK")
 
-    index = AgentThreadIndex()
-    store = SQLiteSessionStore(ClientPaths(tmp_path / "data"), index)
+    store = SQLiteSessionStore(ClientPaths(tmp_path / "data"))
     queue = CrashBeforeAckQueue()
-    registry = JobRegistry()
-    session = store.create_session("report crash replay")
+    session = store.create_session("report ACK failure")
     root = _finished_source(store, session.session_id)
     worker = _agent_create(session.session_id, root, name="worker")
     store.create_agent_thread(session.session_id, worker)
-    store.register_agent_turn_report(
-        session.session_id,
-        worker.turn.id,
-        worker.node.thread_id,
-        session.session_id,
-    )
+    store.register_agent_turn_report(session.session_id, worker.turn.id, worker.node.thread_id, session.session_id)
     completed = worker.turn.clone()
-    completed.data[0][1]["content"].append({"type": "text", "text": "durable", "status": "success"})
     completed.status = "success"
-    completed = RuntimeState.from_dict(completed.to_dict())
     store.finalize_node(completed)
-    coordinator = SubagentCoordinator(store=store, message_queue=queue, index=index, job_registry=registry)
+    coordinator = SubagentCoordinator(store=store, message_queue=queue)
     try:
-        content = coordinator._reply_content(worker.node, completed)
-        coordinator._reply_context.value = (session.session_id, completed.id, "success")
-        try:
-            coordinator.reply_subagent_message(content)
-        finally:
-            del coordinator._reply_context.value
-        coordinator._dispatch_ready_reports(session.session_id)
-
-        delivered = store.list_agent_turn_reports(session.session_id, states=("delivered",))
-        assert len(delivered) == 1
-        after_crash = store.get_node(session.session_id, root.id)
-        assert isinstance(after_crash, RuntimeState)
-        assert len(after_crash.data[after_crash.current_data_idx]) == 3
-
-        recovered = SubagentCoordinator(store=store, message_queue=queue, index=index, job_registry=registry)
-        try:
-            recovered._drain_inactive_reports(session.session_id, session.session_id)
-        finally:
-            recovered.close()
-        replayed = store.get_node(session.session_id, root.id)
-        assert isinstance(replayed, RuntimeState)
-        assert len(replayed.data[replayed.current_data_idx]) == 3
-        assert not any(queue._streams.values())
-        assert not any(queue._thread_streams.values())
-        assert not any(queue._report_streams.values())
+        with pytest.raises(RuntimeError, match="before queue ACK"):
+            coordinator._publish_turn_reports(worker.node, completed)
+        assert len(store.list_agent_turn_reports(session.session_id, states=("delivered",))) == 1
+        coordinator.receive_pending_reports(session.session_id, session.session_id)
+        saved = store.get_node(session.session_id, root.id)
+        assert len(saved.data[saved.current_data_idx]) == 3
+        assert len(queue._report_streams[session.session_id]) == 1
+        assert queue.claim_report(session.session_id, "other") is None
     finally:
         coordinator.close()
-        registry.close_all(reason="test cleanup", timeout=2)
 
 
 def test_new_coordinator_does_not_replay_unfinished_reports_after_restart(tmp_path: Path) -> None:
-    class UnavailableReportQueue(MemoryMessageQueue):
-        def dispatch_report(self, envelope):
-            raise MessageQueueUnavailable("message_queue_unavailable")
-
-    index = AgentThreadIndex()
-    store = SQLiteSessionStore(ClientPaths(tmp_path / "data"), index)
-    registry = JobRegistry()
-    session = store.create_session("waiting report restart")
+    store = SQLiteSessionStore(ClientPaths(tmp_path / "data"))
+    session = store.create_session("report restart")
     root = _finished_source(store, session.session_id)
     worker = _agent_create(session.session_id, root, name="worker")
     store.create_agent_thread(session.session_id, worker)
-    store.register_agent_turn_report(
-        session.session_id,
-        worker.turn.id,
-        worker.node.thread_id,
-        session.session_id,
-    )
+    store.register_agent_turn_report(session.session_id, worker.turn.id, worker.node.thread_id, session.session_id)
     completed = worker.turn.clone()
-    completed.data[0][1]["content"].append({"type": "text", "text": "after outage", "status": "success"})
     completed.status = "success"
-    completed = RuntimeState.from_dict(completed.to_dict())
     store.finalize_node(completed)
-
-    unavailable = SubagentCoordinator(
-        store=store,
-        message_queue=UnavailableReportQueue(),
-        index=index,
-        job_registry=registry,
-    )
-    content = unavailable._reply_content(worker.node, completed)
-    unavailable._reply_context.value = (session.session_id, completed.id, "success")
-    try:
-        unavailable.reply_subagent_message(content)
-    finally:
-        del unavailable._reply_context.value
-    unavailable._dispatch_ready_reports(session.session_id)
-    unavailable.close()
-    assert len(store.list_agent_turn_reports(session.session_id, states=("waiting",))) == 1
-
     queue = MemoryMessageQueue()
-    recovered = SubagentCoordinator(store=store, message_queue=queue, index=index, job_registry=registry)
+    sender = SubagentCoordinator(store=store, message_queue=queue)
+    # Model a running recipient that has not reached its read boundary.
+    with store._connection(session.session_id, write=True) as connection:
+        connection.execute("UPDATE runtime_threads SET running_turn_id=? WHERE thread_id=?", (root.id, root.thread_id))
+    sender._publish_turn_reports(worker.node, completed)
+    assert len(store.list_agent_turn_reports(session.session_id, states=("queued",))) == 1
+    sender.close()
+    queue.close()
+    fresh_queue = MemoryMessageQueue()
+    recovered = SubagentCoordinator(store=store, message_queue=fresh_queue)
     try:
-        recovered._dispatch_ready_reports(session.session_id)
-        assert store.list_agent_turn_reports(session.session_id, states=("delivered",)) == []
-        assert len(store.list_agent_turn_reports(session.session_id, states=("waiting",))) == 1
-        assert queue.claim_report(session.session_id, "verify") is None
+        recovered.bind_session(session.session_id, lambda: None, tmp_path)
+        recovered.receive_pending_reports(session.session_id, session.session_id)
+        assert fresh_queue.claim_report(session.session_id, "verify") is None
+        assert len(store.list_agent_turn_reports(session.session_id, states=("queued",))) == 1
     finally:
         recovered.close()
-        registry.close_all(reason="test cleanup", timeout=2)
 
 
 def test_failed_agent_report_uses_exact_single_newline_retry_text(tmp_path: Path) -> None:
@@ -1729,7 +1677,11 @@ def test_running_subagent_bridge_accepts_live_runtime_config(tmp_path: Path) -> 
         def decide(self, runtime):
             started.set()
             assert release.wait(5), "test did not release the blocking Subagent"
-            observed_pending.update(runtime.services.pending_runtime_config or {})
+            observed_pending.update(
+                runtime.services.pending_runtime_config.stored_changes()
+                if runtime.services.pending_runtime_config is not None
+                else {}
+            )
             return AssistantMessage(content="configured")
 
     parent_runner = AgentRunner(_AnswerPlanner(), ToolRegistry())
@@ -1767,11 +1719,9 @@ def test_running_subagent_bridge_accepts_live_runtime_config(tmp_path: Path) -> 
         updated = coordinator.apply_runtime_config(
             session.session_id,
             thread_id,
-            {
-                "permission_mode": "workspace_write",
-                "running_mode": "plan",
-                "model": {"reasoning_effort": "high"},
-            },
+            RuntimeConfigUpdate(
+                **{"permission_mode": "workspace_write", "running_mode": "plan", "model": {"reasoning_effort": "high"}}
+            ),
         )
         assert updated is not None
         assert updated.permission_mode == "workspace_write"
@@ -1821,7 +1771,7 @@ def test_binding_does_not_restart_preclaimed_delivery_or_old_agent(tmp_path: Pat
         child.node.thread_id,
         session.session_id,
         child.node.thread_id,
-        {"content": "task:worker", "references": []},
+        InputMessage.from_input("task:worker", []),
         (delivery_id,),
     )
     queue.dispatch_agent(envelope)
@@ -2485,7 +2435,10 @@ def test_send_agent_message_reference_boundaries_and_symlink_escape(tmp_path: Pa
         assert result == {"thread_path": "/root/worker", "thread_status": "running"}
         envelope = queue.peek_thread(child.node.thread_id)
         assert envelope is not None
-        assert envelope.references == ({"path": "workspace:session.txt"}, {"path": "project:project.txt"})
+        assert tuple(envelope.message.reference_dicts()) == (
+            {"path": "workspace:session.txt"},
+            {"path": "project:project.txt"},
+        )
 
         invalid_references = (
             ({"path": "relative.txt"}, "not a file"),

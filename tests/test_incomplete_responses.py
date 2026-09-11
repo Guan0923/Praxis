@@ -11,6 +11,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from backend.domain.input_message import InputMessage
+from backend.domain.message_queue import InputDelivery
 from backend.domain.runtime_state import RuntimeState as TurnState
 from backend.planning import LLMPlanner
 from backend.providers import LLMClient, ModelConfig
@@ -278,7 +280,7 @@ def canonical_runner(tmp_path, protocol, base_url, tools, *, mode="agent", on_ev
     bridge = RuntimeEventNodeBridge(
         store,
         session_id=session.session_id,
-        prompt="finish the task",
+        message=InputMessage.from_input("finish the task"),
         turn_id="turn-incomplete",
         provider=protocol,
         provider_name="local-test",
@@ -549,7 +551,7 @@ def test_user_steering_during_tools_supersedes_continuation(tmp_path, mode):
         return "previous tool result"
 
     def drain():
-        return [pending.popleft()] if pending else []
+        return [InputDelivery(InputMessage(pending.popleft()))] if pending else []
 
     replies = [
         wire_response("responses", incomplete=True, calls=[("one", "inspect", {})]),

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from threading import BoundedSemaphore, Event, RLock, Thread, local
+from threading import BoundedSemaphore, RLock
 from typing import Any
 
 from backend.jobs import ThreadJob
@@ -50,7 +50,8 @@ class SubagentCoordinator(_SubagentToolActionsMixin, _SubagentReportDeliveryMixi
         self._index = index
         self._job_registry = job_registry
         self._thread_events = thread_events
-        self._published_report_turns: set[str] = set()
+        self._closed = False
+        self._report_receivers: dict[tuple[str, str], tuple[AgentRuntime, set[Callable[[], None]]]] = {}
         self._bindings: dict[str, _SessionBinding] = {}
         self._jobs: dict[str, ThreadJob] = {}
         self._active_bridges: dict[str, RuntimeEventNodeBridge] = {}
@@ -59,11 +60,7 @@ class SubagentCoordinator(_SubagentToolActionsMixin, _SubagentReportDeliveryMixi
         self._locks = WorkspaceWriteLock()
         self._state_lock = RLock()
         self._worker_slots = BoundedSemaphore(self._settings.max_workers)
-        self._report_dispatch_stop = Event()
-        self._report_dispatch_wakeup = Event()
-        self._report_dispatcher: Thread | None = None
-        self._report_retry: dict[str, tuple[int, float]] = {}
-        self._reply_context = local()
+
         if child_runner_factory is not None:
             self._bindings["*"] = _SessionBinding(child_runner_factory, (workspace or Path(".")).resolve())
 
@@ -80,15 +77,13 @@ class SubagentCoordinator(_SubagentToolActionsMixin, _SubagentReportDeliveryMixi
                 workspace.resolve(),
                 project_workspace.resolve() if project_workspace is not None else None,
             )
-        self._ensure_report_dispatcher()
-        self._report_dispatch_wakeup.set()
 
     def close(self) -> None:
-        self._report_dispatch_stop.set()
-        self._report_dispatch_wakeup.set()
-        dispatcher = self._report_dispatcher
-        if dispatcher is not None and dispatcher.is_alive():
-            dispatcher.join(timeout=2.0)
+        if self._queue is None:
+            self._closed = True
+            return
+        with self._queue.admission_lock:
+            self._closed = True
 
     @classmethod
     def handles(cls, name: str) -> bool:

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from threading import RLock
 from typing import Any
 
+from backend.domain.input_message import InputMessage
 from backend.domain.runtime_state import (
     NodeFrame,
     NodeWriter,
@@ -31,7 +32,7 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         store: RuntimeNodeStore,
         *,
         session_id: str,
-        prompt: str,
+        message: InputMessage | None,
         turn_id: str | None = None,
         compaction_turn_id: str | None = None,
         thread_id: str | None = None,
@@ -47,7 +48,6 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         cwd: str = "",
         project_cwd: str = "",
         thinking_level: str = "medium",
-        references: Sequence[Mapping[str, str]] | None = None,
         delivery_id: str | None = None,
         isolated_thread_context: bool = False,
         emit: Callable[[NodeFrame], None],
@@ -59,7 +59,8 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         self.thread_id = thread_id or session_id
         self.turn_id = turn_id
         self.compaction_turn_id = compaction_turn_id
-        self.prompt = prompt
+        self.input_message = message
+        self.prompt = message.text if message is not None else ""
         self.source_node_id = source_node_id
         self.adopt_existing = adopt_existing
         self.user = user
@@ -78,7 +79,6 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         self.running_mode = running_mode
         self.cwd = cwd
         self.project_cwd = project_cwd
-        self.references = [dict(item) for item in references or []]
         self.delivery_id = delivery_id or ""
         self.isolated_thread_context = isolated_thread_context
         self.writer = NodeWriter(store, emit=emit, persist_delta=persist_delta, flush_persistence=flush_persistence)
@@ -114,6 +114,19 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         runtime.state.running_mode = self.running_mode
         runtime.services.runtime_node_event = self.handle
         runtime.services.runtime_node_context = self.model_context
+        runtime.services.persist_agent_report = self._persist_agent_report
+
+    def _persist_agent_report(self, delivery_id: str, reply_content: str) -> None:
+        self._finish_stream_item()
+        if self.assistant is None:
+            self.start()
+        if self.assistant is None:
+            raise RuntimeError("Report recipient has no active Turn.")
+        self.assistant = self.writer.append_report(self.assistant, delivery_id, reply_content)
+        self.last_node = self.assistant
+        message_idx = len(self.assistant.data[self.assistant.current_data_idx]) - 1
+        self._record_completed_item(message_idx, 0)
+        self._assistant_after_report = True
 
     def model_context(self) -> list[RuntimeState]:
         self.writer.flush()
@@ -217,9 +230,11 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
                 self.thread_id = source.thread_id
         else:
             self.parent = self._latest_parent()
-        user_item: dict[str, Any] = {"type": "text", "text": self.prompt, "status": "success"}
-        if self.references:
-            user_item["references"] = self.references
+        user_item = (
+            self.input_message.to_item()
+            if self.input_message is not None
+            else {"type": "text", "text": "", "status": "success"}
+        )
         node = RuntimeState.create(
             session_id=self.session_id,
             thread_id=self.thread_id,
@@ -237,7 +252,7 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         )
         if self.delivery_id:
             node.data[0][0]["delivery_id"] = self.delivery_id
-            node = RuntimeState.from_dict(node.to_dict())
+            node.__post_init__()
         node = self.writer.create(node)
         self.assistant = node
         self.last_node = node

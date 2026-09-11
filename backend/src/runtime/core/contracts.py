@@ -6,11 +6,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from backend.domain.message_queue import InputDelivery
+
 from .events import RuntimeEvent
 
 Confirm = Callable[[str], bool]
 EventHandler = Callable[[RuntimeEvent], None]
-SteeringHandler = Callable[[], list[object]]
+SteeringHandler = Callable[[], list[InputDelivery]]
 CancellationHandler = Callable[[], bool]
 SuspensionHandler = Callable[[], bool]
 PlanReviewChoice = Literal["implement", "implement_and_compaction", "stay_in_plan_mode"]

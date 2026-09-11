@@ -5,12 +5,9 @@ from __future__ import annotations
 import os
 import threading
 
-from pydantic import ValidationError
-
 from backend.domain.runtime_state import RuntimeState
 from backend.storage.sqlite import SQLiteSessionStore
 
-from .routes.turn_models import TurnExecutionConfig
 from .routes.turn_support import _stream_turn
 
 
@@ -49,9 +46,9 @@ class TurnMessageWorker:
 
     def _start(self, claimed) -> None:
         envelope = claimed.envelope
-        payload = envelope.payload
+        start = envelope.start
         store = SQLiteSessionStore(self.state.paths, getattr(self.state, "agent_thread_index", None))
-        operation = str(payload.get("operation") or "create")
+        operation = start.operation if start is not None else None
         if operation not in {"create", "rewind"}:
             self._reject_permanently(claimed)
             return
@@ -64,12 +61,7 @@ class TurnMessageWorker:
         if operation == "create" and isinstance(existing, RuntimeState):
             self._reject_permanently(claimed)
             return
-        config_payload = payload.get("config")
-        try:
-            config = TurnExecutionConfig.model_validate(config_payload if isinstance(config_payload, dict) else {})
-        except ValidationError:
-            self._reject_permanently(claimed)
-            return
+        config = start.config
         if operation == "rewind":
             if (
                 not isinstance(existing, RuntimeState)
@@ -83,10 +75,9 @@ class TurnMessageWorker:
                 session_id=envelope.session_id,
                 thread_id=envelope.thread_id,
                 turn_id=envelope.target_id,
-                prompt=envelope.content,
+                message=envelope.message,
                 source_id=envelope.target_id,
                 config=config,
-                references=list(envelope.references),
                 adopt_existing=True,
                 initial_delivery=claimed,
                 stream_response=False,
@@ -97,10 +88,9 @@ class TurnMessageWorker:
             session_id=envelope.session_id,
             thread_id=envelope.thread_id,
             turn_id=envelope.target_id,
-            prompt=envelope.content,
-            source_id=str(payload.get("parent_id") or "") or None,
+            message=envelope.message,
+            source_id=start.parent_id,
             config=config,
-            references=list(envelope.references),
             initial_delivery=claimed,
             stream_response=False,
         )

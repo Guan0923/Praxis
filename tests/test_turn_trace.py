@@ -85,12 +85,12 @@ def initialize_trace(
 
 def bound_bridge(runtime: AgentRuntime, store: object, turn: TurnState) -> RuntimeEventNodeBridge:
     bridge = RuntimeEventNodeBridge(
-        store,  # type: ignore[arg-type]
+        store,
         session_id=turn.session_id,
         thread_id=turn.thread_id,
         source_node_id=turn.id,
         adopt_existing=True,
-        prompt="",
+        message=None,
         emit=lambda _frame: None,
     )
     bridge.bind_runtime(runtime)

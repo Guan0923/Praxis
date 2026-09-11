@@ -217,6 +217,59 @@ class NodeWriter:
     def append_item(self, node: RuntimeState, item: Mapping[str, Any], *, persist: bool = True) -> RuntimeState:
         return self.append_items(node, [item], persist=persist)
 
+    def append_report(self, node: RuntimeState, delivery_id: str, reply_content: str) -> RuntimeState:
+        """Commit the report, delivery state and frame sequence before publishing."""
+        with self._lock:
+            self.flush()
+            current = self.current(node.session_id, node.id)
+            message = {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "subagent",
+                        "event": "agent_report",
+                        "status": "success",
+                        "text": reply_content,
+                        "delivery_id": delivery_id,
+                    }
+                ],
+            }
+            messages = current.data[current.current_data_idx]
+            revision = self._revisions.get(node.key, 0) + 1
+            sequence = self._sequences.get(node.key, 0) + 1
+            frame = (
+                NodeFrame(
+                    "turn.delta",
+                    node.session_id,
+                    node.id,
+                    revision,
+                    operations=(
+                        {
+                            "op": "append_message",
+                            "data_idx": current.current_data_idx,
+                            "message_idx": len(messages),
+                            "message": message,
+                        },
+                    ),
+                    sequence=sequence,
+                )
+                if self._emits_frames
+                else None
+            )
+            value = self.store.append_agent_report(
+                node.session_id,
+                node.thread_id,
+                delivery_id=delivery_id,
+                reply_content=reply_content,
+                frame=frame,
+            )
+            self._dynamic[node.key] = value.clone()
+            if frame is not None:
+                self._sequences[node.key] = sequence
+                self._revisions[node.key] = revision
+                self.emit(frame)
+            return value.clone()
+
     def append_message(
         self,
         node: RuntimeState,

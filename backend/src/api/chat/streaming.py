@@ -18,6 +18,8 @@ from backend.domain import (
     safe_error_message,
     terminal_error_text,
 )
+from backend.domain.execution_config import TurnExecutionConfig
+from backend.domain.input_message import InputMessage
 from backend.domain.runtime_state import NodeFrame
 from backend.jobs import AdmissionPolicy, JobLane, JobScopeKind, ThreadJob
 from backend.providers import ModelConfig, ModelConfigurationError
@@ -35,7 +37,7 @@ from ..runtime_event_transport import publish_terminal as publish_runtime_termin
 from ..session_store import session_store as _store
 from ..state import WebAppState
 from .interrupts import make_interactive_interrupt
-from .models import ReasoningEffort, RuntimeModelRequest, _model_request_parameters
+from .models import _model_request_parameters
 from .titles import _auto_title_main_thread
 
 logger = logging.getLogger(__name__)
@@ -92,7 +94,7 @@ def _runtime_stream_lock_registry(state: object) -> dict[str, Any]:
 
 def _stream(
     state: WebAppState,
-    prompt: str,
+    message: InputMessage | None,
     *,
     application_builder: Callable[..., Any],
     session_id: str,
@@ -100,19 +102,20 @@ def _stream(
     thread_id: str,
     adopt_existing: bool = False,
     source_node_id: str | None = None,
-    mode: Literal["agent", "plan"] = "agent",
-    permission_mode: Literal["read_only", "workspace_write", "full_access"] | None = None,
-    reasoning_effort: ReasoningEffort = "medium",
-    provider_name: str | None = None,
-    model_snapshot: dict[str, object] | None = None,
+    config: TurnExecutionConfig,
     user_preferences: str = "",
     model_config: ModelConfig | None = None,
-    request_model: RuntimeModelRequest | None = None,
-    references: list[dict[str, str]] | None = None,
     operation: Callable[..., object] | None = None,
     initial_delivery: ClaimedEnvelope | None = None,
     subscribe: bool = True,
 ):
+    mode = config.running_mode
+    permission_mode = config.permission_mode
+    provider_name = config.provider_name
+    request_model = config.model
+    reasoning_effort = request_model.reasoning_effort if request_model is not None else "medium"
+    model_snapshot = request_model.model_dump() if request_model is not None else None
+    prompt = message.text if message is not None else ""
     # ``WebAppState`` owns these process-local registries in production, but
     # callers such as focused SSE tests may provide a small state double.  A
     # stream must remain self-contained in that case instead of failing in
@@ -359,11 +362,14 @@ def _stream(
             # tree protocol.  Legacy conversations do not expose nodes yet,
             # so validation is delegated to the node store when available.
             node_store = getattr(app, "session_store", None) or getattr(app, "store", None)
-            if initial_delivery is not None and initial_delivery.envelope.payload.get("operation") == "rewind":
-                item: dict[str, object] = {"type": "text", "text": prompt, "status": "success"}
-                if references:
-                    item["references"] = references
-                node_store.append_turn_version(turn_id, item, delivery_id=initial_delivery.envelope.delivery_id)
+            if (
+                initial_delivery is not None
+                and initial_delivery.envelope.start is not None
+                and initial_delivery.envelope.start.operation == "rewind"
+            ):
+                node_store.append_turn_version(
+                    turn_id, message.to_item(), delivery_id=initial_delivery.envelope.delivery_id
+                )
             if callable(getattr(node_store, "create_node", None)):
                 if getattr(conversation, "active_session", None) is None:
                     conversation.ensure_session(prompt or None)
@@ -374,7 +380,7 @@ def _stream(
                     bridge_ref["bridge"] = RuntimeEventNodeBridge(
                         node_store,
                         session_id=active_session.session_id,
-                        prompt=prompt,
+                        message=message,
                         turn_id=turn_id,
                         thread_id=thread_id or active_session.session_id,
                         source_node_id=source_node_id,
@@ -417,19 +423,10 @@ def _stream(
                         running_mode=mode,
                         cwd=str(workspace),
                         project_cwd=str(project_cwd) if project_cwd is not None else "",
-                        references=references,
                         delivery_id=initial_delivery.envelope.delivery_id if initial_delivery is not None else None,
                         emit=publish_frame,
                         persist_delta=persistence_ref["worker"].submit if persistence_ref["worker"] else None,
                         flush_persistence=persistence_ref["worker"].flush if persistence_ref["worker"] else None,
-                    )
-                    bridge_ref["bridge"].apply_runtime_config(
-                        {
-                            "provider_name": provider_name,
-                            "model": model_snapshot or {},
-                            "permission_mode": permission_mode or "read_only",
-                            "running_mode": mode,
-                        }
                     )
                     runtime_for_bridge = getattr(conversation, "runtime", None)
                     if runtime_for_bridge is not None:
@@ -447,15 +444,14 @@ def _stream(
                     active_runtime_bridges[registry_key(bridge_ref["bridge"].thread_id)] = bridge_ref["bridge"]
             if operation is None:
                 request_parameters = _model_request_parameters(request_model, effective_reasoning)
-                run_state = conversation.run_task(
-                    prompt,
+                run_state = conversation.run_message(
+                    message,
                     mode=mode,
                     on_event=sink,
                     interrupt=interrupt,
                     cancel_requested=cancellation_requested,
                     suspend_requested=suspension_requested,
                     request_parameters=request_parameters,
-                    references=references or [],
                     steering=take_steering,
                     delivery_id=initial_delivery.envelope.delivery_id if initial_delivery is not None else None,
                     on_started=(
@@ -599,6 +595,13 @@ def _stream(
                     app.close()
                 except Exception:
                     pass
+            coordinator = getattr(state, "subagent_coordinator", None)
+            if coordinator is not None:
+                try:
+                    coordinator.receive_pending_reports(session_id, thread_id)
+                except Exception as exc:
+                    terminal_report = error_report(exc)
+                    enqueue_terminal("failed", turn_id or "unknown", safe_error_message(exc))
             active_turn_cancellations.pop(cancellation_key, None)
             steering_inbox.close()
             # Publish completion only after teardown. Hold admission until the

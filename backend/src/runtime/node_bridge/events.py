@@ -215,9 +215,6 @@ class _EventProjectionMixin:
             return
         if isinstance(data.get("run_id"), str):
             self.run_id = str(data["run_id"])
-        config = data.get("runtime_config") or data.get("config")
-        if isinstance(config, Mapping):
-            self.apply_runtime_config(config)
         usage = data.get("node_usage") if isinstance(data.get("node_usage"), Mapping) else data.get("usage")
         if isinstance(usage, Mapping):
             self._apply_usage(usage)

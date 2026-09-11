@@ -6,6 +6,8 @@ from backend.api.app import create_app
 from backend.api.chat.interrupts import registry
 from backend.api.session_store import session_store
 from backend.api.state import WebAppState
+from backend.domain.execution_config import RuntimeConfigUpdate, RuntimeModelPatch
+from backend.domain.input_message import InputMessage
 from backend.domain.runtime_state import NodeWriter, RuntimeState
 from backend.planning import RuleBasedPlanner
 from backend.providers import ModelConfig
@@ -68,7 +70,7 @@ def test_running_turn_config_patch_updates_active_runtime_pending_config(tmp_pat
             session_id=sidebar["session_id"],
             thread_id=sidebar["thread_id"],
             turn_id="turn_active_config",
-            prompt="configure active runtime",
+            message=InputMessage.from_input("configure active runtime"),
             emit=lambda _frame: None,
         )
         node = bridge.start()
@@ -86,7 +88,7 @@ def test_running_turn_config_patch_updates_active_runtime_pending_config(tmp_pat
         assert response.json()["running_mode"] == "plan"
         assert response.json()["permission_mode"] == "workspace_write"
         assert response.json()["model"]["reasoning_effort"] == "high"
-        assert runtime.services.pending_runtime_config == {
+        assert runtime.services.pending_runtime_config.stored_changes() == {
             "running_mode": "plan",
             "permission_mode": "workspace_write",
             "model": response.json()["model"],
@@ -107,7 +109,7 @@ def test_running_turn_provider_patch_uses_provider_model_parameters_at_next_boun
             session_id=sidebar["session_id"],
             thread_id=sidebar["thread_id"],
             turn_id="turn_provider_config",
-            prompt="switch provider",
+            message=InputMessage.from_input("switch provider"),
             emit=lambda _frame: None,
         )
         node = bridge.start()
@@ -135,7 +137,7 @@ def test_running_turn_provider_patch_uses_provider_model_parameters_at_next_boun
 
         assert response.status_code == 200
         assert response.json()["provider_name"] == "configured"
-        assert runtime.services.pending_runtime_config == {"provider_name": "configured"}
+        assert runtime.services.pending_runtime_config.stored_changes() == {"provider_name": "configured"}
         assert runtime.apply_pending_runtime_config() is True
         assert runtime.state.model_snapshot["current_model"] == "configured-model"
         assert runtime.state.model_snapshot["context_length"] == 65536
@@ -144,7 +146,7 @@ def test_running_turn_provider_patch_uses_provider_model_parameters_at_next_boun
         assert runtime.state.request_parameters["max_tokens"] == 1536
         assert runtime.state.request_parameters["temperature"] == 0.7
 
-        runtime.services.pending_runtime_config = {"model": {"temperature": 1.1}}
+        runtime.services.pending_runtime_config = RuntimeConfigUpdate(model=RuntimeModelPatch(temperature=1.1))
         assert runtime.apply_pending_runtime_config() is True
         assert runtime.state.model_snapshot["temperature"] == 1.1
         assert runtime.state.request_parameters["temperature"] == 1.1

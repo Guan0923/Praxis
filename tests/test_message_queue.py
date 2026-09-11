@@ -15,6 +15,9 @@ from backend.api.chat import streaming as chat_streaming
 from backend.api.session_store import session_store
 from backend.api.state import WebAppState
 from backend.domain import AssistantMessage, DeliveryConflict, MessageEnvelope, QueuedMessage
+from backend.domain.execution_config import TurnExecutionConfig
+from backend.domain.input_message import InputMessage
+from backend.domain.message_queue import TurnStart
 from backend.domain.runtime_state import RuntimeState
 from backend.providers import ModelConfig
 from backend.runtime import AgentApplication, AgentRunner
@@ -125,8 +128,8 @@ def test_create_turn_accepts_exactly_one_message_source_and_enqueues_queued_deli
         }
         initial = state.message_queue.claim_turn_start("test")
         assert initial is not None
-        assert initial.envelope.content == "queued turn"
-        assert initial.envelope.references == ()
+        assert initial.envelope.message.text == "queued turn"
+        assert tuple(initial.envelope.message.reference_dicts()) == ()
     assert initial.envelope.delivery_id == "delivery-create"
 
 
@@ -170,7 +173,7 @@ def test_create_turn_validates_and_normalizes_absolute_file_references(tmp_path:
         assert accepted.status_code == 202, accepted.text
         claimed = state.message_queue.claim_turn_start("test-reference")
         assert claimed is not None
-        assert claimed.envelope.references == (
+        assert tuple(claimed.envelope.message.reference_dicts()) == (
             {
                 "source": "workspace",
                 "path": "workspace:docs/guide.md",
@@ -214,7 +217,7 @@ def test_create_turn_keeps_accepted_delivery_pending_until_worker_admission(tmp_
     with TestClient(create_app(state), raise_server_exceptions=False) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
         message_id = str(uuid4())
-        queue.create(QueuedMessage(message_id, sidebar["thread_id"], "retry later"))
+        queue.create(QueuedMessage(message_id, sidebar["thread_id"], InputMessage.from_input("retry later")))
         response = client.post(
             "/api/turns",
             json={
@@ -235,7 +238,7 @@ def test_create_turn_keeps_accepted_delivery_pending_until_worker_admission(tmp_
     assert queue.list(sidebar["thread_id"]) == []
 
 
-@pytest.mark.parametrize("operation", ["unsupported", "rewind"])
+@pytest.mark.parametrize("operation", ["rewind"])
 def test_turn_start_worker_acknowledges_permanent_invalid_command(tmp_path: Path, operation: str) -> None:
     from backend.storage.message_queue import MemoryMessageQueue
 
@@ -253,15 +256,9 @@ def test_turn_start_worker_acknowledges_permanent_invalid_command(tmp_path: Path
                 "turn-invalid-command",
                 sidebar["session_id"],
                 sidebar["thread_id"],
-                {
-                    "content": "invalid command",
-                    "references": [],
-                    "version": 1,
-                    "operation": operation,
-                    "parent_id": "",
-                    "config": {},
-                },
+                InputMessage.from_input("invalid command", []),
                 ("delivery-invalid-command",),
+                start=TurnStart(operation, TurnExecutionConfig(**{}), parent_id=""),
             )
             queue.dispatch_turn_start(envelope)
             claimed = queue.claim_turn_start("test-worker")
@@ -460,9 +457,9 @@ def test_memory_side_chat_runs_while_main_turn_is_running(
 def test_memory_dispatch_claim_ack_and_receipt_replay(memory_queue: MemoryMessageQueue) -> None:
     thread_id = "thread-real"
     reference = {"source": "project", "path": "project:a", "display_path": "a"}
-    memory_queue.create(QueuedMessage("one", thread_id, "one", (reference,)))
-    memory_queue.create(QueuedMessage("two", thread_id, "two", (reference,)))
-    memory_queue.create(QueuedMessage("three", thread_id, "three"))
+    memory_queue.create(QueuedMessage("one", thread_id, InputMessage.from_input("one", (reference,))))
+    memory_queue.create(QueuedMessage("two", thread_id, InputMessage.from_input("two", (reference,))))
+    memory_queue.create(QueuedMessage("three", thread_id, InputMessage.from_input("three")))
 
     first = memory_queue.dispatch(
         delivery_id="delivery-one",
@@ -489,8 +486,8 @@ def test_memory_dispatch_claim_ack_and_receipt_replay(memory_queue: MemoryMessag
         == first
     )
     assert first.source_message_ids == ("one", "two")
-    assert first.content == "one\n\ntwo"
-    assert first.references == (reference,)
+    assert first.message.text == "one\n\ntwo"
+    assert tuple(first.message.reference_dicts()) == (reference,)
 
     claimed_first = memory_queue.claim("turn-real", "consumer-a")
     assert claimed_first is not None and claimed_first.envelope.delivery_id == "delivery-one"
@@ -530,15 +527,9 @@ def test_memory_turn_start_xautoclaim_recovers_one_delivery(memory_queue: Memory
         "turn-real",
         "session-real",
         "thread-real",
-        {
-            "content": "recover once",
-            "references": [],
-            "version": 1,
-            "operation": "create",
-            "parent_id": "",
-            "config": {},
-        },
+        InputMessage.from_input("recover once", []),
         ("turn-start-delivery",),
+        start=TurnStart("create", TurnExecutionConfig(**{}), parent_id=""),
     )
     memory_queue.dispatch_turn_start(envelope)
     crashed = memory_queue.claim_turn_start("crashed-worker")
@@ -566,15 +557,9 @@ def test_memory_turn_start_pending_delivery_does_not_block_another_session(
             f"turn-{delivery_id}",
             session_id,
             session_id,
-            {
-                "content": delivery_id,
-                "references": [],
-                "version": 1,
-                "operation": "create",
-                "parent_id": "",
-                "config": {},
-            },
+            InputMessage.from_input(delivery_id, []),
             (delivery_id,),
+            start=TurnStart("create", TurnExecutionConfig(**{}), parent_id=""),
         )
 
     memory_queue.dispatch_turn_start(envelope("first", "session-first"))
@@ -599,7 +584,7 @@ def test_memory_agent_thread_dispatch_is_fifo_deduplicated_and_acknowledged(
         "thread-target",
         "session",
         "thread-target",
-        {"content": "first", "references": []},
+        InputMessage.from_input("first", []),
         ("agent-one",),
     )
     second = MessageEnvelope(
@@ -610,7 +595,7 @@ def test_memory_agent_thread_dispatch_is_fifo_deduplicated_and_acknowledged(
         "thread-target",
         "session",
         "thread-target",
-        {"content": "second", "references": []},
+        InputMessage.from_input("second", []),
         ("agent-two",),
     )
     assert memory_queue.dispatch_agent(first) == first
@@ -626,14 +611,14 @@ def test_memory_agent_thread_dispatch_is_fifo_deduplicated_and_acknowledged(
                 "thread-target",
                 "session",
                 "thread-target",
-                {"content": "changed", "references": []},
+                InputMessage.from_input("changed", []),
                 ("agent-one",),
             )
         )
 
     assert memory_queue.peek_thread("thread-target") == first
     claimed_first = memory_queue.claim_thread("thread-target", "crashed-worker")
-    assert claimed_first is not None and claimed_first.envelope.content == "first"
+    assert claimed_first is not None and claimed_first.envelope.message.text == "first"
     assert memory_queue.claim_thread("thread-target", "worker") is None
     memory_queue.retry(claimed_first)
     recovered_first = memory_queue.claim_thread("thread-target", "replacement-worker")
@@ -641,12 +626,12 @@ def test_memory_agent_thread_dispatch_is_fifo_deduplicated_and_acknowledged(
     assert recovered_first.envelope.delivery_id == "agent-one"
     memory_queue.ack(recovered_first)
     claimed_second = memory_queue.claim_thread("thread-target", "worker")
-    assert claimed_second is not None and claimed_second.envelope.content == "second"
+    assert claimed_second is not None and claimed_second.envelope.message.text == "second"
     memory_queue.ack(claimed_second)
     assert memory_queue.peek_thread("thread-target") is None
 
 
-def test_memory_assistant_report_stream_is_independent_and_idempotent(
+def test_memory_assistant_report_stream_is_independent_and_staged(
     memory_queue: MemoryMessageQueue,
 ) -> None:
     report = MessageEnvelope(
@@ -657,17 +642,18 @@ def test_memory_assistant_report_stream_is_independent_and_idempotent(
         "thread-parent",
         "session",
         "thread-parent",
-        {"content": "thread_path: /root/worker\nthread_status: success\ntask_result: done"},
+        InputMessage.from_input("thread_path: /root/worker\nthread_status: success\ntask_result: done"),
         ("agent-report-one",),
         created_at="2026-08-31T00:00:00+00:00",
     )
-    assert memory_queue.dispatch_report(report) == report
-    assert memory_queue.dispatch_report(report) == report
+    with memory_queue.prepare_reports() as stage:
+        stage(report)
+        assert memory_queue.claim_report("thread-parent", "early") is None
     assert memory_queue.peek_thread("thread-parent") is None
 
     claimed = memory_queue.claim_report("thread-parent", "report-consumer")
     assert claimed is not None
-    assert claimed.envelope.content == report.content
+    assert claimed.envelope.message.text == report.message.text
     assert memory_queue.claim_report("thread-parent", "second-consumer") is None
     memory_queue.ack(claimed)
     assert memory_queue.claim_report("thread-parent", "after-ack") is None

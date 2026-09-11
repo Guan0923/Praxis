@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 from time import perf_counter
 
 from backend.domain import (
@@ -261,8 +262,12 @@ class AgentRunner:
         return self._run_attempt(runtime, resumed=True)
 
     def _run_attempt(self, runtime: AgentRuntime, *, resumed: bool) -> RunState:
-
         self.bind(runtime)
+        receive = getattr(runtime.services.subagents, "report_receiver", None)
+        with receive(runtime) if receive is not None else nullcontext():
+            return self._execute_attempt(runtime, resumed=resumed)
+
+    def _execute_attempt(self, runtime: AgentRuntime, *, resumed: bool) -> RunState:
         started_at = perf_counter()
         runtime.state.status = "running"
         runtime.services.publish = RunEventPublisher(runtime)

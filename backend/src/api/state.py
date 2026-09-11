@@ -9,6 +9,7 @@ from threading import RLock
 
 from backend.configuration import ClientPaths
 from backend.domain import AssistantMessage
+from backend.domain.execution_config import RuntimeConfigUpdate
 from backend.domain.runtime_state import (
     RuntimeState,
     message_payload,
@@ -88,7 +89,7 @@ class WebAppState:
         self.message_queue.on_change = self.conversation_cache.trim
         self.agent_thread_index = AgentThreadIndex()
 
-        self.active_runtime_configs: dict[str, dict[str, object]] = {}
+        self.active_runtime_configs: dict[str, RuntimeConfigUpdate] = {}
         self.active_runtime_bridges: dict[str, object] = {}
         self.active_turn_streams: dict[str, object] = {}
         self.active_turn_streams_lock = RLock()

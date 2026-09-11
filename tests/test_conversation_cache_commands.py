@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from backend.api.app import create_app
 from backend.api.state import WebAppState
+from backend.domain.input_message import InputMessage
 from backend.domain.runtime_state import RuntimeState
 from backend.jobs import JobRegistry, JobScopeKind
 from backend.jobs.output_buffer import OutputBuffer
@@ -196,7 +197,7 @@ def test_queued_conversation_stays_retained_until_last_message_is_deleted(tmp_pa
     state.turn_message_worker.close()
     try:
         state.conversation_cache.touch("session", "queued")
-        state.message_queue.create(QueuedMessage("message", "queued", "pending work"))
+        state.message_queue.create(QueuedMessage("message", "queued", InputMessage.from_input("pending work")))
         for number in range(6):
             state.conversation_cache.touch("session", f"idle-{number}")
         assert state.conversation_cache.contains("queued")

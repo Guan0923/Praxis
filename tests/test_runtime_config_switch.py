@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from backend.domain import AssistantMessage, ToolMessage
+from backend.domain.execution_config import RuntimeConfigUpdate
 from backend.planning.llm import LLMPlanner
 from backend.planning.prompts import compose_system_prompt
 from backend.runtime import AgentRunner
@@ -55,7 +56,7 @@ def test_running_turn_redispatches_both_mode_directions_at_the_next_boundary(
     worker.start()
     assert client.started.wait(5)
 
-    runtime.services.pending_runtime_config = {"running_mode": target}
+    runtime.services.pending_runtime_config = RuntimeConfigUpdate(running_mode=target)
     client.release.set()
     worker.join(10)
 

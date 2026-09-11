@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from uuid import uuid4
 
 from backend.domain import (
@@ -12,6 +11,7 @@ from backend.domain import (
     TracePersistenceError,
     safe_error_message,
 )
+from backend.domain.execution_config import RuntimeConfigUpdate
 from backend.domain.runtime_state import (
     NodeFrame,
     RuntimeState,
@@ -47,7 +47,7 @@ class _SubagentExecutionMixin:
         self,
         session_id: str,
         thread_id: str,
-        changes: Mapping[str, object],
+        changes: RuntimeConfigUpdate,
     ) -> RuntimeState | None:
         target = getattr(self._store, "get_thread_node")(session_id, thread_id) if self._store is not None else None
         if target is None or target.depth <= 0:
@@ -57,6 +57,14 @@ class _SubagentExecutionMixin:
         return bridge.apply_runtime_config(changes) if bridge is not None else None
 
     def _wake_thread(self, session_id: str, thread_id: str) -> dict[str, object]:
+        with self._queue.admission_lock:
+            self._queue.ping()
+            self._queue.require_thread_open(thread_id)
+            if self._closed:
+                return {"target_state": "closing"}
+            return self._wake_open_thread(session_id, thread_id)
+
+    def _wake_open_thread(self, session_id: str, thread_id: str) -> dict[str, object]:
         target = getattr(self._store, "get_thread_node")(session_id, thread_id)
         runtime_thread = getattr(self._store, "get_runtime_thread")(session_id, thread_id)
         if target is None or runtime_thread is None:
@@ -81,35 +89,30 @@ class _SubagentExecutionMixin:
         if parent.status not in {"success", "failed"}:
             return {"target_state": parent.status, "turn_id": parent.id}
         turn_id = new_node_id()
-        item = {"type": "text", "text": envelope.content, "status": "success"}
-        if envelope.references:
-            item["references"] = [dict(reference) for reference in envelope.references]
-        requested_config = envelope.payload.get("runtime_config")
-        runtime_config = dict(requested_config) if isinstance(requested_config, Mapping) else {}
-        requested_model = runtime_config.get("model")
-        model = {**parent.model, **dict(requested_model)} if isinstance(requested_model, Mapping) else parent.model
+        runtime_config = envelope.runtime_config
+        requested_model = runtime_config.model if runtime_config is not None else None
+        model = {**parent.model, **requested_model.model_dump()} if requested_model is not None else parent.model
         node = RuntimeState.create(
             session_id=session_id,
             thread_id=thread_id,
             id=turn_id,
             parent=parent,
-            user_content=[item],
-            provider_name=str(runtime_config.get("provider_name") or parent.provider_name),
+            user_content=[envelope.message.to_item()],
+            provider_name=(runtime_config.provider_name if runtime_config is not None else None)
+            or parent.provider_name,
             model=model,
-            permission_mode=str(runtime_config.get("permission_mode") or parent.permission_mode),
-            running_mode=str(runtime_config.get("running_mode") or parent.running_mode),
+            permission_mode=runtime_config.permission_mode if runtime_config is not None else parent.permission_mode,
+            running_mode=runtime_config.running_mode if runtime_config is not None else parent.running_mode,
             cwd=parent.cwd,
             project_cwd=parent.project_cwd,
         )
         node.data[0][0]["delivery_id"] = envelope.delivery_id
-        node = RuntimeState.from_dict(node.to_dict())
+        node.__post_init__()
         try:
             getattr(self._store, "create_thread_turn_if_idle")(
                 node,
                 expected_head_id=head_id,
-                report_recipient_thread_id=envelope.source_thread_id
-                if bool(envelope.payload.get("need_reply", False))
-                else None,
+                report_recipient_thread_id=envelope.source_thread_id if bool(envelope.need_reply) else None,
             )
         except ValueError:
             current = getattr(self._store, "get_runtime_thread")(session_id, thread_id)
@@ -126,6 +129,23 @@ class _SubagentExecutionMixin:
         return {"target_state": "started", "turn_id": turn_id, "background_admission": admission}
 
     def _submit_turn(
+        self,
+        node: ThreadNode,
+        turn: RuntimeState,
+        *,
+        creator_thread_id: str,
+        initial_delivery_id: str | None = None,
+    ) -> str:
+        with self._queue.admission_lock:
+            self._queue.ping()
+            self._queue.require_thread_open(node.thread_id)
+            if self._closed:
+                return "rejected:closing"
+            return self._submit_open_turn(
+                node, turn, creator_thread_id=creator_thread_id, initial_delivery_id=initial_delivery_id
+            )
+
+    def _submit_open_turn(
         self,
         node: ThreadNode,
         turn: RuntimeState,
@@ -253,7 +273,7 @@ class _SubagentExecutionMixin:
                 thread_id=node.thread_id,
                 source_node_id=turn.id,
                 adopt_existing=True,
-                prompt="",
+                message=None,
                 provider_name=turn.provider_name,
                 model=str(turn.model["current_model"]),
                 model_config=turn.model,
@@ -333,8 +353,12 @@ class _SubagentExecutionMixin:
                 failed = turn.clone()
                 failed.status = "failed"
                 self._thread_events.finish_turn(node.thread_id, failed)
+            report_error = None
             if isinstance(current_turn, RuntimeState) and current_turn.status in {"success", "failed"}:
-                self._publish_turn_reports(node, current_turn)
+                try:
+                    self._publish_turn_reports(node, current_turn)
+                except Exception as exc:
+                    report_error = exc
             if (
                 self._thread_events is not None
                 and isinstance(current_turn, RuntimeState)
@@ -349,6 +373,9 @@ class _SubagentExecutionMixin:
             close = getattr(runner, "close", None)
             if callable(close):
                 close()
+            if report_error is not None:
+                raise report_error
+            self.receive_pending_reports(node.session_id, node.thread_id)
             current = getattr(self._store, "get_runtime_thread")(node.session_id, node.thread_id)
             current_node = (
                 getattr(self._store, "get_node")(node.session_id, current.current_turn_id)

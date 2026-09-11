@@ -27,6 +27,7 @@ from backend.domain import (
     ToolMessage,
     UserMessage,
 )
+from backend.domain.input_message import InputMessage
 from backend.domain.runtime_state import (
     APP_VERSION,
     InMemoryNodeStore,
@@ -737,7 +738,7 @@ def test_late_tool_failure_after_steering_settles_the_previous_assistant_call() 
         session_id="session_steering_status",
         thread_id="session_steering_status",
         turn_id="turn_steering_status",
-        prompt="start",
+        message=InputMessage.from_input("start"),
         emit=frames.append,
     )
     bridge.start()
@@ -946,7 +947,7 @@ def test_streamed_items_keep_canonical_order_across_model_and_tool_rounds() -> N
         session_id="session_1",
         thread_id="session_1",
         turn_id="turn_ordered",
-        prompt="inspect",
+        message=InputMessage.from_input("inspect"),
         provider_name="local",
         emit=frames.append,
     )
@@ -1045,7 +1046,7 @@ def test_model_retry_streams_a_nonterminal_item_and_settles_on_the_next_request(
         session_id="session_1",
         thread_id="session_1",
         turn_id="turn_retry",
-        prompt="retry locally",
+        message=InputMessage.from_input("retry locally"),
         provider_name="local",
         emit=frames.append,
     )
@@ -1119,7 +1120,7 @@ def test_multiple_model_retries_keep_order_and_reconnect_snapshot() -> None:
         session_id="session_1",
         thread_id="session_1",
         turn_id="turn_retry_order",
-        prompt="retry twice",
+        message=InputMessage.from_input("retry twice"),
         provider_name="local",
         emit=emit,
     )
@@ -1166,7 +1167,7 @@ def test_exhausted_retry_finishes_without_duplicate_terminal_errors() -> None:
         session_id="session_1",
         thread_id="session_1",
         turn_id="turn_retry_failed",
-        prompt="exhaust retry",
+        message=InputMessage.from_input("exhaust retry"),
         provider_name="local",
         emit=lambda _frame: None,
     )
@@ -1199,7 +1200,7 @@ def test_failed_turn_without_detail_has_no_fallback_error_item() -> None:
         session_id="session_1",
         thread_id="session_1",
         turn_id="turn_empty_failure",
-        prompt="fail silently",
+        message=InputMessage.from_input("fail silently"),
         provider_name="local",
         emit=lambda _frame: None,
     )
@@ -1218,7 +1219,7 @@ def test_tool_approval_persists_only_the_interactive_decision_item() -> None:
         store,
         session_id="session_1",
         turn_id="turn_approval",
-        prompt="search",
+        message=InputMessage.from_input("search"),
         provider_name="local",
         emit=lambda _frame: None,
     )
@@ -1259,7 +1260,7 @@ def test_failed_tool_item_preserves_failure_metadata() -> None:
         store,
         session_id="session_1",
         turn_id="turn_failed_tool",
-        prompt="write",
+        message=InputMessage.from_input("write"),
         provider_name="local",
         emit=lambda _frame: None,
     )
@@ -1559,7 +1560,7 @@ def test_plan_compaction_handoff_emits_plan_compact_agent_nodes_in_one_stream(tm
         store,
         session_id=session.session_id,
         thread_id=session.session_id,
-        prompt="plan the compacted change",
+        message=InputMessage.from_input("plan the compacted change"),
         running_mode="plan",
         emit=frames.append,
     )

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from threading import Condition, Event, RLock
 
+from backend.domain.input_message import InputMessage
 from backend.domain.message_queue import (
     ClaimedEnvelope,
     DeliveryConflict,
@@ -15,10 +17,11 @@ from backend.domain.message_queue import (
     QueueItemConflict,
     QueueItemNotFound,
     QueueItemStateConflict,
+    TurnStart,
     queue_utc_now,
 )
 
-from .message_queue_support import _envelope_fingerprint, _fingerprint, _merge, _same_create
+from .message_queue_support import _dispatch_identity, _envelope_identity, _merge, _same_create
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +41,7 @@ class MemoryMessageQueue:
         self._thread_streams: dict[str, list[tuple[str, MessageEnvelope, float, str | None]]] = {}
         self._report_streams: dict[str, list[tuple[str, MessageEnvelope, float, str | None]]] = {}
         self._turn_start_stream: list[tuple[str, MessageEnvelope, float, str | None]] = []
-        self._receipts: dict[str, tuple[str, str, MessageEnvelope | AcknowledgedDelivery]] = {}
+        self._receipts: dict[str, tuple[object, str, MessageEnvelope | AcknowledgedDelivery]] = {}
         self._counter = 0
         self._lock = RLock()
         self._condition = Condition(self._lock)
@@ -74,8 +77,9 @@ class MemoryMessageQueue:
             for turn_id in turn_ids:
                 if not self._streams.get(turn_id):
                     self._streams.pop(turn_id, None)
-            # Keep request identity for deduplication, not acknowledged message bodies.
-            for delivery_id, (fingerprint, status, envelope) in self._receipts.items():
+            # Receipts survive eviction to distinguish conflicting retries.
+            # Value comparison still retains input; the eviction regression tracks the pending digest decision.
+            for delivery_id, (identity, status, envelope) in self._receipts.items():
                 if (
                     status == "acknowledged"
                     and envelope.thread_id == thread_id
@@ -84,7 +88,7 @@ class MemoryMessageQueue:
                     receipt = AcknowledgedDelivery(
                         envelope.delivery_id, envelope.target_id, envelope.session_id, envelope.thread_id
                     )
-                    self._receipts[delivery_id] = (fingerprint, status, receipt)
+                    self._receipts[delivery_id] = (identity, status, receipt)
 
     def require_thread_open(self, thread_id: str) -> None:
         with self._lock:
@@ -179,9 +183,7 @@ class MemoryMessageQueue:
             items.append(item)
             return item, True
 
-    def update(
-        self, thread_id: str, message_id: str, *, content: str, references: Sequence[dict[str, str]]
-    ) -> QueuedMessage:
+    def update(self, thread_id: str, message_id: str, *, message: InputMessage) -> QueuedMessage:
         with self._lock:
             items = self._queues.get(thread_id, [])
             for index, item in enumerate(items):
@@ -189,7 +191,7 @@ class MemoryMessageQueue:
                     continue
                 if item.state != "pending":
                     raise QueueItemStateConflict("queued_message_dispatched")
-                items[index] = replace(item, content=content, references=tuple(references), updated_at=queue_utc_now())
+                items[index] = replace(item, message=message, updated_at=queue_utc_now())
                 return items[index]
         raise QueueItemNotFound("queued_message_not_found")
 
@@ -215,15 +217,15 @@ class MemoryMessageQueue:
         thread_id: str,
         turn_id: str,
         correlation_id: str | None = None,
-        command_payload: Mapping[str, object] | None = None,
+        start: TurnStart | None = None,
     ) -> MessageEnvelope | AcknowledgedDelivery:
         with self._lock:
             self.ping()
             self.require_thread_open(thread_id)
-            fingerprint = _fingerprint(thread_id, turn_id, message_ids)
+            identity = _dispatch_identity(thread_id, turn_id, message_ids)
             receipt = self._receipts.get(delivery_id)
             if receipt is not None:
-                if receipt[0] != fingerprint:
+                if receipt[0] != identity:
                     raise DeliveryConflict("delivery_id_conflict")
                 if receipt[1] != "returned":
                     return receipt[2]
@@ -236,11 +238,7 @@ class MemoryMessageQueue:
                 raise QueueItemNotFound("queued_message_not_found")
             if any(item.state != "pending" for item in selected):
                 raise QueueItemStateConflict("queued_message_dispatched")
-            content, references = _merge(selected)
-            payload: dict[str, object] = {"content": content, "references": list(references)}
-            if command_payload is not None:
-                payload.update(dict(command_payload))
-                payload["queued"] = True
+            message = _merge(selected)
             envelope = (
                 receipt[2]
                 if receipt is not None
@@ -248,13 +246,14 @@ class MemoryMessageQueue:
                     delivery_id,
                     "user",
                     thread_id,
-                    "turn_start" if command_payload is not None else "turn",
+                    "turn_start" if start is not None else "turn",
                     turn_id,
                     session_id,
                     thread_id,
-                    payload,
+                    message,
                     tuple(item.id for item in selected),
                     correlation_id=correlation_id,
+                    start=replace(start, queued=True) if start is not None else None,
                 )
             )
             selected_ids = set(envelope.source_message_ids)
@@ -264,11 +263,11 @@ class MemoryMessageQueue:
             ]
             self._counter += 1
             entry = (f"{self._counter}-0", envelope, 0.0, None)
-            if command_payload is not None:
+            if start is not None:
                 self._turn_start_stream.append(entry)
             else:
                 self._streams.setdefault(turn_id, []).append(entry)
-            self._receipts[delivery_id] = (fingerprint, "dispatched", envelope)
+            self._receipts[delivery_id] = (identity, "dispatched", envelope)
             self._condition.notify_all()
             return envelope
 
@@ -278,16 +277,16 @@ class MemoryMessageQueue:
         with self._lock:
             self.ping()
             self.require_thread_open(envelope.thread_id)
-            fingerprint = _envelope_fingerprint(envelope)
+            identity = _envelope_identity(envelope)
             receipt = self._receipts.get(envelope.delivery_id)
             if receipt is not None:
-                if receipt[0] != fingerprint:
+                if receipt[0] != identity:
                     raise DeliveryConflict("delivery_id_conflict")
                 return receipt[2]
             canonical = replace(envelope, attempts=0)
             self._counter += 1
             self._turn_start_stream.append((f"{self._counter}-0", canonical, 0.0, None))
-            self._receipts[envelope.delivery_id] = (fingerprint, "dispatched", canonical)
+            self._receipts[envelope.delivery_id] = (identity, "dispatched", canonical)
             self._condition.notify_all()
             return canonical
 
@@ -297,37 +296,57 @@ class MemoryMessageQueue:
         with self._lock:
             self.ping()
             self.require_thread_open(envelope.thread_id)
-            fingerprint = _envelope_fingerprint(envelope)
+            identity = _envelope_identity(envelope)
             receipt = self._receipts.get(envelope.delivery_id)
             if receipt is not None:
-                if receipt[0] != fingerprint:
+                if receipt[0] != identity:
                     raise DeliveryConflict("delivery_id_conflict")
                 return receipt[2]
             canonical = replace(envelope, attempts=0)
             self._counter += 1
             self._thread_streams.setdefault(envelope.target_id, []).append((f"{self._counter}-0", canonical, 0.0, None))
-            self._receipts[envelope.delivery_id] = (fingerprint, "dispatched", canonical)
+            self._receipts[envelope.delivery_id] = (identity, "dispatched", canonical)
             self._condition.notify_all()
             return canonical
 
-    def dispatch_report(self, envelope: MessageEnvelope) -> MessageEnvelope | AcknowledgedDelivery:
-        if envelope.sender_kind != "agent" or envelope.target_kind != "report":
-            raise ValueError("Report dispatch requires sender_kind=agent and target_kind=report.")
-        with self._lock:
+    @contextmanager
+    def prepare_reports(self) -> Iterator[Callable[[MessageEnvelope], None]]:
+        """Hold admission through SQLite commit; staged entries cannot be claimed."""
+        with self._condition:
             self.ping()
-            self.require_thread_open(envelope.thread_id)
-            fingerprint = _envelope_fingerprint(envelope)
-            receipt = self._receipts.get(envelope.delivery_id)
-            if receipt is not None:
-                if receipt[0] != fingerprint:
-                    raise DeliveryConflict("delivery_id_conflict")
-                return receipt[2]
-            canonical = replace(envelope, attempts=0)
-            self._counter += 1
-            self._report_streams.setdefault(envelope.target_id, []).append((f"{self._counter}-0", canonical, 0.0, None))
-            self._receipts[envelope.delivery_id] = (fingerprint, "dispatched", canonical)
-            self._condition.notify_all()
-            return canonical
+            staged: list[tuple[str, MessageEnvelope, float, str | None]] = []
+
+            def stage(envelope: MessageEnvelope) -> None:
+                if envelope.sender_kind != "agent" or envelope.target_kind != "report":
+                    raise ValueError("Report dispatch requires an Agent report.")
+                self.require_thread_open(envelope.thread_id)
+                self._counter += 1
+                entry = (f"{self._counter}-0", envelope, 0.0, "preparing")
+                self._report_streams.setdefault(envelope.target_id, []).append(entry)
+                staged.append(entry)
+
+            try:
+                yield stage
+            except BaseException:
+                for entry in staged:
+                    entries = self._report_streams.get(entry[1].target_id, [])
+                    entries[:] = [value for value in entries if value is not entry]
+                raise
+            else:
+                for entry in staged:
+                    entries = self._report_streams[entry[1].target_id]
+                    index = next(i for i, value in enumerate(entries) if value is entry)
+                    entries[index] = (entry[0], entry[1], 0.0, None)
+                self._condition.notify_all()
+
+    def has_start_request(self, thread_id: str) -> bool:
+        with self._lock:
+            return any(entry[1].thread_id == thread_id for entry in self._turn_start_stream)
+
+    def has_reports(self, thread_id: str) -> bool:
+        with self._lock:
+            entries = self._report_streams.get(thread_id, [])
+            return bool(entries and entries[0][3] is None)
 
     def claim(self, turn_id: str, consumer: str) -> ClaimedEnvelope | None:
         with self._lock:
@@ -364,6 +383,8 @@ class MemoryMessageQueue:
         with self._lock:
             entries = self._report_streams.get(thread_id, [])
             for index, (stream_id, envelope, claimed_at, owner) in enumerate(entries):
+                if owner is not None:
+                    return None
                 if owner is None:
                     claimed = replace(envelope, attempts=envelope.attempts + 1)
                     entries[index] = (stream_id, claimed, claimed_at + 1, consumer)
@@ -385,20 +406,21 @@ class MemoryMessageQueue:
                 streams[envelope.target_id] = [
                     item for item in streams.get(envelope.target_id, []) if item[0] != claimed.stream_id
                 ]
-                fingerprint, _, stored = self._receipts[envelope.delivery_id]
-                self._receipts[envelope.delivery_id] = (fingerprint, "acknowledged", stored)
+                if envelope.target_kind != "report":
+                    identity, _, stored = self._receipts[envelope.delivery_id]
+                    self._receipts[envelope.delivery_id] = (identity, "acknowledged", stored)
                 if self.on_change is not None:
                     self.on_change()
                 return
             if envelope.target_kind == "turn_start":
                 self._turn_start_stream = [item for item in self._turn_start_stream if item[0] != claimed.stream_id]
-                if bool(envelope.payload.get("queued")):
+                if envelope.start is not None and envelope.start.queued:
                     ids = set(envelope.source_message_ids)
                     self._queues[envelope.thread_id] = [
                         item for item in self._queues.get(envelope.thread_id, []) if item.id not in ids
                     ]
-                fingerprint, _, stored = self._receipts[envelope.delivery_id]
-                self._receipts[envelope.delivery_id] = (fingerprint, "acknowledged", stored)
+                identity, _, stored = self._receipts[envelope.delivery_id]
+                self._receipts[envelope.delivery_id] = (identity, "acknowledged", stored)
                 if self.on_change is not None:
                     self.on_change()
                 return
@@ -409,8 +431,8 @@ class MemoryMessageQueue:
             self._queues[envelope.thread_id] = [
                 item for item in self._queues.get(envelope.thread_id, []) if item.id not in ids
             ]
-            fingerprint, _, stored = self._receipts[envelope.delivery_id]
-            self._receipts[envelope.delivery_id] = (fingerprint, "acknowledged", stored)
+            identity, _, stored = self._receipts[envelope.delivery_id]
+            self._receipts[envelope.delivery_id] = (identity, "acknowledged", stored)
             if self.on_change is not None:
                 self.on_change()
 
@@ -423,8 +445,8 @@ class MemoryMessageQueue:
                     replace(item, state="pending", updated_at=queue_utc_now()) if item.id in ids else item
                     for item in self._queues.get(envelope.thread_id, [])
                 ]
-                fingerprint, _, stored = self._receipts[envelope.delivery_id]
-                self._receipts[envelope.delivery_id] = (fingerprint, "returned", stored)
+                identity, _, stored = self._receipts[envelope.delivery_id]
+                self._receipts[envelope.delivery_id] = (identity, "returned", stored)
 
 
 __all__ = ["MemoryMessageQueue"]

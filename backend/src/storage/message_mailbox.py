@@ -1,74 +1,53 @@
-"""Safe-boundary mailbox adapters consumed by AgentRuntime."""
+"""Typed mailbox deliveries consumed at runtime safe boundaries."""
 
 from __future__ import annotations
 
-from typing import Any
+from functools import partial
+
+from backend.domain.message_queue import ClaimedEnvelope, InputDelivery
 
 from .memory_message_queue import MemoryMessageQueue
 
 
-class TurnMailbox:
-    """Callable safe-boundary adapter consumed by AgentRuntime."""
+def _delivery(claimed: ClaimedEnvelope, queue: MemoryMessageQueue) -> InputDelivery:
+    envelope = claimed.envelope
+    return InputDelivery(
+        envelope.message,
+        envelope.delivery_id,
+        envelope.source_thread_id,
+        envelope.need_reply,
+        partial(queue.ack, claimed),
+    )
 
+
+class TurnMailbox:
     def __init__(self, queue: MemoryMessageQueue, turn_id: str, consumer: str) -> None:
         self.queue = queue
         self.turn_id = turn_id
         self.consumer = consumer
         self.closed = False
 
-    def take(self) -> list[dict[str, Any]]:
+    def take(self) -> list[InputDelivery]:
         if self.closed:
             return []
         claimed = self.queue.claim(self.turn_id, self.consumer)
-        if claimed is None:
-            return []
-        envelope = claimed.envelope
-        return [
-            {
-                "delivery_id": envelope.delivery_id,
-                "content": envelope.content,
-                "references": list(envelope.references),
-                "source_thread_id": envelope.source_thread_id,
-                "need_reply": bool(envelope.payload.get("need_reply", False)),
-                "_ack": lambda: self.queue.ack(claimed),
-            }
-        ]
+        return [_delivery(claimed, self.queue)] if claimed is not None else []
 
     def close(self) -> None:
         self.closed = True
 
 
 class AgentMailbox(TurnMailbox):
-    """Safe-boundary adapter combining one Turn stream and its Thread mailbox."""
-
-    def __init__(
-        self,
-        queue: MemoryMessageQueue,
-        turn_id: str,
-        thread_id: str,
-        consumer: str,
-    ) -> None:
+    def __init__(self, queue: MemoryMessageQueue, turn_id: str, thread_id: str, consumer: str) -> None:
         super().__init__(queue, turn_id, consumer)
         self.thread_id = thread_id
 
-    def take(self) -> list[dict[str, Any]]:
-        turn_items = super().take()
-        if turn_items or self.closed:
-            return turn_items
+    def take(self) -> list[InputDelivery]:
+        deliveries = super().take()
+        if deliveries or self.closed:
+            return deliveries
         claimed = self.queue.claim_thread(self.thread_id, self.consumer)
-        if claimed is None:
-            return []
-        envelope = claimed.envelope
-        return [
-            {
-                "delivery_id": envelope.delivery_id,
-                "content": envelope.content,
-                "references": list(envelope.references),
-                "source_thread_id": envelope.source_thread_id,
-                "need_reply": bool(envelope.payload.get("need_reply", False)),
-                "_ack": lambda: self.queue.ack(claimed),
-            }
-        ]
+        return [_delivery(claimed, self.queue)] if claimed is not None else []
 
 
 __all__ = ["AgentMailbox", "TurnMailbox"]

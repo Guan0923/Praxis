@@ -146,7 +146,7 @@ class ToolBatchExecutor:
 
         def ensure_start_allowed() -> None:
             nonlocal steering
-            if runtime.stop_requested():
+            if runtime.operation_interrupted():
                 stop.set()
             with steering_lock:
                 if steering is None:
@@ -256,11 +256,11 @@ class ToolBatchExecutor:
                             steering = collect_steering(runtime)
                             if steering is not None:
                                 stop.set()
-                if runtime.stop_requested():
+                if runtime.operation_interrupted():
                     stop.set()
 
                 pending_config = runtime.services.pending_runtime_config
-                target_mode = pending_config.get("running_mode") if isinstance(pending_config, dict) else None
+                target_mode = pending_config.running_mode if pending_config is not None else None
                 if target_mode in {"agent", "plan"} and target_mode != runtime.run.mode:
                     mode_change_requested = True
                     stop.set()

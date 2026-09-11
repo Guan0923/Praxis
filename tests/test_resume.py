@@ -255,7 +255,7 @@ def test_web_resume_reuses_external_bridge_for_plan_compaction_handoff(tmp_path:
         thread_id=session_id,
         source_node_id=paused.turn_id,
         adopt_existing=True,
-        prompt="",
+        message=None,
         running_mode="plan",
         emit=frames.append,
     )

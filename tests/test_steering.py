@@ -4,6 +4,8 @@ from collections import deque
 from pathlib import Path
 
 from backend.domain import AssistantMessage, ToolMessage, UserMessage
+from backend.domain.input_message import InputMessage
+from backend.domain.message_queue import InputDelivery
 from backend.runtime import AgentRunner, ConversationService
 from backend.tools import Tool, ToolRegistry
 from tests.local_store import session_store
@@ -28,8 +30,8 @@ class SteeringPlanner:
 def sequence_handler(values: list[list[str]]):
     pending = deque(values)
 
-    def drain() -> list[str]:
-        return pending.popleft() if pending else []
+    def drain() -> list[InputDelivery]:
+        return [InputDelivery(InputMessage(text)) for text in pending.popleft()] if pending else []
 
     return drain
 
@@ -178,10 +180,10 @@ def test_steering_during_tool_keeps_result_and_stops_remaining_actions() -> None
         queued.append("use the first result only")
         return "first result"
 
-    def drain() -> list[str]:
+    def drain() -> list[InputDelivery]:
         messages = list(queued)
         queued.clear()
-        return messages
+        return [InputDelivery(InputMessage(text)) for text in messages]
 
     runner = AgentRunner(
         TwoToolPlanner(),

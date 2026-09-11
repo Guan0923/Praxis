@@ -1,13 +1,12 @@
-"""Consume user steering at explicit runtime safe points."""
+"""Consume typed input deliveries at explicit runtime safe points."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 
 from backend.domain import UserMessage
-from backend.domain.file_paths import FILE_SOURCES, is_reference_path
+from backend.domain.input_message import InputMessage
+from backend.domain.message_queue import InputDelivery
 
 from ..core.context import AgentRuntime
 from ..core.events import RuntimeEvent
@@ -15,80 +14,41 @@ from ..core.events import RuntimeEvent
 
 @dataclass(frozen=True)
 class SteeringUpdate:
-    content: str
-    message_count: int
-    delivery_id: str = ""
-    references: tuple[dict[str, str], ...] = ()
-    ack: Callable[[], None] | None = None
-    source_thread_id: str = ""
-    need_reply: bool = False
+    delivery: InputDelivery
+    message_count: int = 1
 
+    @property
+    def content(self) -> str:
+        return self.delivery.message.text
 
-def _model_content_with_references(content: str, references: tuple[dict[str, str], ...]) -> str:
-    reference_lines = [
-        f"- @{Path(reference['path']).as_posix()}" + (f" ({reference['source']})" if reference.get("source") else "")
-        for reference in references
-    ]
-    if not reference_lines:
-        return content
-    return f"{content}\n\nFile references:\n" + "\n".join(reference_lines)
+    @property
+    def delivery_id(self) -> str:
+        return self.delivery.delivery_id
+
+    @property
+    def source_thread_id(self) -> str:
+        return self.delivery.source_thread_id
+
+    @property
+    def need_reply(self) -> bool:
+        return self.delivery.need_reply
 
 
 def collect_steering(runtime: AgentRuntime) -> SteeringUpdate | None:
-    """Atomically drain the process-local steering handler without blocking."""
-
     handler = runtime.services.steering
     if handler is None:
         return None
-    raw_messages = handler()
-    messages: list[str] = []
-    delivery_id = ""
-    ack: Callable[[], None] | None = None
-    references: list[dict[str, str]] = []
-    seen_references: set[tuple[str, str]] = set()
-    source_thread_id = ""
-    need_reply = False
-    for raw in raw_messages:
-        if isinstance(raw, Mapping):
-            content = str(raw.get("content") or "").strip()
-            delivery_id = delivery_id or str(raw.get("delivery_id") or "")
-            candidate_ack = raw.get("_ack")
-            if ack is None and callable(candidate_ack):
-                ack = candidate_ack
-            source_thread_id = source_thread_id or str(raw.get("source_thread_id") or "")
-            need_reply = need_reply or bool(raw.get("need_reply", False))
-            for value in raw.get("references", []):
-                if not isinstance(value, Mapping):
-                    continue
-                source = str(value.get("source") or "")
-                path = str(value.get("path") or "")
-                display_path = str(value.get("display_path") or "")
-                key = (source, path)
-                if (
-                    ((source in FILE_SOURCES and display_path) or not source)
-                    and is_reference_path(path)
-                    and path
-                    and key not in seen_references
-                ):
-                    seen_references.add(key)
-                    references.append(
-                        {"source": source, "path": path, "display_path": display_path} if source else {"path": path}
-                    )
-        else:
-            content = str(raw).strip()
-        if content or references:
-            messages.append(content)
-    if not messages:
+    deliveries = handler()
+    if not deliveries:
         return None
-    return SteeringUpdate(
-        "\n\n".join(messages),
-        len(messages),
-        delivery_id,
-        tuple(references),
-        ack,
-        source_thread_id,
-        need_reply,
-    )
+    if len(deliveries) == 1:
+        return SteeringUpdate(deliveries[0])
+    # Queue-backed mailboxes claim one delivery; embedding callers may batch untracked input.
+    if any(item.delivery_id or item.confirm for item in deliveries):
+        raise ValueError("Tracked steering must be consumed one delivery at a time.")
+    references = tuple(dict.fromkeys(ref for item in deliveries for ref in item.message.references))
+    message = InputMessage("\n\n".join(item.message.text for item in deliveries), references)
+    return SteeringUpdate(InputDelivery(message), len(deliveries))
 
 
 def apply_steering(runtime: AgentRuntime, update: SteeringUpdate, *, phase: str) -> None:
@@ -102,7 +62,7 @@ def apply_steering(runtime: AgentRuntime, update: SteeringUpdate, *, phase: str)
         "message_count": update.message_count,
         "phase": phase,
         "delivery_id": update.delivery_id,
-        "references": list(update.references),
+        "references": update.delivery.message.reference_dicts(),
     }
     publish(RuntimeEvent("steering_received", "In-run user input received", data))
 
@@ -114,9 +74,7 @@ def apply_steering(runtime: AgentRuntime, update: SteeringUpdate, *, phase: str)
         and has_turn_delivery(runtime.state.session_id, update.delivery_id)
     )
     if not already_applied:
-        runtime.state.messages.append(
-            UserMessage(content=_model_content_with_references(update.content, update.references))
-        )
+        runtime.state.messages.append(UserMessage(content=update.delivery.message.model_text()))
         runtime.run.history = runtime.state.messages
     if store is not None:
         store.append_turn_input(
@@ -135,8 +93,7 @@ def apply_steering(runtime: AgentRuntime, update: SteeringUpdate, *, phase: str)
             raise RuntimeError("A reply-requesting Agent message has no canonical report registration path.")
         register_report(runtime.run.turn_id, runtime.run.thread_id, update.source_thread_id)
     runtime.save()
-    if update.ack is not None:
-        update.ack()
+    update.delivery.acknowledge()
 
 
 def consume_steering(runtime: AgentRuntime, *, phase: str) -> SteeringUpdate | None:
