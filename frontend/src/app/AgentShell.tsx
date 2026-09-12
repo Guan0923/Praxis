@@ -97,7 +97,6 @@ export default function AgentShell(props: AgentShellProps) {
   const isMobile = screens.md === false;
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [chatRevealKey, setChatRevealKey] = useState(0);
   const [visited, setVisited] = useState(() => new Set<Page>([props.page]));
   const [chatWasHidden, setChatWasHidden] = useState(false);
   useEffect(() => {
@@ -116,9 +115,6 @@ export default function AgentShell(props: AgentShellProps) {
     if (isMobile) setSidebarCollapsed(false);
     else setMobileSidebarOpen(false);
   }, [isMobile]);
-  useEffect(() => {
-    if (props.page === "chat") setChatRevealKey((current) => current + 1);
-  }, [props.page]);
   useEffect(() => {
     const width = panel.payload?.state.width || DEFAULT_RIGHT_PANEL_WIDTH;
     rawPanelWidthRef.current = width;
@@ -199,7 +195,6 @@ export default function AgentShell(props: AgentShellProps) {
         if (isMobile) closeMobile();
         else setSidebarCollapsed((current) => !current);
       }}
-      revealKey={chatRevealKey}
     />
   );
   const sourceTurnId = props.current?.activeTurnId ?? props.current?.lastNodeId;

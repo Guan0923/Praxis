@@ -74,7 +74,6 @@ export default function AppSidebar({
   onOpenSettings,
   collapsed = false,
   onToggleCollapse,
-  revealKey = 0,
 }: AppSidebarProps) {
   const { modal } = AntApp.useApp();
   const currentProjectId = conversations.find((conversation) => conversation.id === currentId)?.projectId;
@@ -82,6 +81,7 @@ export default function AppSidebar({
   const { expandedProjectIds, setExpandedProjectIds } = useProjectExpansion(projectIds, currentProjectId, projectsLoaded);
   const displayName = profile.display_name.trim() || "本地用户";
   const [savingScopes, setSavingScopes] = useState<Set<string>>(() => new Set());
+  const [revealComplete, setRevealComplete] = useState(false);
   const groupActionQueues = useRef(new Map<string, Promise<void>>());
 
   function scopeKey(projectId: string | null): string {
@@ -179,7 +179,13 @@ export default function AppSidebar({
       className="app-sidebar"
       style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, padding: "20px 12px 12px", background: "var(--sidebar-bg)" }}
     >
-      <div className={`sidebar-reveal-shell${page === "chat" ? " sidebar-reveal-active" : ""}`} key={revealKey}>
+      <div
+        className={"sidebar-reveal-shell" + (revealComplete ? "" : " sidebar-reveal-active")}
+        onAnimationEnd={(event) => {
+          if (event.animationName === "chat-sidebar-reveal"
+            && (event.target as HTMLElement).dataset.revealIndex === "5") setRevealComplete(true);
+        }}
+      >
         <div className="sidebar-header sidebar-reveal-item" data-reveal-index="0">
           <Typography.Text className="sidebar-project-title">Praxis</Typography.Text>
           {onToggleCollapse ? (

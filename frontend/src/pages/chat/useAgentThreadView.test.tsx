@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
+import { MemoryRouter, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TURN_PROTOCOL_VERSION } from "../../app/runtime/runtimeNodeNormalization";
@@ -171,6 +172,42 @@ beforeEach(() => {
 });
 
 describe("useAgentThreadView", () => {
+  it("retains the child on utility pages and follows chat URLs on back and forward", async () => {
+    const selections: (string | undefined)[] = [];
+    function RoutedHarness() {
+      const navigate = useNavigate();
+      const view = useAgentThreadView({
+        canonical: initialConversations.session_a, enabled: true,
+        retainedConversationIds: ["session_a"], onUpdate: vi.fn(),
+      });
+      selections.push(view.selectedThreadId);
+      return <>
+        <button onClick={() => navigate("/benchmark")}>benchmark</button>
+        <button onClick={() => navigate("/trash")}>trash</button>
+        <button onClick={() => navigate(-1)}>back</button>
+        <button onClick={() => navigate(1)}>forward</button>
+        <button onClick={() => navigate("/chat/session_a/session_a")}>root</button>
+        <output>{view.conversation?.threadId}</output>
+      </>;
+    }
+    render(<MemoryRouter initialEntries={["/chat/session_a/session_a/agent/thread_a_child"]}><RoutedHarness /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText("thread_a_child")).toBeInTheDocument());
+    for (const name of ["benchmark", "trash", "back", "back", "forward", "forward"]) {
+      fireEvent.click(screen.getByRole("button", { name }));
+      expect(screen.getByText("thread_a_child")).toBeInTheDocument();
+    }
+    expect(selections.every((id) => id === "thread_a_child")).toBe(true);
+    expect(api.streamAgentThread).toHaveBeenCalledTimes(1);
+    expect(api.getSessionNodes).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "root" }));
+    expect(screen.getByText("session_a")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "back" }));
+    expect(screen.getByText("session_a")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "back" }));
+    fireEvent.click(screen.getByRole("button", { name: "back" }));
+    expect(screen.getByText("thread_a_child")).toBeInTheDocument();
+  });
+
   it("appends child history without replacing the root conversation", async () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole("button", { name: "select child A" }));

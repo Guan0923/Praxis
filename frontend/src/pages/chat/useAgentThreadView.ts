@@ -292,6 +292,10 @@ export function useAgentThreadView({ canonical, enabled, onUpdate, retainedConve
 function useChatRoute() {
   const location = useContext(UNSAFE_LocationContext);
   const navigation = useContext(UNSAFE_NavigationContext);
-  return location && navigation ? { route: parseChatPath(location.location.pathname),
+  const route = location ? parseChatPath(location.location.pathname) : null;
+  const lastChatRoute = useRef(route);
+  // Hidden chat content must keep its thread until another chat URL is selected.
+  if (location && !["/benchmark", "/trash"].includes(location.location.pathname)) lastChatRoute.current = route;
+  return location && navigation ? { route: lastChatRoute.current,
     navigate: (path: string) => navigation.navigator.push(path) } : null;
 }
