@@ -18,7 +18,6 @@ class Budgets:
     """Per-task execution limits passed through to the runtime."""
 
     max_tool_calls: int | None = 32
-    timeout_seconds: float = 3600
 
 
 @dataclass(frozen=True)

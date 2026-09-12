@@ -39,7 +39,7 @@ def cache_root() -> Path:
 def command(
     args: list[str],
     *,
-    timeout: float = 60,
+    timeout: float | None = 60,
     cancelled: Callable[[], bool] | None = None,
     data: bytes | None = None,
     check: bool = True,
@@ -57,12 +57,12 @@ def command(
             stderr=subprocess.STDOUT,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        deadline = monotonic() + timeout
+        deadline = monotonic() + timeout if timeout is not None else None
         try:
             while process.poll() is None:
                 if cancelled is not None and cancelled():
                     raise ContainerCancelled("Benchmark stopped.")
-                if monotonic() >= deadline:
+                if deadline is not None and monotonic() >= deadline:
                     raise ContainerTimeout("Benchmark operation timed out.")
                 if output.tell() > 16_000_000:
                     raise RuntimeError("Benchmark command exceeded its output limit.")
@@ -115,7 +115,9 @@ class TaskContainer:
         self.tools_open = True
         self.build_proxy: str | None = None
 
-    def docker(self, *args: str, timeout: float = 60, data: bytes | None = None, check: bool = True) -> tuple[int, str]:
+    def docker(
+        self, *args: str, timeout: float | None = 60, data: bytes | None = None, check: bool = True
+    ) -> tuple[int, str]:
         return command(["docker", *args], timeout=timeout, cancelled=self.cancelled, data=data, check=check)
 
     def prepare_image(self, *, prepared: bool = True, allow_download: bool = True) -> str:
@@ -217,7 +219,7 @@ class TaskContainer:
             raise
 
     def exec(
-        self, script: str, *, timeout: float = 60, data: bytes | None = None, check: bool = True
+        self, script: str, *, timeout: float | None = 60, data: bytes | None = None, check: bool = True
     ) -> tuple[int, str]:
         try:
             environment = (

@@ -262,7 +262,7 @@ export default function BenchmarkPage({ active = true }: { active?: boolean }) {
                           <Typography.Text strong>测试 Prompt</Typography.Text>
                           <pre className="benchmark-task-prompt">{task.prompt}</pre>
                           <Typography.Text type="secondary">
-                            时限：{task.budgets.timeout_seconds / 60} 分钟 · 工具调用：{task.budgets.max_tool_calls ?? "不限次数"}
+                            工具调用：{task.budgets.max_tool_calls ?? "不限次数"}
                           </Typography.Text>
                           {task.tags.length > 0 ? <div className="benchmark-task-tags">{task.tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}</div> : null}
                         </>

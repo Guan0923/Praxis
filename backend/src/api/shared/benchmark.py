@@ -113,7 +113,6 @@ def list_tasks(request: Request) -> list[dict]:
             "difficulty": task.difficulty,
             "budgets": {
                 "max_tool_calls": task.budgets.max_tool_calls,
-                "timeout_seconds": task.budgets.timeout_seconds,
             },
             "suite_version": task.suite_version,
             "environment": {"kind": "docker" if task.container else "local", "status": image_status(task)},

@@ -8,7 +8,6 @@ export interface TaskInfo {
   prompt: string;
   budgets: {
     max_tool_calls: number | null;
-    timeout_seconds: number;
   };
   suite_version: string;
   environment: { kind: "docker" | "local"; status: string };

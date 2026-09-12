@@ -15,7 +15,7 @@ TASKS = tuple(
         prompt=item["prompt"],
         source=SourceMetadata(**item["source"]),
         tags=tuple(item["tags"]),
-        budgets=Budgets(None, item["container"]["agent_seconds"]),
+        budgets=Budgets(max_tool_calls=None),
         container=item["container"],
         suite_version=_manifest["suite_version"],
     )

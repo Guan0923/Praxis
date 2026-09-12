@@ -6,7 +6,7 @@ import shutil
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from time import monotonic, perf_counter
+from time import perf_counter
 
 from backend.domain import error_report, safe_error_message
 from backend.providers import ModelConfigurationError
@@ -128,8 +128,6 @@ def run_one_task(
     primary_error: BaseException | None = None
     phase = "workspace"
     container = None
-    deadline: float | None = None
-    timed_out = False
 
     def progress(value: str) -> None:
         nonlocal phase
@@ -143,10 +141,7 @@ def run_one_task(
             on_event(event)
 
     def cancelled() -> bool:
-        nonlocal timed_out
-        if deadline is not None and monotonic() >= deadline:
-            timed_out = True
-        return timed_out or (cancel_requested is not None and cancel_requested())
+        return cancel_requested is not None and cancel_requested()
 
     try:
         progress("workspace")
@@ -186,7 +181,6 @@ def run_one_task(
         conversation = app.open_conversation()
         started = perf_counter()
         progress("agent")
-        deadline = monotonic() + task.budgets.timeout_seconds
         state = conversation.run_task(
             task.prompt,
             mode="agent",
@@ -197,13 +191,6 @@ def run_one_task(
         duration_ms = (perf_counter() - started) * 1000.0
 
         metrics = build_metrics(collector, state, duration_ms)
-        cancelled()
-        deadline = None
-        if timed_out:
-            return replace(
-                _error_result(task, "Task execution timed out.", trace=trace, failure_phase="timeout"),
-                metrics=metrics,
-            )
         context = CheckContext(
             task_name=task.name,
             workspace=workspace,
@@ -238,8 +225,6 @@ def run_one_task(
             failure_phase="agent" if state.status != "completed" else None,
         )
     except ContainerCancelled:
-        if timed_out:
-            return _error_result(task, "Task execution timed out.", trace=trace, failure_phase="timeout")
         return replace(_error_result(task, "Run cancelled.", trace=trace, failure_phase=phase), status="cancelled")
     except ContainerTimeout:
         return _error_result(task, "Benchmark operation timed out.", trace=trace, failure_phase="timeout")

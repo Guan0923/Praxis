@@ -6,7 +6,7 @@ import json
 import os
 import socket
 from dataclasses import replace
-from threading import Event, Thread
+from threading import Event, Thread, Timer
 
 import httpx
 import pytest
@@ -14,7 +14,7 @@ import uvicorn
 
 from backend.runtime import RunnerSettings
 from backend.runtime.core.context.state import RuntimeState
-from benchmarks.containers import ContainerTimeout, TaskContainer, cache_root, command
+from benchmarks.containers import ContainerCancelled, ContainerTimeout, TaskContainer, cache_root, command
 from benchmarks.tasks import TASKS_BY_NAME
 from tests.benchmark_local_support import acceptance_app, local_model
 from tests.test_benchmark_service import until
@@ -31,6 +31,22 @@ def test_cli_timeout_terminates_its_child():
 
     with pytest.raises(ContainerTimeout):
         command([sys.executable, "-c", "import time; time.sleep(10)"], timeout=0.1)
+
+
+def test_unlimited_command_completes_and_can_still_be_cancelled():
+    import sys
+
+    code, output = command([sys.executable, "-c", "print('finished')"], timeout=None)
+    assert code == 0 and output.strip() == "finished"
+    cancelled = Event()
+    timer = Timer(0.2, cancelled.set)
+    timer.start()
+    try:
+        with pytest.raises(ContainerCancelled):
+            command([sys.executable, "-c", "import time; time.sleep(10)"], timeout=None, cancelled=cancelled.is_set)
+    finally:
+        timer.cancel()
+        timer.join()
 
 
 @pytest.mark.skipif(
@@ -134,23 +150,20 @@ def test_public_task_real_http_runtime_container_and_upstream_grading(name, solv
 @pytest.mark.skipif(
     os.environ.get("PRAXIS_TEST_DOCKER") != "1", reason="Set PRAXIS_TEST_DOCKER=1 for real Docker tests"
 )
-@pytest.mark.parametrize("failure", ["timeout", "environment"])
-def test_real_runtime_distinguishes_timeout_and_environment_errors(failure, tmp_path):
+def test_real_runtime_reports_environment_errors(tmp_path):
     from benchmarks.runner import run_one_task
     from benchmarks.sandbox import Sandbox
 
     original = TASKS_BY_NAME["tb2-log-summary-date-ranges"]
-    task = replace(original, budgets=replace(original.budgets, timeout_seconds=0.5))
-    if failure == "environment":
-        task = replace(task, container={**task.container, "source_image_id": "sha256:wrong-image"})
+    task = replace(original, container={**original.container, "source_image_id": "sha256:wrong-image"})
     with local_model(tool_name="container_exec", tool_arguments={"command": "sleep 30"}) as (config, calls):
-        sandbox = Sandbox(tmp_path / failure, model_config=config)
+        sandbox = Sandbox(tmp_path / "environment", model_config=config)
         sandbox.prepare()
         result = run_one_task(task, planner="llm", sandbox=sandbox)
     assert result.status == "error"
-    assert result.failure_phase == failure
+    assert result.failure_phase == "environment"
     assert result.score is None
-    assert bool(calls) == (failure == "timeout")
+    assert not calls
 
 
 @pytest.mark.skipif(

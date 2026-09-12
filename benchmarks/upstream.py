@@ -93,7 +93,7 @@ def run_oracle(container: TaskContainer) -> None:
     task_source(container)
     if container.spec["kind"] == "terminal_bench":
         upload_upstream(container, "solution", "/solution")
-        container.exec("bash /solution/solve.sh", timeout=container.spec["agent_seconds"])
+        container.exec("bash /solution/solve.sh", timeout=None)
         container.exec("rm -rf /solution")
     else:
         row = swe_row(container)

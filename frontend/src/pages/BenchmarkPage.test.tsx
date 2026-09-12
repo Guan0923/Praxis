@@ -25,7 +25,7 @@ const task = (name: string): TaskInfo => ({
   description: "修复一个需要较长说明的适配任务",
   difficulty: "中等",
   prompt: "请修复这个适配任务并说明原因。",
-  budgets: { max_tool_calls: 32, timeout_seconds: 3600 },
+  budgets: { max_tool_calls: 32 },
   suite_version: "test-suite",
   environment: { kind: "local", status: "local" },
   tags: ["适配"],
