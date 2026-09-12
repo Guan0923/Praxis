@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.app import create_app
@@ -38,7 +40,10 @@ def test_turn_mailbox_consumes_one_fifo_delivery_per_boundary() -> None:
     inbox.close()
 
 
-def test_steer_endpoint_accepts_only_an_active_running_turn_and_normalizes_references(tmp_path: Path) -> None:
+@pytest.mark.parametrize("execution_id", ["turn_running", "original_plan_turn"])
+def test_steer_endpoint_accepts_only_an_active_running_turn_and_normalizes_references(
+    tmp_path: Path, execution_id: str
+) -> None:
     state = WebAppState(tmp_path / "web")
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
@@ -58,7 +63,7 @@ def test_steer_endpoint_accepts_only_an_active_running_turn_and_normalizes_refer
             provider_name="local",
         )
         store.create_node(turn)
-        state.active_turn_streams = {turn.id: object()}
+        state.active_turn_streams = {turn.id: SimpleNamespace(turn_id=execution_id)}
         queued = client.post(
             f"/api/sidebar-threads/{sidebar['thread_id']}/queued-messages",
             json={
@@ -81,7 +86,7 @@ def test_steer_endpoint_accepts_only_an_active_running_turn_and_normalizes_refer
         )
 
         assert response.status_code == 202
-        claimed = state.message_queue.claim(turn.id, "worker")
+        claimed = state.message_queue.claim(execution_id, "worker")
         assert claimed is not None
         assert claimed.envelope.delivery_id == "delivery-1"
         assert claimed.envelope.message.text == "redirect"
@@ -105,7 +110,7 @@ def test_steer_endpoint_accepts_only_an_active_running_turn_and_normalizes_refer
         failed = turn.clone()
         failed.status = "failed"
         store.update_node(failed)
-        state.active_turn_streams[turn.id] = object()
+        state.active_turn_streams[turn.id] = SimpleNamespace(turn_id=turn.id)
         assert (
             client.post(
                 f"/api/turns/{turn.id}/steer",

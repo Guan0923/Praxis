@@ -10,6 +10,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { Empty } from "antd";
+import { useRef } from "react";
 import type { Conversation } from "../../types";
 import { HistoryRow } from "./ConversationHistory";
 import type { HistoryMutationProps } from "./types";
@@ -45,9 +46,11 @@ export function SortableHistoryList({
     useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
+  const suppressClick = useRef(false);
   const ids = conversations.map((conversation) => conversation.id);
 
   function finishDrag(event: DragEndEvent) {
+    suppressClick.current = true;
     const activeId = String(event.active.id);
     const overId = event.over ? String(event.over.id) : null;
     if (!overId || activeId === overId || disabled) return;
@@ -60,7 +63,10 @@ export function SortableHistoryList({
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={finishDrag}>
       <SortableContext items={ids} strategy={verticalListSortingStrategy}>
         {conversations.length > 0 ? (
-          <ul className="history-list" aria-label="对话列表">
+          <ul className="history-list" aria-label="对话列表"
+            onPointerDownCapture={() => { suppressClick.current = false; }}
+            onKeyDownCapture={() => { suppressClick.current = false; }}
+            onClickCapture={(event) => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false; } }}>
             {conversations.map((conversation) => (
               <HistoryRow
                 key={conversation.id}

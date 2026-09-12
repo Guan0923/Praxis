@@ -43,21 +43,24 @@ export function useComposerFiles({
     const previous = owner.current === key ? values.current.input : viewSnapshot(key).draft;
     const next = typeof action === "function" ? action(previous) : action;
     if (next === previous) return;
-    if (owner.current === key) { values.current.input = next; rawSetInput(next); }
+    if (owner.current === key) values.current.input = next;
     patchView(key, { draft: next });
+    if (owner.current === key) rawSetInput(next);
   };
   const setReferences = (action: SetStateAction<FileReference[]>) => {
     const previous = owner.current === key ? values.current.references : viewSnapshot(key).references;
     const next = typeof action === "function" ? action(previous) : action;
     if (JSON.stringify(next) === JSON.stringify(previous)) return;
-    if (owner.current === key) { values.current.references = next; rawSetReferences(next); }
+    if (owner.current === key) values.current.references = next;
     patchView(key, { references: next });
+    if (owner.current === key) rawSetReferences(next);
   };
   const setPendingUploads = (action: SetStateAction<PendingUpload[]>) => {
     const previous = owner.current === key ? values.current.pendingUploads : viewSnapshot(key).uploads;
     const next = typeof action === "function" ? action(previous) : action;
-    if (owner.current === key) { values.current.pendingUploads = next; rawSetPendingUploads(next); }
+    if (owner.current === key) values.current.pendingUploads = next;
     patchView(key, { uploads: next.filter((item) => item.status === "done" && item.path).map(({ file: _file, error: _error, ...item }) => item) });
+    if (owner.current === key) rawSetPendingUploads(next);
   };
   const fileSearchTimerRef = useRef<number | null>(null);
   const latestFileTriggerRef = useRef<FileTrigger | null>(null);
@@ -81,11 +84,13 @@ export function useComposerFiles({
       }
       return;
     }
-    if (restoredKey.current === key && saved.value.draft === values.current.input
-      && JSON.stringify(saved.value.references) === JSON.stringify(values.current.references)
-      && JSON.stringify(saved.value.uploads) === JSON.stringify(values.current.pendingUploads.filter((item) => item.status === "done"))) return;
+    // Effects can belong to an older render while the editor has already changed.
+    const snapshot = viewSnapshot(key);
+    if (restoredKey.current === key && snapshot.draft === values.current.input
+      && JSON.stringify(snapshot.references) === JSON.stringify(values.current.references)
+      && JSON.stringify(snapshot.uploads) === JSON.stringify(values.current.pendingUploads.filter((item) => item.status === "done"))) return;
     restoredKey.current = key;
-    const { draft, references: refs, uploads } = saved.value;
+    const { draft, references: refs, uploads } = snapshot;
     values.current = { input: draft, references: refs, pendingUploads: uploads };
     rawSetInput(draft); rawSetReferences(refs); rawSetPendingUploads(uploads);
     editorRef.current?.restore(draft, refs);

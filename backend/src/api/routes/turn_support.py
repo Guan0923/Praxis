@@ -33,8 +33,19 @@ from ..session_files.store import SessionFileError, SessionFileStore
 from ..state import WebAppState
 
 
-def _turn(store, turn_id: str) -> RuntimeState:
-    item = store.find_node(turn_id)
+def _turn(store, turn_id: str, *, state=None, session_id: str | None = None) -> RuntimeState:
+    bridge = next(
+        (
+            bridge
+            for (_, node_id), bridge in getattr(state, "live_turn_bridges", {}).items()
+            if node_id == turn_id and not bridge.closed
+        ),
+        None,
+    )
+    if bridge is not None:
+        item = bridge.writer.view(bridge.session_id, turn_id)
+    else:
+        item = store.get_node(session_id, turn_id) if session_id else store.find_node(turn_id)
     if item is None:
         raise HTTPException(status_code=404, detail="未知 Turn。")
     if isinstance(item, RuntimeRootState):
@@ -92,6 +103,9 @@ def create_initial_turn(
     turn_id: str,
     delivery_id: str,
 ) -> tuple[RuntimeState, TurnExecutionConfig]:
+    if not parent_id:
+        thread = store.get_runtime_thread(session_id, thread_id)
+        parent_id = thread.current_turn_id if thread and thread.current_turn_id else ""
     parent = store.get_node(session_id, parent_id) if parent_id else store.ensure_root_node(session_id)
     if parent is None:
         raise ValueError("Unknown parent Turn.")

@@ -39,11 +39,20 @@ export function useRightPanel(
   sourceTurnId: string | undefined,
   onHydrate: (window: RightPanelWindow) => Promise<void>,
   onForget: (windowId: string) => void,
+  ownerThreadId?: string,
 ): RightPanelController {
   const { message } = App.useApp();
   const ownership = useSessionOwnership(sessionId);
   const writable = !sessionId || ownership === "writable";
-  const [payload, setPayload] = useState<RightPanelPayload | null>(null);
+  const scope = `${sessionId ?? ""}/${ownerThreadId ?? sessionId ?? ""}`;
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  const [stored, setStored] = useState<{ scope: string; value: RightPanelPayload | null }>({ scope, value: null });
+  const payload = stored.scope === scope ? stored.value : null;
+  const setPayload = (update: React.SetStateAction<RightPanelPayload | null>) => {
+    if (scopeRef.current !== scope) return;
+    setStored((current) => ({ scope, value: typeof update === "function" ? update(current.scope === scope ? current.value : null) : update }));
+  };
   const [loading, setLoading] = useState(false);
   const hydrateRef = useRef(onHydrate);
   const forgetRef = useRef(onForget);
@@ -67,17 +76,15 @@ export function useRightPanel(
       return () => { active = false; };
     }
     const requestId = ++requestRef.current;
-    setLoading(true);
-    void getRightPanel(sessionId)
+    void getRightPanel(sessionId, ownerThreadId)
       .then((next) => {
         if (!active || requestId !== requestRef.current) return;
         setPayload(next);
         return Promise.all(next.windows.filter((item) => item.kind === "side_chat").map(hydrateRef.current));
       })
-      .catch((error) => { if (active) void message.error({ content: <ErrorDisplay error={error} /> }); })
-      .finally(() => { if (active && requestId === requestRef.current) setLoading(false); });
+      .catch((error) => { if (active) void message.error({ content: <ErrorDisplay error={error} /> }); });
     return () => { active = false; };
-  }, [sessionId, invalidation]);
+  }, [sessionId, ownerThreadId, invalidation]);
 
   const createWindow = async (kind: "side_chat" | "terminal" | "files") => {
     if (!sessionId) throw new Error("当前没有可用会话。");
@@ -86,21 +93,21 @@ export function useRightPanel(
     setLoading(true);
     try {
       if (kind === "side_chat") {
-        const created = await createSideChat(sessionId, sourceTurnId!);
+        const created = await createSideChat(sessionId, sourceTurnId!, ownerThreadId);
         const requestId = ++requestRef.current;
-        const next = await getRightPanel(sessionId);
+        const next = await getRightPanel(sessionId, ownerThreadId);
         if (requestId !== requestRef.current) return;
         setPayload(next);
         await hydrateRef.current(created.window);
       } else if (kind === "terminal") {
-        await createPanelTerminal(sessionId, sourceTurnId!);
+        await createPanelTerminal(sessionId, sourceTurnId!, ownerThreadId);
         const requestId = ++requestRef.current;
-        const next = await getRightPanel(sessionId);
+        const next = await getRightPanel(sessionId, ownerThreadId);
         if (requestId === requestRef.current) setPayload(next);
       } else {
-        await createFilesWindow(sessionId);
+        await createFilesWindow(sessionId, ownerThreadId);
         const requestId = ++requestRef.current;
-        const next = await getRightPanel(sessionId);
+        const next = await getRightPanel(sessionId, ownerThreadId);
         if (requestId === requestRef.current) setPayload(next);
       }
     } finally {
@@ -122,13 +129,13 @@ export function useRightPanel(
       windows: current.windows.filter((item) => item.id !== window.id),
     } : current);
     forgetRef.current(window.id);
-    await closeRightPanelWindow(sessionId, window.id);
+    await closeRightPanelWindow(sessionId, window.id, ownerThreadId);
   };
 
   const renameWindow = async (window: RightPanelWindow, title: string) => {
     if (!sessionId || !title.trim()) return;
     if (!writable) throw new Error("当前 session 正在另一个窗口对话。");
-    const updated = await renameRightPanelWindow(sessionId, window.id, title.trim());
+    const updated = await renameRightPanelWindow(sessionId, window.id, title.trim(), ownerThreadId);
     setPayload((current) => current ? {
       ...current,
       windows: current.windows.map((item) => item.id === updated.id ? updated : item),
@@ -141,10 +148,9 @@ export function useRightPanel(
     const requestId = ++requestRef.current;
     setPayload((current) => current ? { ...current, state: { ...current.state, active_window_id: windowId } } : current);
     if (!writable) return;
-    void updateRightPanel(sessionId, { active_window_id: windowId }).then((next) => {
+    void updateRightPanel(sessionId, { active_window_id: windowId }, ownerThreadId).then((next) => {
       if (requestId === requestRef.current) {
         setPayload(next);
-        setLoading(false);
       }
     });
   };
@@ -154,10 +160,9 @@ export function useRightPanel(
     const requestId = ++requestRef.current;
     setPayload((current) => current ? { ...current, state: { ...current.state, ...patch } } : current);
     if (!writable) return;
-    void updateRightPanel(sessionId, patch).then((next) => {
+    void updateRightPanel(sessionId, patch, ownerThreadId).then((next) => {
       if (requestId === requestRef.current) {
         setPayload(next);
-        setLoading(false);
       }
     });
   };

@@ -135,27 +135,25 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         current = self._current()
         if current is None:
             return []
+        path: list[RuntimeState | RuntimeRootState] = [current]
+        seen = {current.key}
+        node = current
+        while node.parent_id:
+            parent = self.store.get_node(node.parent_session_id, node.parent_id)
+            if parent is None:
+                raise RuntimeStateValidationError(f"Turn parent is missing: {node.parent_id}")
+            if parent.key in seen:
+                raise RuntimeStateValidationError("Turn parent chain contains a cycle.")
+            if self.isolated_thread_context and parent.thread_id != current.thread_id:
+                break
+            seen.add(parent.key)
+            path.append(parent)
+            if isinstance(parent, RuntimeRootState):
+                break
+            node = parent
         if self.isolated_thread_context:
-            nodes = [
-                node
-                for node in self.store.load_nodes(current.session_id)
-                if isinstance(node, RuntimeState) and node.thread_id == current.thread_id
-            ]
-            by_id = {node.id: node for node in nodes}
-            path: list[RuntimeState] = []
-            cursor: RuntimeState | None = current
-            seen: set[str] = set()
-            while cursor is not None and cursor.id not in seen:
-                seen.add(cursor.id)
-                path.append(cursor)
-                parent = by_id.get(cursor.parent_id)
-                cursor = parent if parent is not None and parent.thread_id == current.thread_id else None
-            path.reverse()
-            return [node.clone() for node in path]
-        try:
-            return RuntimeStateTree(self.store.load_nodes(current.session_id)).model_input(current)
-        except (KeyError, RuntimeError, ValueError):
-            return [current]
+            return [node.clone() for node in reversed(path) if isinstance(node, RuntimeState)]
+        return RuntimeStateTree(path).model_input(current)
 
     def _current(self) -> RuntimeState | None:
         target = self.assistant or self.last_node

@@ -62,6 +62,7 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
             window_id, generation, group, session_id, seq, ack = operation
             try:
                 session_id = await canonical_operation_session(request, resolved, session_id)
+                request.state.operation_session_id = session_id
                 state, lock = await resolved.operation_control.operation(
                     window_id=window_id,
                     generation=generation,

@@ -114,32 +114,35 @@ class SQLiteSessionMixin:
         session = self.get_session(session_id)
         if session is None:
             return None
-        nodes = [
-            node
-            for node in self.load_nodes(session_id)
-            if node.session_id == session_id and isinstance(node, TreeRuntimeState)
-        ]
-        messages = self.load_conversation_records(session_id)
-        last_node = max(nodes, key=lambda item: (item.timestamp, item.id), default=None)
         with self._connection(session_id) as connection:
-            rows = connection.execute(
-                "SELECT payload_json FROM json_objects WHERE session_id=? AND namespace='run' ORDER BY updated_at DESC,object_id DESC",
+            nodes = self._node_summaries(connection, session_id)
+            message_count = sum(node["message_count"] for node in nodes.values())
+            last_node = max(
+                (key for key, node in nodes.items() if node["timestamp"]),
+                key=lambda key: (nodes[key]["timestamp"], key),
+                default=None,
+            )
+            last_run = connection.execute(
+                "SELECT json_extract(payload_json,'$.run_id'),json_extract(payload_json,'$.status') FROM json_objects WHERE session_id=? AND namespace='run' ORDER BY updated_at DESC,object_id DESC LIMIT 1",
                 (session_id,),
-            ).fetchall()
-        runs = [dict(json.loads(str(row[0]))) for row in rows]
-        last_run = runs[0] if runs else None
+            ).fetchone()
+            if not message_count:
+                message_count = connection.execute(
+                    "SELECT count(*) FROM json_objects WHERE session_id=? AND namespace='turn_message' AND json_extract(payload_json,'$.role') IN ('user','assistant')",
+                    (session_id,),
+                ).fetchone()[0]
         return SessionSummary(
             session_id=session.session_id,
             title=session.title,
             created_at=session.created_at,
             updated_at=session.updated_at,
-            message_count=sum(1 for item in messages if item["role"] in {"user", "assistant"}),
-            last_run_id=str(last_run.get("run_id")) if last_run else None,
-            last_run_status=str(last_run.get("status")) if last_run else None,
+            message_count=message_count,
+            last_run_id=str(last_run[0]) if last_run else None,
+            last_run_status=str(last_run[1]) if last_run else None,
             client_id=session.client_id,
             archived_at=session.archived_at,
             deleted_at=session.deleted_at,
-            last_node_id=last_node.id if last_node is not None else None,
+            last_node_id=last_node,
             title_is_custom=session.title_is_custom,
         )
 

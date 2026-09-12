@@ -135,6 +135,7 @@ export default function Composer(props: ComposerProps) {
   function handleComposerKeyDownCapture(event: KeyboardEvent<HTMLDivElement>) {
     if (event.target instanceof HTMLElement && event.target.matches(".file-mention-editor")) {
       props.onKeyDown(event);
+      if (event.defaultPrevented) event.stopPropagation();
     }
   }
 

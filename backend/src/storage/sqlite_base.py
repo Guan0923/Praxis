@@ -19,6 +19,19 @@ class ChangeConnection(sqlite3.Connection):
 
 
 class SQLiteBaseMixin:
+    def session_ids(self) -> Iterator[str]:
+        """Locate databases without reading or reconstructing conversation histories."""
+        for directory in self.paths.runtime_dir.iterdir():
+            database = directory / "state.db"
+            if (
+                directory.is_dir()
+                and not directory.is_symlink()
+                and not database.is_symlink()
+                and database.is_file()
+                and database.stat().st_size
+            ):
+                yield directory.name
+
     def __init__(self, paths: ClientPaths, agent_thread_index: object | None = None) -> None:
         self.paths = paths
         self.agent_thread_index = agent_thread_index

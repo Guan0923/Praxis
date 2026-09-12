@@ -273,6 +273,7 @@ def _stream(
         with active_turn_streams_lock:
             active_turn_streams[alias] = active_stream
             active_stream_aliases.add(alias)
+            active_turn_cancellations[alias] = pause_controller
         current = bridge.writer.view(frame.session_id, frame.turn_id)
         live_bridges = getattr(state, "live_turn_bridges", None)
         if live_bridges is None:
@@ -302,7 +303,8 @@ def _stream(
         current = bridge._current() if bridge is not None else None
         if current is not None and current.status in {"success", "paused", "failed"}:
             try:
-                state.message_queue.release_turn(current.id)
+                for alias in active_stream_aliases:
+                    state.message_queue.release_turn(alias)
             except MessageQueueUnavailable:
                 logger.warning("Could not release pending messages for finished Turn %s", current.id)
         active_stream.publish_terminal(terminal_type, terminal_id, message, terminal_report)
@@ -631,7 +633,6 @@ def _stream(
                 except Exception as exc:
                     terminal_report = error_report(exc)
                     enqueue_terminal("failed", turn_id or "unknown", safe_error_message(exc))
-            active_turn_cancellations.pop(cancellation_key, None)
             steering_inbox.close()
             # Publish completion only after teardown. Hold admission until the
             # terminal is delivered so a rewind cannot replace this Turn's
@@ -646,6 +647,8 @@ def _stream(
                         for alias in active_stream_aliases:
                             if active_turn_streams.get(alias) is active_stream:
                                 active_turn_streams.pop(alias, None)
+                            if active_turn_cancellations.get(alias) is pause_controller:
+                                active_turn_cancellations.pop(alias, None)
                     if cache is not None:
                         cache.finish(thread_id, turn_id)
 

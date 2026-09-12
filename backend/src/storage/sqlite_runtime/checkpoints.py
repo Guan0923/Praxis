@@ -101,15 +101,16 @@ class SQLiteCheckpointMixin:
     def _save_state(self, state: RuntimeState, reason: str) -> None:
         timestamp = utc_now()
         full_payload = state.to_dict()
-        reduced_payload = state.to_dict()
+        reduced_payload = dict(full_payload)
         # Messages have independent canonical Turn objects, so a checkpoint
         # does not duplicate the growing transcript.
         reduced_payload.pop("messages", None)
         reduced_payload.pop("run_history", None)
         if reduced_payload.get("current_run"):
+            reduced_payload["current_run"] = dict(reduced_payload["current_run"])
             for key in ("history", "actions"):
                 reduced_payload["current_run"].pop(key, None)
-        with self._connection(state.session_id, write=True) as connection:
+        with self._connection(state.session_id, write=True, notify=False) as connection:
             self._assert_writable(connection)
             self._session_document(connection, state.session_id)
             self._put_json_object(
@@ -135,7 +136,7 @@ class SQLiteCheckpointMixin:
                     connection,
                     state.session_id,
                     "checkpoint",
-                    f"{run.run_id}:{timestamp}:{reason}",
+                    f"{run.run_id}:{reason}",
                     checkpoint,
                     timestamp,
                 )
@@ -163,13 +164,8 @@ class SQLiteCheckpointMixin:
         data: dict[str, object] | None = None,
         delivery_id: str | None = None,
     ) -> None:
-        existing = self._json_values(connection, session_id, "turn_message")
         if delivery_id:
             delivered = self._json_object(connection, session_id, "turn_delivery", delivery_id)
-            if delivered is None:
-                # Existing v16 databases may predate the ledger. Backfill it
-                # from the canonical message record inside this transaction.
-                delivered = next((item for item in existing if item.get("delivery_id") == delivery_id), None)
             if delivered is not None:
                 if (
                     delivered.get("run_id") == run_id
@@ -186,7 +182,13 @@ class SQLiteCheckpointMixin:
                     )
                     return
                 raise ValueError("delivery_id already belongs to a different Turn message.")
-        run_messages = [item for item in existing if str(item.get("run_id") or "") == run_id]
+        run_messages = [
+            json.loads(row[0])
+            for row in connection.execute(
+                "SELECT payload_json FROM json_objects WHERE session_id=? AND namespace='turn_message' AND json_extract(payload_json,'$.run_id')=?",
+                (session_id, run_id),
+            )
+        ]
         prior_assistant = next(
             (item for item in run_messages if role == "assistant" and item.get("role") == "assistant"),
             None,

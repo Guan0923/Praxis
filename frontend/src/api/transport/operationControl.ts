@@ -187,7 +187,7 @@ class WindowOperationControl {
       }
     }
     let group = target.group;
-    if (!group && sessionId) group = `session:${sessionId}`;
+    if (!group && sessionId) group = `resource:${path}`;
     if (!group) {
       const project = path.match(/^\/api\/projects\/([^/]+)/);
       if (project) group = `project:${decodeURIComponent(project[1])}`;

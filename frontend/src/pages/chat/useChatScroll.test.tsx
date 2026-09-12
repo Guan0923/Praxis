@@ -16,6 +16,8 @@ function Harness({ active = true, id = "one", content = messages }) {
       <div className="chat-scroll-content"><div data-scroll-message-id="answer">Answer</div></div>
     </div>
     <output>{String(scroll.isAtBottom)}</output>
+    <button onClick={scroll.scrollToBottom}>Bottom</button>
+    <button onClick={() => scroll.scrollToPosition(350)}>Timeline</button>
   </div>;
 }
 
@@ -32,6 +34,7 @@ function fixture() {
   const element = view.getByTestId("scroll");
   const metrics = { top: 350, height: 2000, client: 500, messageTop: 300 };
   Object.defineProperties(element, {
+    scrollTo: { configurable: true, value: ({ top }: ScrollToOptions) => { metrics.top = Math.max(0, Math.min(top ?? 0, metrics.height - metrics.client)); } },
     scrollTop: { configurable: true, get: () => metrics.top, set: (top: number) => {
       metrics.top = Math.max(0, Math.min(top, metrics.height - metrics.client));
     } },
@@ -81,6 +84,20 @@ afterEach(() => {
 });
 
 describe("retained conversation scrolling", () => {
+  it("commits button navigation before streaming and resize updates", () => {
+    const f = fixture();
+    fireEvent.click(f.view.getByText("Bottom"));
+    f.metrics.height = 2400;
+    f.view.rerender(<Harness content={[...messages]} />);
+    expect(f.metrics.top).toBe(1900);
+    fireEvent.click(f.view.getByText("Timeline"));
+    f.metrics.height = 2600;
+    f.view.rerender(<Harness content={[...messages]} />);
+    act(() => resize());
+    expect(f.metrics.top).toBe(350);
+    expect(f.view.container.querySelector("output")).toHaveTextContent("false");
+  });
+
   it("ignores hidden zero dimensions and restores history before animation frames", () => {
     const f = fixture();
     f.hide();

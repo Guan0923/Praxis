@@ -100,7 +100,14 @@ class MemoryRuntimeEventStream:
     ) -> list[RuntimeStreamEntry]:
         if after_id == "0":
             return list(entries)
-        return [entry for entry in entries if int(entry.stream_id) > int(after_id)]
+        cursor = int(after_id)
+        result = []
+        for entry in reversed(entries):
+            if int(entry.stream_id) <= cursor:
+                break
+            result.append(entry)
+        result.reverse()
+        return result
 
     def read_turn(self, turn_id: str, after_id: str, *, block_ms: int = 1000) -> list[RuntimeStreamEntry]:
         return self._read(self._turns, turn_id, after_id, block_ms)
@@ -111,7 +118,7 @@ class MemoryRuntimeEventStream:
     def _read(self, streams, key: str, after_id: str, block_ms: int) -> list[RuntimeStreamEntry]:
         with self._condition:
             self._condition.wait_for(
-                lambda: self._closed or bool(self._after(streams.get(key, []), after_id)),
+                lambda: self._closed or bool(streams.get(key) and int(streams[key][-1].stream_id) > int(after_id)),
                 timeout=max(0, block_ms) / 1000,
             )
             if streams is self._threads and int(after_id) < self._thread_floors.get(key, 0):

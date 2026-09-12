@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from backend.domain.runtime_state import RuntimeState, RuntimeStateTree
 from backend.domain.sidebar_thread import SidebarThread, SidebarThreadSummary
 from backend.domain.state import utc_now
 
@@ -16,24 +15,33 @@ class SQLiteSidebarThreadMixin:
             threads = [
                 SidebarThread.from_dict(value) for value in self._json_values(connection, session_id, "sidebar_thread")
             ]
-            nodes = self._objects(connection, session_id, "runtime_node")
+            nodes = self._node_summaries(connection, session_id)
             runtime_rows = connection.execute(
                 "SELECT thread_id,current_turn_id,updated_at FROM runtime_threads WHERE session_id=?",
                 (session_id,),
             ).fetchall()
 
-        tree = RuntimeStateTree(nodes)
         runtime_by_thread = {str(row["thread_id"]): row for row in runtime_rows}
         summaries: list[SidebarThreadSummary] = []
         for thread in threads:
             runtime = runtime_by_thread.get(thread.thread_id)
             current_turn_id = str(runtime["current_turn_id"]) if runtime and runtime["current_turn_id"] else None
-            path = tree.ancestors((session_id, current_turn_id)) if current_turn_id else []
-            records = self._node_records([node for node in path if isinstance(node, RuntimeState)])
+            message_count = 0
+            seen: set[str] = set()
+            cursor = current_turn_id
+            while cursor:
+                if cursor not in nodes:
+                    raise KeyError(f"Unknown Turn: {cursor}")
+                if cursor in seen:
+                    raise ValueError("Turn parent chain contains a cycle.")
+                seen.add(cursor)
+                node = nodes[cursor]
+                message_count += node["message_count"]
+                cursor = node["parent_id"]
             summaries.append(
                 SidebarThreadSummary(
                     thread=thread,
-                    message_count=len(records),
+                    message_count=message_count,
                     conversation_updated_at=(
                         str(runtime["updated_at"]) if current_turn_id and runtime else thread.created_at
                     ),
@@ -96,26 +104,29 @@ class SQLiteSidebarThreadMixin:
         return item
 
     def get_sidebar_thread(self, thread_id: str, *, session_id: str | None = None) -> SidebarThread | None:
+        if session_id is None and self.agent_thread_index is not None:
+            session_id = self.agent_thread_index.session_for_thread(thread_id)
+        if session_id is None and self.paths.session_db(thread_id).is_file():
+            session_id = thread_id
         if session_id is not None:
             if not self.paths.session_db(session_id).is_file():
                 return None
             with self._connection(session_id) as connection:
                 value = self._json_object(connection, session_id, "sidebar_thread", thread_id)
             return SidebarThread.from_dict(value) if value is not None else None
-        for summary in self.list_sessions(state="all"):
-            with self._connection(summary.session_id) as connection:
-                value = self._json_object(connection, summary.session_id, "sidebar_thread", thread_id)
+        for sid in self.session_ids():
+            with self._connection(sid) as connection:
+                value = self._json_object(connection, sid, "sidebar_thread", thread_id)
             if value is not None:
                 return SidebarThread.from_dict(value)
         return None
 
     def list_sidebar_threads(self, *, state: str = "active") -> list[SidebarThread]:
         result: list[SidebarThread] = []
-        for summary in self.list_sessions(state="all"):
-            with self._connection(summary.session_id) as connection:
+        for sid in self.session_ids():
+            with self._connection(sid) as connection:
                 result.extend(
-                    SidebarThread.from_dict(value)
-                    for value in self._json_values(connection, summary.session_id, "sidebar_thread")
+                    SidebarThread.from_dict(value) for value in self._json_values(connection, sid, "sidebar_thread")
                 )
         if state != "all":
             result = [item for item in result if item.state == state]

@@ -1688,6 +1688,7 @@ def test_http_resume_plan_compaction_handoff_uses_one_bridge_and_fake_model(
                     ),
                     {"total_tokens": 3},
                 )
+            assert runtime.run.turn_id in state.active_turn_cancellations
             return PreparedResponse(AssistantMessage(content="Implemented through HTTP resume."), {"total_tokens": 4})
 
     fake_client = FakePlanClient()

@@ -12,10 +12,15 @@ _STATE_OBJECT_ID = "state"
 
 
 class SQLiteRightPanelMixin:
-    def get_right_panel_state(self, session_id: str) -> RightPanelState:
+    def get_right_panel_state(self, session_id: str, *, thread_id: str | None = None) -> RightPanelState:
+        object_id = _STATE_OBJECT_ID if not thread_id or thread_id == session_id else thread_id
         with self._connection(session_id) as connection:
-            value = self._json_object(connection, session_id, "right_panel_state", _STATE_OBJECT_ID)
-        return RightPanelState.from_dict(value) if value is not None else RightPanelState(session_id)
+            value = self._json_object(connection, session_id, "right_panel_state", object_id)
+        return (
+            RightPanelState.from_dict(value)
+            if value is not None
+            else RightPanelState(session_id, thread_id=thread_id or session_id)
+        )
 
     def save_right_panel_state(
         self,
@@ -24,8 +29,9 @@ class SQLiteRightPanelMixin:
         width: int | None = None,
         collapsed: bool | None = None,
         active_window_id: str | None | object = ...,
+        thread_id: str | None = None,
     ) -> RightPanelState:
-        current = self.get_right_panel_state(session_id)
+        current = self.get_right_panel_state(session_id, thread_id=thread_id)
         changes: dict[str, object] = {}
         if width is not None:
             changes["width"] = width
@@ -44,16 +50,20 @@ class SQLiteRightPanelMixin:
                 connection,
                 session_id,
                 "right_panel_state",
-                _STATE_OBJECT_ID,
+                _STATE_OBJECT_ID if not thread_id or thread_id == session_id else thread_id,
                 result.to_dict(),
                 now,
             )
         return result
 
-    def list_right_panel_windows(self, session_id: str, *, include_deleted: bool = False) -> list[RightPanelWindow]:
+    def list_right_panel_windows(
+        self, session_id: str, *, include_deleted: bool = False, owner_thread_id: str | None = None
+    ) -> list[RightPanelWindow]:
         with self._connection(session_id) as connection:
             values = self._json_values(connection, session_id, "right_panel_window")
         result = [RightPanelWindow.from_dict(value) for value in values]
+        if owner_thread_id is not None:
+            result = [item for item in result if (item.owner_thread_id or session_id) == owner_thread_id]
         if not include_deleted:
             result = [item for item in result if item.active]
         return sorted(result, key=lambda item: (item.position, item.created_at, item.id))

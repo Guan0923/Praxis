@@ -175,7 +175,7 @@ function AgentApp() {
         const old = previous.find((existing) => existing.id === item.id);
         return old ? { ...old, ...item, messages: old.messages, runtimeNodes: old.runtimeNodes,
           messagesLoaded: old.messagesLoaded, historyCursor: old.historyCursor,
-          historyHasMore: old.historyHasMore, activeTurnId: old.activeTurnId } : item;
+          historyHasMore: old.historyHasMore, activeTurnId: old.activeTurnId, lastNodeId: old.lastNodeId } : item;
       }));
     };
     const unsubscribe = subscribeApplicationEvents(async (event) => {
@@ -189,11 +189,12 @@ function AgentApp() {
         await refreshCatalog();
         await Promise.all([refreshDetails(), reloadViews()]);
       } else if (event.type === "sync.ready") {
-        await flushViews();
+        void flushViews();
       } else if (event.type === "catalog.changed") await refreshCatalog();
       else if (event.type === "session.changed") {
         await Promise.all([refreshCatalog(), refreshDetails(new Set([event.session_id]))]);
       } else if (event.type === "view.changed") receiveView(event.view);
+      else if (event.type === "queue.changed") window.dispatchEvent(new CustomEvent("praxis-queue-changed", { detail: event.thread_id }));
       else if (event.type === "panel.changed") window.dispatchEvent(new CustomEvent("praxis-panel-changed", { detail: event.session_id }));
       else if (event.type === "version.changed") {
         for (const item of [...liveConversations.current, ...Object.values(livePanels.current)]) {
@@ -445,10 +446,6 @@ function AgentApp() {
     const conversation = conversations.find((item) => item.id === id);
     if (!conversation) throw new Error("会话不存在");
     if (conversation.sessionId) {
-      if (!conversation.messagesLoaded) {
-        const page = await getTurnPage(conversation.sessionId, conversation.threadId);
-        updateConversation(id, (currentConversation) => withTurnPage(currentConversation, page));
-      }
       return conversation.sessionId;
     }
     const summary = await createSession(conversation.title, conversation.clientId ?? conversation.id);

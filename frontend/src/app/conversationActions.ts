@@ -13,6 +13,8 @@ import type { Conversation, Page } from "../types";
 import { withTurnPage } from "./conversationProjection";
 import { summaryToConversation } from "./storage";
 
+const pendingForks = new Set<string>();
+
 interface ConversationActionsContext {
   conversations: Conversation[];
   activeConversations: Conversation[];
@@ -108,7 +110,8 @@ export function createConversationActions(context: ConversationActionsContext) {
     const source = conversations.find((conversation) => conversation.id === id);
     if (!source) return;
     const index = source.messages.findIndex((message) => message.id === messageId);
-    if (index < 0 || source.messages[index].role !== "assistant") return;
+    if (index < 0 || source.messages[index].role !== "assistant" || pendingForks.has(messageId)) return;
+    pendingForks.add(messageId);
     try {
       await ensureSession(id);
       const sourceTurnId = source.messages[index].sourceNodeId;
@@ -126,12 +129,14 @@ export function createConversationActions(context: ConversationActionsContext) {
         messageCount: sidebar.message_count,
         messagesLoaded: false,
         updatedAt: sidebar.conversation_updated_at,
-      }, await getTurnPage(sidebar.session_id, sidebar.thread_id));
+      }, forked.history);
       setConversations((previous) => [branch, ...previous]);
       setCurrentId(branch.id);
       setPage("chat");
     } catch (error) {
       setActionError(error instanceof Error ? error : String(error));
+    } finally {
+      pendingForks.delete(messageId);
     }
   }
 

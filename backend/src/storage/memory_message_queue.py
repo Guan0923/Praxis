@@ -48,6 +48,11 @@ class MemoryMessageQueue:
         self._closed = False
         self._deleted_threads: set[str] = set()
         self.on_change = None
+        self.on_queue_change: Callable[[str], None] | None = None
+
+    def _queue_changed(self, thread_id: str) -> None:
+        if self.on_queue_change is not None:
+            self.on_queue_change(thread_id)
 
     @property
     def admission_lock(self):
@@ -181,6 +186,7 @@ class MemoryMessageQueue:
                     return existing, False
                 raise QueueItemConflict("queued_message_id_conflict")
             items.append(item)
+            self._queue_changed(item.thread_id)
             return item, True
 
     def update(self, thread_id: str, message_id: str, *, message: InputMessage) -> QueuedMessage:
@@ -192,6 +198,7 @@ class MemoryMessageQueue:
                 if item.state != "pending":
                     raise QueueItemStateConflict("queued_message_dispatched")
                 items[index] = replace(item, message=message, updated_at=queue_utc_now())
+                self._queue_changed(thread_id)
                 return items[index]
         raise QueueItemNotFound("queued_message_not_found")
 
@@ -203,6 +210,7 @@ class MemoryMessageQueue:
                     if item.state != "pending":
                         raise QueueItemStateConflict("queued_message_dispatched")
                     items.pop(index)
+                    self._queue_changed(thread_id)
                     if self.on_change is not None:
                         self.on_change()
                     return
@@ -282,6 +290,7 @@ class MemoryMessageQueue:
             else:
                 self._streams.setdefault(turn_id, []).append(entry)
             self._receipts[delivery_id] = (identity, "dispatched", envelope)
+            self._queue_changed(thread_id)
             self._condition.notify_all()
             return envelope
 
@@ -435,6 +444,7 @@ class MemoryMessageQueue:
                     ]
                 identity, _, stored = self._receipts[envelope.delivery_id]
                 self._receipts[envelope.delivery_id] = (identity, "acknowledged", stored)
+                self._queue_changed(envelope.thread_id)
                 if self.on_change is not None:
                     self.on_change()
                 return
@@ -447,6 +457,7 @@ class MemoryMessageQueue:
             ]
             identity, _, stored = self._receipts[envelope.delivery_id]
             self._receipts[envelope.delivery_id] = (identity, "acknowledged", stored)
+            self._queue_changed(envelope.thread_id)
             if self.on_change is not None:
                 self.on_change()
 
@@ -461,6 +472,7 @@ class MemoryMessageQueue:
                 ]
                 identity, _, stored = self._receipts[envelope.delivery_id]
                 self._receipts[envelope.delivery_id] = (identity, "returned", stored)
+                self._queue_changed(envelope.thread_id)
 
 
 __all__ = ["MemoryMessageQueue"]

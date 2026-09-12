@@ -229,10 +229,20 @@ describe("RightPanel tabs", () => {
   });
 });
 
-function HookHarness({ sessionId }: { sessionId: string }) {
-  const controller = useRightPanel(sessionId, "turn-main", vi.fn(), vi.fn());
+function HookHarness({ sessionId, threadId }: { sessionId: string; threadId?: string }) {
+  const controller = useRightPanel(sessionId, "turn-main", vi.fn(), vi.fn(), threadId);
   return <output>{controller.payload?.state.session_id ?? "loading"}</output>;
 }
+
+it("hides the previous panel immediately when switching between conversations in one Session", async () => {
+  api.getRightPanel.mockResolvedValueOnce({ ...payload([]), state: { ...payload([]).state, session_id: "main-panel" } });
+  const { rerender } = render(<HookHarness sessionId="session" threadId="main" />);
+  await screen.findByText("main-panel");
+  api.getRightPanel.mockReturnValueOnce(new Promise(() => {}));
+  rerender(<HookHarness sessionId="session" threadId="fork" />);
+  expect(screen.queryByText("main-panel")).not.toBeInTheDocument();
+  expect(api.getRightPanel).toHaveBeenLastCalledWith("session", "fork");
+});
 
 function LauncherHookHarness({ sessionId }: { sessionId: string }) {
   const controller = useRightPanel(sessionId, undefined, vi.fn(), vi.fn());
@@ -254,7 +264,7 @@ it("reloads the canonical layout when the main Session changes", async () => {
 
   rerender(<HookHarness sessionId="session-b" />);
   expect(await screen.findByText("session-b")).toBeInTheDocument();
-  await waitFor(() => expect(api.getRightPanel).toHaveBeenCalledWith("session-b"));
+  await waitFor(() => expect(api.getRightPanel).toHaveBeenCalledWith("session-b", undefined));
 });
 
 it("keeps a launcher click made while the initial layout is still loading", async () => {
@@ -267,5 +277,5 @@ it("keeps a launcher click made while the initial layout is still loading", asyn
   resolveInitial(payload([], true));
 
   expect(await screen.findByTestId("panel-state")).toHaveTextContent("false");
-  expect(api.updateRightPanel).toHaveBeenCalledWith("session", { collapsed: false });
+  expect(api.updateRightPanel).toHaveBeenCalledWith("session", { collapsed: false }, undefined);
 });

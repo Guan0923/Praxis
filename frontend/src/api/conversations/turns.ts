@@ -84,7 +84,7 @@ export async function patchTurnCurrentData(
   });
 }
 
-export async function forkTurn(turnId: string, sessionId?: string): Promise<{ turn: RuntimeStateNode; sidebar_thread: SidebarThread }> {
+export async function forkTurn(turnId: string, sessionId?: string): Promise<{ turn: RuntimeStateNode; sidebar_thread: SidebarThread; history: TurnPage }> {
   return requestJson(`/api/turns/${encodeURIComponent(turnId)}/fork`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

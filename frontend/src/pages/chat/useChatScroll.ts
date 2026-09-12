@@ -157,17 +157,27 @@ export function useChatScroll(conversationId: string | undefined, messages: Chat
     }
   }, [syncBottomState, active]);
 
-  const scrollToBottom = useCallback(() => {
+  const scrollToPosition = useCallback((top: number) => {
     const scrollContainer = chatScrollRef.current;
     if (!scrollContainer) return;
     restoringRef.current = false;
-    scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior: "smooth" });
-  }, []);
+    interrupted.current = true;
+    // Commit the new anchor before streaming renders or resize callbacks run.
+    scrollContainer.scrollTo({ top, behavior: "instant" });
+    syncBottomState(scrollContainer);
+    handleScroll();
+  }, [syncBottomState, handleScroll]);
+
+  const scrollToBottom = useCallback(() => {
+    const container = chatScrollRef.current;
+    if (container) scrollToPosition(container.scrollHeight);
+  }, [scrollToPosition]);
 
   return {
     chatScrollRef,
     handleScroll,
     isAtBottom: isAtBottomState,
     scrollToBottom,
+    scrollToPosition,
   };
 }

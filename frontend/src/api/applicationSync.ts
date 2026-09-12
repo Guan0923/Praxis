@@ -6,6 +6,7 @@ export type ApplicationEvent =
   | { type: "sync.reset"; reason?: "startup" | "restart" | "expired" }
   | { type: "sync.ready" | "sync.heartbeat" | "catalog.changed" }
   | { type: "session.changed" | "panel.changed"; session_id: string }
+  | { type: "queue.changed"; thread_id: string }
   | { type: "version.changed"; selection: VersionSelection }
   | { type: "view.changed"; view: ViewState };
 

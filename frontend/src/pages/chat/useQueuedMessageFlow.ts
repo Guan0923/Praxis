@@ -53,10 +53,11 @@ export function useQueuedMessageFlow({
 
   useEffect(() => {
     if (!disabled && (activeRuntimeNode?.status === "success" || activeRuntimeNode?.status === "failed")) {
+      if (queuedMessages.some((item) => item.saving)) return;
       const pending = queuedMessages.filter((item) => item.state === "pending" && !item.saving && !item.error);
       if (pending.length) void dispatchMessages(pending);
     }
-  }, [conversation?.id, activeRuntimeNode?.id, activeRuntimeNode?.status, queuedMessages, disabled]);
+  }, [conversation?.id, activeRuntimeNode?.id, activeRuntimeNode?.status, queuedMessages, disabled, startingConversation]);
 
   function updateQueue(updater: (items: QueuedMessage[]) => QueuedMessage[]) {
     if (conversation?.id) onQueuedMessagesChange(conversation.id, updater);
@@ -193,6 +194,7 @@ export function useQueuedMessageFlow({
   }
 
   function sendPendingMessages() {
+    if (queuedMessages.some((item) => item.saving)) return Promise.resolve();
     return dispatchMessages(queuedMessages.filter((item) => item.state === "pending" && !item.saving && !item.error));
   }
 

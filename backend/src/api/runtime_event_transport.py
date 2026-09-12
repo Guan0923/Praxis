@@ -67,7 +67,9 @@ async def _current_thread_snapshots(state, store, session_id: str, thread_id: st
 
 def publish_frame(state, frame: NodeFrame, current: RuntimeState) -> None:
     cache = getattr(state, "conversation_cache", None)
-    if cache is not None and current.status == "running":
+    if cache is not None and current.status == "running" and (
+        frame.type == "turn.snapshot" or frame.patch.get("status") == "running"
+    ):
         cache.begin(current.session_id, current.thread_id, current.id)
     if frame.sequence:
         payload = frame.to_dict()

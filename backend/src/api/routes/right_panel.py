@@ -42,25 +42,34 @@ class RenamePanelWindowRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
 
 
-def _turn(store, session_id: str, turn_id: str) -> RuntimeState:
-    item = store.find_node(turn_id)
+def _turn(store, session_id: str, turn_id: str, owner_thread_id: str) -> RuntimeState:
+    item = store.get_node(session_id, turn_id)
     if item is None or isinstance(item, RuntimeRootState) or item.session_id != session_id:
         raise HTTPException(status_code=404, detail="未知 Turn。")
-    if item.thread_id != item.session_id:
+    if item.thread_id != owner_thread_id:
         raise HTTPException(status_code=409, detail="侧聊只能从主聊天当前 Turn 创建。")
     return item
 
 
-def _window(store, session_id: str, window_id: str) -> RightPanelWindow:
+def _window(store, session_id: str, window_id: str, owner_thread_id: str) -> RightPanelWindow:
     item = store.get_right_panel_window(session_id, window_id)
-    if item is None or not item.active:
+    if item is None or not item.active or (item.owner_thread_id or session_id) != owner_thread_id:
         raise HTTPException(status_code=404, detail="未知右栏窗口。")
     return item
 
 
-def _payload(state: WebAppState, session_id: str) -> dict[str, object]:
+def _panel_thread(store, session_id: str, thread_id: str | None) -> str:
+    owner = thread_id or session_id
+    if owner != session_id:
+        thread = store.get_sidebar_thread(owner, session_id=session_id)
+        if thread is None or thread.state != "active":
+            raise HTTPException(status_code=404, detail="未知对话。")
+    return owner
+
+
+def _payload(state: WebAppState, session_id: str, thread_id: str) -> dict[str, object]:
     store = session_store(state)
-    windows = store.list_right_panel_windows(session_id)
+    windows = store.list_right_panel_windows(session_id, owner_thread_id=thread_id)
     stale = [
         item
         for item in windows
@@ -71,12 +80,12 @@ def _payload(state: WebAppState, session_id: str) -> dict[str, object]:
     for item in stale:
         store.update_right_panel_window(session_id, item.id, deleted_at=utc_now())
     if stale:
-        windows = store.list_right_panel_windows(session_id)
-    panel = store.get_right_panel_state(session_id)
+        windows = store.list_right_panel_windows(session_id, owner_thread_id=thread_id)
+    panel = store.get_right_panel_state(session_id, thread_id=thread_id)
     active_ids = {item.id for item in windows}
     if panel.active_window_id not in active_ids:
         active_window_id = windows[0].id if windows else None
-        panel = store.save_right_panel_state(session_id, active_window_id=active_window_id)
+        panel = store.save_right_panel_state(session_id, active_window_id=active_window_id, thread_id=thread_id)
     terminal_type = state.settings.runtime_config().get("terminal_type", "cmd")
     terminal_available = terminal_type in available_terminal_executables()
     terminal_reason = (
@@ -95,10 +104,10 @@ def _payload(state: WebAppState, session_id: str) -> dict[str, object]:
 
 
 @router.get("/{session_id}")
-def get_right_panel(session_id: str, request: Request) -> dict[str, object]:
+def get_right_panel(session_id: str, request: Request, thread_id: str | None = None) -> dict[str, object]:
     store = session_store(request.app.state.web)
     require_active_session(store, session_id)
-    return _payload(request.app.state.web, session_id)
+    return _payload(request.app.state.web, session_id, _panel_thread(store, session_id, thread_id))
 
 
 @router.patch("/{session_id}")
@@ -106,20 +115,22 @@ def update_right_panel(
     session_id: str,
     body: RightPanelStatePatch,
     request: Request,
+    thread_id: str | None = None,
 ) -> dict[str, object]:
     store = session_store(request.app.state.web)
     require_active_session(store, session_id)
-    kwargs: dict[str, object] = {}
+    owner = _panel_thread(store, session_id, thread_id)
+    kwargs: dict[str, object] = {"thread_id": owner}
     if "width" in body.model_fields_set:
         kwargs["width"] = body.width
     if "collapsed" in body.model_fields_set:
         kwargs["collapsed"] = body.collapsed
     if "active_window_id" in body.model_fields_set:
         if body.active_window_id is not None:
-            _window(store, session_id, body.active_window_id)
+            _window(store, session_id, body.active_window_id, owner)
         kwargs["active_window_id"] = body.active_window_id
     store.save_right_panel_state(session_id, **kwargs)
-    return _payload(request.app.state.web, session_id)
+    return _payload(request.app.state.web, session_id, owner)
 
 
 @router.post("/{session_id}/side-chats", status_code=201)
@@ -127,20 +138,23 @@ def create_side_chat(
     session_id: str,
     body: CreatePanelWindowRequest,
     request: Request,
+    thread_id: str | None = None,
 ) -> dict[str, object]:
     state: WebAppState = request.app.state.web
     store = session_store(state)
     require_active_session(store, session_id)
-    source = _turn(store, session_id, body.source_turn_id)
+    owner = _panel_thread(store, session_id, thread_id)
+    source = _turn(store, session_id, body.source_turn_id, owner)
     thread_id = new_thread_id()
     anchor = store.build_side_chat_anchor(source.id, thread_id=thread_id)
-    all_windows = store.list_right_panel_windows(session_id, include_deleted=True)
+    all_windows = store.list_right_panel_windows(session_id, include_deleted=True, owner_thread_id=owner)
     number = sum(item.kind == "side_chat" for item in all_windows) + 1
     now = utc_now()
     window = RightPanelWindow(
         id=f"window_{uuid4().hex}",
         session_id=session_id,
         kind="side_chat",
+        owner_thread_id=owner,
         title=f"侧聊 {number}",
         position=len(all_windows),
         created_at=now,
@@ -150,7 +164,7 @@ def create_side_chat(
     )
     try:
         store.create_side_chat_window(window, anchor)
-        store.save_right_panel_state(session_id, collapsed=False, active_window_id=window.id)
+        store.save_right_panel_state(session_id, collapsed=False, active_window_id=window.id, thread_id=owner)
     except (RuntimeError, ValueError) as exc:
         return error_response(exc, status_code=409, detail=str(exc))
     return {"window": window.to_dict(), "anchor": anchor.to_dict()}
@@ -161,11 +175,13 @@ def create_terminal(
     session_id: str,
     body: CreatePanelWindowRequest,
     request: Request,
+    thread_id: str | None = None,
 ) -> dict[str, object]:
     state: WebAppState = request.app.state.web
     store = session_store(state)
     require_active_session(store, session_id)
-    source = _turn(store, session_id, body.source_turn_id)
+    owner = _panel_thread(store, session_id, thread_id)
+    source = _turn(store, session_id, body.source_turn_id, owner)
     if not source.cwd:
         raise HTTPException(status_code=409, detail="当前 Turn 没有可用 cwd。")
     terminal_type = state.settings.runtime_config().get("terminal_type", "cmd")
@@ -177,13 +193,14 @@ def create_terminal(
         return error_response(exc, status_code=503, detail="message_queue_unavailable")
     except (RuntimeError, ValueError) as exc:
         return error_response(exc, status_code=409, detail=str(exc))
-    all_windows = store.list_right_panel_windows(session_id, include_deleted=True)
+    all_windows = store.list_right_panel_windows(session_id, include_deleted=True, owner_thread_id=owner)
     number = sum(item.kind == "terminal" and item.terminal_type == terminal.terminal_type for item in all_windows) + 1
     now = utc_now()
     window = RightPanelWindow(
         id=f"window_{uuid4().hex}",
         session_id=session_id,
         kind="terminal",
+        owner_thread_id=owner,
         title=f"{TERMINAL_LABELS[terminal.terminal_type]} {number}",
         position=len(all_windows),
         created_at=now,
@@ -194,7 +211,7 @@ def create_terminal(
     )
     try:
         store.create_right_panel_window(window)
-        store.save_right_panel_state(session_id, collapsed=False, active_window_id=window.id)
+        store.save_right_panel_state(session_id, collapsed=False, active_window_id=window.id, thread_id=owner)
     except (RuntimeError, ValueError) as exc:
         state.terminal_manager.close(terminal.id)
         return error_response(exc, status_code=409, detail=str(exc))
@@ -202,26 +219,31 @@ def create_terminal(
 
 
 @router.post("/{session_id}/files", status_code=201)
-def create_files_window(session_id: str, request: Request) -> dict[str, object]:
+def create_files_window(session_id: str, request: Request, thread_id: str | None = None) -> dict[str, object]:
     store = session_store(request.app.state.web)
     require_active_session(store, session_id)
-    existing = next((item for item in store.list_right_panel_windows(session_id) if item.kind == "files"), None)
+    owner = _panel_thread(store, session_id, thread_id)
+    existing = next(
+        (item for item in store.list_right_panel_windows(session_id, owner_thread_id=owner) if item.kind == "files"),
+        None,
+    )
     if existing is not None:
-        store.save_right_panel_state(session_id, collapsed=False, active_window_id=existing.id)
+        store.save_right_panel_state(session_id, collapsed=False, active_window_id=existing.id, thread_id=owner)
         return {"window": existing.to_dict()}
-    all_windows = store.list_right_panel_windows(session_id, include_deleted=True)
+    all_windows = store.list_right_panel_windows(session_id, include_deleted=True, owner_thread_id=owner)
     now = utc_now()
     window = RightPanelWindow(
         id=f"window_{uuid4().hex}",
         session_id=session_id,
         kind="files",
+        owner_thread_id=owner,
         title="文件",
         position=len(all_windows),
         created_at=now,
         updated_at=now,
     )
     store.create_right_panel_window(window)
-    store.save_right_panel_state(session_id, collapsed=False, active_window_id=window.id)
+    store.save_right_panel_state(session_id, collapsed=False, active_window_id=window.id, thread_id=owner)
     return {"window": window.to_dict()}
 
 
@@ -231,10 +253,11 @@ def rename_window(
     window_id: str,
     body: RenamePanelWindowRequest,
     request: Request,
+    thread_id: str | None = None,
 ) -> dict[str, object]:
     store = session_store(request.app.state.web)
     require_active_session(store, session_id)
-    _window(store, session_id, window_id)
+    _window(store, session_id, window_id, _panel_thread(store, session_id, thread_id))
     try:
         return store.update_right_panel_window(session_id, window_id, title=body.title).to_dict()
     except ValueError as exc:
@@ -242,11 +265,12 @@ def rename_window(
 
 
 @router.delete("/{session_id}/windows/{window_id}", status_code=204)
-def close_window(session_id: str, window_id: str, request: Request) -> None:
+def close_window(session_id: str, window_id: str, request: Request, thread_id: str | None = None) -> None:
     state: WebAppState = request.app.state.web
     store = session_store(state)
     require_active_session(store, session_id)
-    window = _window(store, session_id, window_id)
+    owner = _panel_thread(store, session_id, thread_id)
+    window = _window(store, session_id, window_id, owner)
     store.update_right_panel_window(session_id, window_id, deleted_at=utc_now())
     if window.kind == "terminal" and window.terminal_id is not None:
         state.terminal_manager.close(window.terminal_id)
@@ -263,10 +287,12 @@ def close_window(session_id: str, window_id: str, request: Request) -> None:
                     store.pause_turn(running_turn_id)
             except (KeyError, RuntimeError, ValueError):
                 pass
-    remaining = store.list_right_panel_windows(session_id)
-    current = store.get_right_panel_state(session_id)
+    remaining = store.list_right_panel_windows(session_id, owner_thread_id=owner)
+    current = store.get_right_panel_state(session_id, thread_id=owner)
     if current.active_window_id == window_id:
-        store.save_right_panel_state(session_id, active_window_id=remaining[0].id if remaining else None)
+        store.save_right_panel_state(
+            session_id, active_window_id=remaining[0].id if remaining else None, thread_id=owner
+        )
 
 
 async def _terminal_output(websocket: WebSocket, state: WebAppState, terminal_id: str, after: int) -> None:

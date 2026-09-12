@@ -62,6 +62,10 @@ class SQLiteRuntimeEventMixin:
                     clear_running=status != "running",
                 )
                 self._touch_session(connection, frame.session_id, utc_iso())
+            # Bound replay and token-row storage while retaining the complete canonical Turn.
+            if sequence % 256 == 0:
+                payload = self._json_object(connection, frame.session_id, "runtime_node", frame.turn_id)
+                self._put_json_object(connection, frame.session_id, "runtime_node", frame.turn_id, payload, utc_iso())
 
     def runtime_event_sequence(self, session_id: str, turn_id: str) -> int:
         with self._connection(session_id) as connection:

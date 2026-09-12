@@ -14,8 +14,11 @@ class RightPanelState:
     width: int = 420
     collapsed: bool = True
     active_window_id: str | None = None
+    thread_id: str | None = None
 
     def __post_init__(self) -> None:
+        if self.thread_id is None:
+            object.__setattr__(self, "thread_id", self.session_id)
         if not self.session_id:
             raise ValueError("RightPanelState session_id is required.")
         if isinstance(self.width, bool) or not 0 <= self.width <= 100_000:
@@ -24,6 +27,7 @@ class RightPanelState:
     def to_dict(self) -> dict[str, object]:
         return {
             "session_id": self.session_id,
+            "thread_id": self.thread_id or self.session_id,
             "width": self.width,
             "collapsed": self.collapsed,
             "active_window_id": self.active_window_id,
@@ -34,6 +38,7 @@ class RightPanelState:
         active = value.get("active_window_id")
         return cls(
             session_id=str(value.get("session_id") or ""),
+            thread_id=str(value.get("thread_id") or value.get("session_id") or ""),
             width=int(value.get("width", 420)),
             collapsed=bool(value.get("collapsed", True)),
             active_window_id=str(active) if active is not None else None,
@@ -55,8 +60,11 @@ class RightPanelWindow:
     terminal_type: str | None = None
     cwd: str | None = None
     deleted_at: str | None = None
+    owner_thread_id: str | None = None
 
     def __post_init__(self) -> None:
+        if self.owner_thread_id is None:
+            object.__setattr__(self, "owner_thread_id", self.session_id)
         if not self.id or not self.session_id or not self.title:
             raise ValueError("RightPanelWindow identifiers and title are required.")
         if self.kind not in {"side_chat", "terminal", "files"}:
@@ -83,6 +91,7 @@ class RightPanelWindow:
             "id": self.id,
             "session_id": self.session_id,
             "kind": self.kind,
+            "owner_thread_id": self.owner_thread_id or self.session_id,
             "title": self.title,
             "position": self.position,
             "created_at": self.created_at,
@@ -105,6 +114,7 @@ class RightPanelWindow:
             id=str(value.get("id") or ""),
             session_id=str(value.get("session_id") or ""),
             kind=str(value.get("kind") or ""),  # type: ignore[arg-type]
+            owner_thread_id=optional("owner_thread_id") or str(value.get("session_id") or ""),
             title=str(value.get("title") or ""),
             position=int(value.get("position", 0)),
             created_at=str(value.get("created_at") or ""),

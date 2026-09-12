@@ -91,6 +91,9 @@ class WebAppState:
 
         self.conversation_deletion = ConversationDeletion(self)
         self.message_queue.on_change = self.conversation_cache.trim
+        self.message_queue.on_queue_change = lambda thread_id: self.application_sync.publish(
+            "queue.changed", thread_id=thread_id
+        )
         self.agent_thread_index = AgentThreadIndex()
         self.agent_thread_index.on_store_change = lambda session_id, kind: self.application_sync.publish(
             kind, session_id=session_id

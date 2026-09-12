@@ -150,8 +150,9 @@ def _require_queue_thread(store, thread_id: str):
         if item.deleted_at is not None:
             raise HTTPException(status_code=409, detail="Conversation has been deleted.")
         return item
-    for summary in store.list_sessions(state="all"):
-        panel = store.active_right_panel_window_for_thread(summary.session_id, thread_id)
+    indexed = store.agent_thread_index.session_for_thread(thread_id) if store.agent_thread_index else None
+    for session_id in [indexed] if indexed else store.session_ids():
+        panel = store.active_right_panel_window_for_thread(session_id, thread_id)
         if panel is not None:
             return panel
     raise HTTPException(status_code=404, detail="未知 Thread。")
@@ -221,9 +222,9 @@ def list_sidebar_threads(
         raise HTTPException(status_code=422, detail="无效的 SidebarThread 状态。")
     web: WebAppState = request.app.state.web
     store = session_store(web)
-    items = store.list_sidebar_thread_summaries(state=state)
+    all_items = store.list_sidebar_thread_summaries(state="all")
+    items = all_items if state == "all" else [item for item in all_items if item.thread.state == state]
     if state in {"active", "all"}:
-        all_items = store.list_sidebar_thread_summaries(state="all")
         groups: dict[str | None, list[Any]] = {}
         for item in items:
             groups.setdefault(_project_id(web, item.thread.session_id), []).append(item)

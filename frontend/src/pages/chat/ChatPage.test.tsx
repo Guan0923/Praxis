@@ -1171,6 +1171,27 @@ describe("ChatPage running Turn configuration", () => {
 });
 
 describe("ChatPage queued message flushing", () => {
+  it.each(["automatic", "manual"])("keeps a complete %s batch while its last item is saving", async (mode) => {
+    let finish!: (item: QueuedMessage) => void;
+    vi.mocked(createQueuedMessage).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const onRun = vi.fn();
+    render(<QueueHarness terminalStatus="success" onRun={onRun} />);
+    await userEvent.type(screen.getByLabelText("聊天输入"), "third queued message");
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    if (mode === "automatic") fireEvent.click(screen.getByRole("button", { name: "结束当前 Turn" }));
+    else expect(screen.getByRole("button", { name: "追加指令" })).toBeDisabled();
+    expect(onRun).not.toHaveBeenCalled();
+    const calls = vi.mocked(createQueuedMessage).mock.calls;
+    const [threadId, id, content, references] = calls[calls.length - 1];
+    await act(async () => finish({ thread_id: threadId, id, content, references: references ?? [], state: "pending", created_at: "now", updated_at: "now" }));
+    if (mode === "manual") {
+      fireEvent.click(screen.getByRole("button", { name: "追加指令" }));
+      await waitFor(() => expect(steerTurn).toHaveBeenCalledWith("turn-running", expect.any(String), ["queued-1", "queued-2", id], "session-rewind"));
+    } else {
+      await waitFor(() => expect(onRun).toHaveBeenCalledWith(expect.objectContaining({ queuedDelivery: { messageIds: ["queued-1", "queued-2", id] } })));
+    }
+  });
+
   it("blocks Agent controls and shows a temporary non-persisted failure bubble", async () => {
     const onRun = vi.fn();
     render(
@@ -1254,11 +1275,12 @@ describe("ChatPage queued message flushing", () => {
     try {
       fireEvent.click(screen.getByRole("button", { name: "删除第 1 条待发送消息" }));
       fireEvent.click(screen.getByRole("button", { name: "结束当前 Turn" }));
-      await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
-      expect(onRun.mock.calls[0][0].queuedDelivery.messageIds).toEqual(["queued-2"]);
+      expect(onRun).not.toHaveBeenCalled();
     } finally {
       await act(async () => finish());
     }
+    await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
+    expect(onRun.mock.calls[0][0].queuedDelivery.messageIds).toEqual(["queued-2"]);
   });
 
   it("sends one queued entry to the running Turn and waits for SSE acknowledgement", async () => {
@@ -1358,9 +1380,10 @@ describe("ChatPage queued message flushing", () => {
     expect(screen.getByRole("button", { name: "删除第 1 条待发送消息" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "发送第 1 条待发送消息" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "结束当前 Turn" }));
+    expect(onRun).not.toHaveBeenCalled();
+    await act(async () => resolve());
     await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
     expect(onRun.mock.calls[0][0].queuedDelivery.messageIds).toEqual(["queued-2"]);
-    await act(async () => resolve());
     expect(screen.getByLabelText("聊天输入")).toHaveTextContent("第一条");
     expect(screen.getByTestId("queued-count")).toHaveTextContent("0");
     expect(onRun).toHaveBeenCalledTimes(1);

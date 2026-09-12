@@ -110,6 +110,7 @@ export default function AgentShell(props: AgentShellProps) {
     props.current?.activeTurnId ?? props.current?.lastNodeId,
     props.onHydratePanelConversation,
     props.onForgetPanelConversation,
+    props.current?.threadId ?? props.current?.id,
   );
   useEffect(() => {
     if (isMobile) setSidebarCollapsed(false);
@@ -119,7 +120,7 @@ export default function AgentShell(props: AgentShellProps) {
     const width = panel.payload?.state.width || DEFAULT_RIGHT_PANEL_WIDTH;
     rawPanelWidthRef.current = width;
     setPreviewPanelWidth(width);
-  }, [props.current?.sessionId, panel.payload?.state.width]);
+  }, [props.current?.id, panel.payload?.state.width]);
   const userBackendRequest = <T,>(request: () => T): T => {
     props.sandboxHealth.notifyUserBackendRequest();
     return request();

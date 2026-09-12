@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from backend.api.app import create_app
 from backend.api.state import WebAppState
-from backend.domain.runtime_state import NodeWriter, RuntimeNode, RuntimeRootState, RuntimeState
+from backend.domain.runtime_state import NodeWriter, RuntimeRootState, RuntimeState
 from backend.storage import MemoryMessageQueue, SQLiteSessionStore
 
 
@@ -214,17 +214,17 @@ def test_sidebar_refresh_keeps_one_snapshot_during_turn_creation(
         with sqlite3.connect(state.paths.session_db(session_id)) as connection:
             assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
         nodes_read, writer_done = Event(), Event()
-        original_objects = SQLiteSessionStore._objects
+        original_objects = SQLiteSessionStore._node_summaries
 
-        def read_objects(connection: sqlite3.Connection, selected_session_id: str, namespace: str) -> list[RuntimeNode]:
-            objects = original_objects(connection, selected_session_id, namespace)
-            if selected_session_id == session_id and namespace == "runtime_node" and not nodes_read.is_set():
+        def read_objects(connection: sqlite3.Connection, selected_session_id: str) -> dict:
+            objects = original_objects(connection, selected_session_id)
+            if selected_session_id == session_id and not nodes_read.is_set():
                 nodes_read.set()
                 if not writer_done.wait(timeout=10):
                     raise TimeoutError("Concurrent Turn creation did not finish")
             return objects
 
-        monkeypatch.setattr(SQLiteSessionStore, "_objects", staticmethod(read_objects))
+        monkeypatch.setattr(SQLiteSessionStore, "_node_summaries", staticmethod(read_objects))
         with ThreadPoolExecutor(max_workers=1) as executor:
             refresh = executor.submit(client.get, "/api/sidebar-threads", params={"state": "all"})
             try:

@@ -236,18 +236,32 @@ async def canonical_operation_session(request, state, claimed_session: str | Non
         if item is not None:
             resolved = item.session_id
         else:
-            for summary in await asyncio.to_thread(store.list_sessions, state="all"):
-                panel = await asyncio.to_thread(
-                    store.active_right_panel_window_for_thread, summary.session_id, thread_id
-                )
+            indexed = state.agent_thread_index.session_for_thread(thread_id)
+            for session_id in [indexed] if indexed else await asyncio.to_thread(lambda: list(store.session_ids())):
+                panel = await asyncio.to_thread(store.active_right_panel_window_for_thread, session_id, thread_id)
                 if panel is not None:
                     resolved = panel.session_id
                     break
     turn = re.match(r"^/api/turns/([^/]+)", path)
     if turn:
-        item = await asyncio.to_thread(store.find_node, turn.group(1))
-        if item is not None:
-            resolved = item.session_id
+        live_session = next(
+            (
+                session_id
+                for (session_id, node_id), bridge in getattr(state, "live_turn_bridges", {}).items()
+                if node_id == turn.group(1) and not bridge.closed
+            ),
+            None,
+        )
+        if live_session is not None:
+            resolved = live_session
+        else:
+            item = (
+                await asyncio.to_thread(store.get_node, claimed_session, turn.group(1))
+                if claimed_session
+                else await asyncio.to_thread(store.find_node, turn.group(1))
+            )
+            if item is not None:
+                resolved = item.session_id
     agent_thread = re.match(r"^/api/agent-threads/([^/]+)", path)
     if agent_thread:
         resolved = state.agent_thread_index.session_for_thread(agent_thread.group(1))

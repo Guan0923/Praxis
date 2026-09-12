@@ -244,7 +244,7 @@ def create_turn(body: CreateTurnRequest, request: Request) -> dict[str, object]:
 def rewind_turn(turn_id: str, body: RewindTurnRequest, request: Request) -> dict[str, object]:
     state: WebAppState = request.app.state.web
     store = session_store(state)
-    source = _turn(store, turn_id)
+    source = _turn(store, turn_id, session_id=getattr(request.state, "operation_session_id", None))
     files = session_file_store(state, source.session_id)
     item = _user_item(body.message)
     try:
@@ -275,7 +275,7 @@ def rewind_turn(turn_id: str, body: RewindTurnRequest, request: Request) -> dict
 def resume_turn(turn_id: str, body: TurnExecutionConfig, request: Request) -> dict[str, object]:
     state: WebAppState = request.app.state.web
     store = session_store(state)
-    source = _turn(store, turn_id)
+    source = _turn(store, turn_id, session_id=getattr(request.state, "operation_session_id", None))
     if source.status != "paused":
         raise HTTPException(status_code=409, detail="只有 paused Turn 可以恢复。")
     runtime = store.load_runtime(source.session_id, thread_id=source.thread_id)
@@ -327,14 +327,15 @@ def resume_turn(turn_id: str, body: TurnExecutionConfig, request: Request) -> di
 def pause_turn(turn_id: str, request: Request) -> dict[str, object]:
     state: WebAppState = request.app.state.web
     store = session_store(state)
-    source = _turn(store, turn_id)
+    source = _turn(store, turn_id, state=state, session_id=getattr(request.state, "operation_session_id", None))
     controller = getattr(state, "active_turn_cancellations", {}).get(turn_id)
     request_pause = getattr(controller, "request_pause", None)
     if callable(request_pause):
         request_pause()
-        return source.to_dict()
+        return {"turn_id": source.id, "status": "accepted"}
     try:
-        return store.pause_turn(turn_id).to_dict()
+        paused = store.pause_turn(turn_id)
+        return {"turn_id": paused.id, "status": paused.status}
     except ValueError as exc:
         return error_response(exc, status_code=409, detail=str(exc))
 
@@ -347,7 +348,7 @@ def steer_turn(
 ) -> dict[str, str]:
     state: WebAppState = request.app.state.web
     store = session_store(state)
-    source = _turn(store, turn_id)
+    source = _turn(store, turn_id, state=state, session_id=getattr(request.state, "operation_session_id", None))
     if source.status != "running":
         raise HTTPException(status_code=409, detail="只有 running Turn 可以接收新输入。")
     active_stream = getattr(state, "active_turn_streams", {}).get(turn_id)
@@ -361,7 +362,7 @@ def steer_turn(
             message_ids=body.message_ids,
             session_id=source.session_id,
             thread_id=source.thread_id,
-            turn_id=source.id,
+            turn_id=active_stream.turn_id,
         )
 
     try:
@@ -379,13 +380,15 @@ def steer_turn(
 @router.post("/{turn_id}/fork", status_code=201)
 def fork_turn(turn_id: str, body: ForkTurnRequest, request: Request) -> dict[str, object]:
     store = session_store(request.app.state.web)
-    source = _turn(store, turn_id)
-    source_sidebar = store.get_sidebar_thread(source.thread_id)
+    source = _turn(store, turn_id, session_id=getattr(request.state, "operation_session_id", None))
+    source_sidebar = store.get_sidebar_thread(source.thread_id, session_id=source.session_id)
     if source_sidebar is None or source_sidebar.session_id != source.session_id:
         raise HTTPException(status_code=409, detail="源 SidebarThread 不可用。")
     thread_id = body.thread_id or new_thread_id()
     try:
-        forked = store.fork_turn_node(turn_id, new_turn_id=new_node_id(), thread_id=thread_id)
+        forked = store.fork_turn_node(
+            turn_id, new_turn_id=new_node_id(), thread_id=thread_id, session_id=source.session_id
+        )
         sidebar = store.create_sidebar_thread(
             session_id=source.session_id,
             thread_id=thread_id,
@@ -394,7 +397,17 @@ def fork_turn(turn_id: str, body: ForkTurnRequest, request: Request) -> dict[str
         )
     except (ValueError, RuntimeStateValidationError) as exc:
         return error_response(exc, status_code=409, detail=str(exc))
-    return {"turn": forked.to_dict(), "sidebar_thread": store.sidebar_thread_summary(sidebar).to_dict()}
+    page = store.load_turn_page(source.session_id, thread_id)
+    return {
+        "turn": forked.to_dict(),
+        "sidebar_thread": store.sidebar_thread_summary(sidebar).to_dict(),
+        "history": {
+            "turns": [project_turn(store, node) for node in page.turns],
+            "current_turn_id": page.current_turn_id,
+            "next_cursor": page.next_cursor,
+            "has_more": page.next_cursor is not None,
+        },
+    }
 
 
 @router.post("/{turn_id}/compact", status_code=201)
@@ -404,7 +417,7 @@ def compact_turn(
 ) -> dict[str, object]:
     state: WebAppState = request.app.state.web
     store = session_store(state)
-    source = _turn(store, turn_id)
+    source = _turn(store, turn_id, session_id=getattr(request.state, "operation_session_id", None))
     if source.status != "success":
         raise HTTPException(status_code=409, detail="只有 success Turn 可以压缩。")
 
@@ -476,7 +489,7 @@ def patch_current_data(turn_id: str, body: CurrentDataRequest, request: Request)
 def patch_turn_config(turn_id: str, body: TurnConfigPatch, request: Request) -> dict[str, object]:
     state: WebAppState = request.app.state.web
     store = session_store(state)
-    node = _turn(store, turn_id)
+    node = _turn(store, turn_id, session_id=getattr(request.state, "operation_session_id", None))
     if node.status != "running":
         raise HTTPException(status_code=409, detail="只有 running Turn 可以修改运行配置。")
     model = None

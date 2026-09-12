@@ -11,6 +11,15 @@ const current: Conversation = { id: "conversation", threadId: "thread", title: "
 const item: QueuedMessage = { id: "local", thread_id: "thread", content: "unsaved", references: [], state: "pending", created_at: "2026-09-09", updated_at: "2026-09-09" };
 
 describe("queue refresh ordering", () => {
+  it("refreshes after backend acknowledgement without another Turn frame", async () => {
+    vi.mocked(listQueuedMessages).mockResolvedValue([item]);
+    const { result } = renderHook(() => useQueuedMessages({ current, conversations: [current], panelConversations: {}, onError: vi.fn() }));
+    await waitFor(() => expect(result.current.queuedMessages.get(current.id)).toHaveLength(1));
+    vi.mocked(listQueuedMessages).mockResolvedValue([]);
+    act(() => window.dispatchEvent(new CustomEvent("praxis-queue-changed", { detail: current.threadId })));
+    await waitFor(() => expect(result.current.queuedMessages.get(current.id)).toEqual([]));
+  });
+
   it("removes failed stored messages once they disappear from the backend", () => {
     expect(mergeLocalMessages([{ ...item, error: "delete failed" }], [])).toEqual([]);
   });

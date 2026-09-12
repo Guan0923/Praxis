@@ -30,6 +30,7 @@ function TimelineHarness({ messages, threadId = "thread-1" }: { messages: readon
 
 beforeEach(() => {
   timelineClientHeight = 96;
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
   Object.defineProperties(HTMLElement.prototype, {
     getBoundingClientRect: {
       configurable: true,
@@ -119,8 +120,7 @@ describe("ConversationTimeline", () => {
   });
 
   it("renders ticks, a sibling tooltip, Gaussian hover and in-window jump", async () => {
-    const scrollIntoView = vi.fn();
-    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    const scrollTo = vi.spyOn(HTMLElement.prototype, "scrollTo");
     const user = userEvent.setup();
     render(
       <StrictMode>
@@ -151,7 +151,7 @@ describe("ConversationTimeline", () => {
     expect(timelineWheel).not.toHaveBeenCalled();
 
     fireEvent.click(rows[0]!);
-    expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
+    expect(scrollTo).toHaveBeenCalledWith({ top: expect.any(Number), behavior: "instant" });
   });
 
   it("starts at the latest tick, follows only true appends from the bottom and resets on Thread switch", () => {

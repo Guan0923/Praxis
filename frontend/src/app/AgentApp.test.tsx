@@ -9,7 +9,10 @@ import type { AgentShellProps } from "./AgentShell";
 import AgentApp from "./AgentApp";
 import { MemoryRouter } from "react-router-dom";
 
+const sync = vi.hoisted(() => ({ onEvent: async (_event: { type: string }) => {} }));
+
 vi.mock("../api/applicationSync", () => ({ subscribeApplicationEvents: (onEvent: (event: { type: string }) => Promise<void>, onStatus: (ready: boolean) => void) => {
+  sync.onEvent = onEvent;
   let active = true;
   queueMicrotask(() => { if (active) void onEvent({ type: "sync.reset" }).then(() => onStatus(true)); });
   return () => { active = false; };
@@ -152,6 +155,17 @@ async function expectKnownEmptySession(sessionId: string): Promise<void> {
 }
 
 describe("AgentApp new conversation initialization", () => {
+  it("preserves the loaded parent when the sidebar catalog changes", async () => {
+    const source = session("catalog-head");
+    const head = turn(source.session_id, source.session_id, "current-head");
+    api.listSessions.mockResolvedValue([source]);
+    api.getTurnPage.mockResolvedValue({ turns: [head], current_turn_id: head.id, next_cursor: null, has_more: false });
+    await renderReady();
+    await waitFor(() => expect(shell.props?.current?.lastNodeId).toBe(head.id));
+    await act(async () => sync.onEvent({ type: "catalog.changed" }));
+    expect(shell.props?.current?.lastNodeId).toBe(head.id);
+    expect(api.getTurnPage).toHaveBeenCalledTimes(1);
+  });
   beforeEach(() => {
     api.getTurnPage.mockImplementation(async (sid: string, tid?: string) => { const turns = await api.getSessionNodes(sid, tid); return { turns, current_turn_id: turns[turns.length - 1]?.id ?? null, next_cursor: null, has_more: false }; });
     localStorage.clear();
@@ -404,6 +418,7 @@ describe("AgentApp new conversation initialization", () => {
     const forkedTurn = turn(source.session_id, "thread-fork", "turn-fork");
     api.forkTurn.mockResolvedValue({
       turn: forkedTurn,
+      history: { turns: [forkedTurn], current_turn_id: forkedTurn.id, next_cursor: null, has_more: false },
       sidebar_thread: {
         thread_id: "thread-fork",
         session_id: source.session_id,

@@ -43,6 +43,7 @@ interface StripRect {
 export interface ConversationTimelineProps {
   messages: readonly ChatMessage[];
   scrollContainerRef: RefObject<HTMLDivElement | null>;
+  onNavigate?: (top: number) => void;
 }
 
 export function conversationTurnId(messageId: string): string {
@@ -97,16 +98,21 @@ function gaussWeight(distance: number): number {
   return distance > GAUSS_RADIUS ? 0 : Math.exp(-(distance * distance) / (2 * GAUSS_SIGMA * GAUSS_SIGMA));
 }
 
-function hitTarget(key: string): void {
-  const target = [...document.querySelectorAll<HTMLElement>("[data-chat-anchor-key]")]
+function hitTarget(key: string, container: HTMLDivElement | null, onNavigate?: (top: number) => void): void {
+  if (!container) return;
+  const target = [...container.querySelectorAll<HTMLElement>("[data-chat-anchor-key]")]
     .find((candidate) => candidate.dataset.chatAnchorKey === key);
   if (!target) return;
-  target.scrollIntoView({ block: "center", behavior: "smooth" });
+  const top = container.scrollTop + target.getBoundingClientRect().top
+    - container.getBoundingClientRect().top - container.clientTop
+    - Math.max(0, (container.clientHeight - target.getBoundingClientRect().height) / 2);
+  if (onNavigate) onNavigate(top);
+  else container.scrollTo({ top, behavior: "instant" });
   target.classList.add("conversation-timeline-hit");
   target.addEventListener("animationend", () => target.classList.remove("conversation-timeline-hit"), { once: true });
 }
 
-export default function ConversationTimeline({ messages, scrollContainerRef }: ConversationTimelineProps) {
+export default function ConversationTimeline({ messages, scrollContainerRef, onNavigate }: ConversationTimelineProps) {
   const showButtonTooltips = useButtonTooltips();
   const entries = useMemo(() => buildTimelineEntries(messages), [messages]);
   const fingerprints = useMemo(() => entries.map((entry) => entry.fingerprint), [entries]);
@@ -265,7 +271,7 @@ export default function ConversationTimeline({ messages, scrollContainerRef }: C
               onMouseEnter={() => setHoverKey(entry.key)}
               onFocus={() => setHoverKey(entry.key)}
               onClick={() => {
-                if (aliveRef.current) hitTarget(entry.key);
+                if (aliveRef.current) hitTarget(entry.key, scrollContainerRef.current, onNavigate);
               }}
             >
               <span className={css.tick} style={tickStyle(index)} />

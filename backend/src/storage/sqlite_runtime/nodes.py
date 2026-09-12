@@ -245,8 +245,8 @@ class SQLiteNodeMixin:
 
     def find_node(self, node_id: str) -> RuntimeNode | None:
         matches: list[RuntimeNode] = []
-        for summary in self.list_sessions(state="all"):
-            node = self.get_node(summary.session_id, node_id)
+        for session_id in self.session_ids():
+            node = self.get_node(session_id, node_id)
             if node is not None:
                 matches.append(node)
         if len(matches) > 1:
@@ -350,7 +350,9 @@ class SQLiteNodeMixin:
                 raise ValueError("Conversation history contains a cycle.")
             seen.add(key)
             node = read_node(current_session, current_id)
-            if node is None or isinstance(node, RuntimeRootState):
+            if node is None:
+                raise ValueError(f"Conversation parent Turn is missing: {current_id}")
+            if isinstance(node, RuntimeRootState):
                 break
             page.append(node)
             current_session, current_id = node.parent_session_id, node.parent_id
@@ -605,13 +607,22 @@ class SQLiteNodeMixin:
         return node
 
     def fork_turn_node(
-        self, turn_id: str, *, new_turn_id: str | None = None, thread_id: str | None = None
+        self,
+        turn_id: str,
+        *,
+        new_turn_id: str | None = None,
+        thread_id: str | None = None,
+        session_id: str | None = None,
     ) -> TreeRuntimeState:
-        source = _require_runtime_turn(self.find_node(turn_id), turn_id)
+        source = _require_runtime_turn(
+            self.get_node(session_id, turn_id) if session_id else self.find_node(turn_id), turn_id
+        )
         if source.status == "running":
             raise ValueError("A running Turn cannot be forked.")
-        nodes = self.load_nodes(source.session_id)
-        forked = RuntimeStateTree(nodes).fork(
+        parent = self.get_node(source.parent_session_id, source.parent_id)
+        if parent is None:
+            raise ValueError("Turn parent is missing.")
+        forked = RuntimeStateTree([parent]).fork(
             source, id=new_turn_id or new_node_id(), thread_id=thread_id or new_thread_id()
         )
         self.create_finalized_nodes([forked])

@@ -121,7 +121,7 @@ export default function ChatPage({
   const messages = unboundMessage
     ? [...(conversation?.messages ?? []), unboundMessage]
     : conversation?.messages ?? [];
-  const { chatScrollRef, handleScroll: handleChatScroll, isAtBottom, scrollToBottom } = useChatScroll(
+  const { chatScrollRef, handleScroll: handleChatScroll, isAtBottom, scrollToBottom, scrollToPosition } = useChatScroll(
     savedKey || conversation?.id,
     messages,
     active,
@@ -356,7 +356,7 @@ export default function ChatPage({
   }
 
   function defaultSourceNodeId(): string | undefined {
-    return conversation?.lastNodeId;
+    return conversation?.activeTurnId ?? conversation?.lastNodeId;
   }
 
   async function ensureSession(): Promise<{ conversationId: string; sessionId: string }> {
@@ -738,6 +738,7 @@ export default function ChatPage({
             key={currentThreadId ?? "no-thread"}
             messages={messages}
             scrollContainerRef={chatScrollRef}
+            onNavigate={scrollToPosition}
           />
         ) : null}
         {!isAtBottom ? (
@@ -783,7 +784,7 @@ export default function ChatPage({
         onStop={actionMode === "steer" ? queuedMessageFlow.sendPendingMessages : stop}
         onSend={() => void send()}
         actionMode={actionMode}
-        submitDisabled={sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || rewindPending || composerActionState.disabled || ((sendPending || queuedMessageFlow.startingTurn || queuedMessageFlow.takingOutMessage) && (actionMode === "send" || actionMode === "resume"))}
+        submitDisabled={sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || rewindPending || composerActionState.disabled || (actionMode === "steer" && queuedMessages.some((item) => item.saving)) || ((sendPending || queuedMessageFlow.startingTurn || queuedMessageFlow.takingOutMessage) && (actionMode === "send" || actionMode === "resume"))}
         disabled={sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || rewindPending}
         inputDisabled={queuedMessageFlow.takingOutMessage}
         disabledReason={sandboxBlocked
