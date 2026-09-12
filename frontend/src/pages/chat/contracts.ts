@@ -33,9 +33,8 @@ export interface ChatPageProps {
   onSelectSession?: (id: string) => Promise<string>;
   onReload?: (id: string) => Promise<void>;
   onRefresh?: () => Promise<void>;
-  running?: boolean;
   onRun?: (request: ChatRunRequest) => Promise<void>;
-  onStopRun?: (conversationId: string) => void;
+  onStopRun?: (turn: RuntimeStateNode) => void;
   queuedMessages?: QueuedMessage[];
   onQueuedMessagesChange?: (conversationId: string, updater: (items: QueuedMessage[]) => QueuedMessage[]) => void;
   onQueuedMessagesRefresh?: (conversationId: string) => Promise<void>;
@@ -89,9 +88,10 @@ export function composerAction(
   status: RuntimeStateNode["status"] | undefined,
   hasDraft: boolean,
   uploading = false,
+  hasQueuedInput = false,
 ): { mode: ComposerActionMode; disabled: boolean } {
   const mode: ComposerActionMode = status === "running" && !hasDraft
-    ? "pause"
+    ? hasQueuedInput ? "steer" : "pause"
     : status === "paused" && !hasDraft
       ? "resume"
       : "send";

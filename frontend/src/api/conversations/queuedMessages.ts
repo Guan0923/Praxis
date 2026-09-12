@@ -22,7 +22,7 @@ export async function createQueuedMessage(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id, content, references }),
-    operation: { sessionId, dedupeKey: `queued-message:create:${id}` },
+    operation: { sessionId, group: `queue:${threadId}`, dedupeKey: `queued-message:create:${id}` },
   });
 }
 
@@ -37,10 +37,10 @@ export async function updateQueuedMessage(
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ content, references }),
-    operation: { sessionId },
+    operation: { sessionId, group: `queue:${threadId}` },
   });
 }
 
 export async function deleteQueuedMessage(threadId: string, messageId: string, sessionId?: string): Promise<void> {
-  await requestVoid(queueUrl(threadId, messageId), { method: "DELETE", operation: { sessionId } });
+  await requestVoid(queueUrl(threadId, messageId), { method: "DELETE", operation: { sessionId, group: `queue:${threadId}` } });
 }

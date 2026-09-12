@@ -313,6 +313,7 @@ class WebAppState:
             [
                 lambda: self.job_registry.close_all(reason="web application closed", timeout=5.0),
                 self._finish_active_sessions,
+                self.conversation_cache.close,
                 self.agent_thread_events.close,
                 self.terminal_manager.close_all,
                 self.runtime_event_stream.close,

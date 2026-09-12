@@ -27,8 +27,6 @@ export interface ActiveRun {
   sessionId: string;
   turnId?: string;
   settled: Promise<void>;
-  stopRequested?: boolean;
-  cancelIssued?: boolean;
   cancelTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -41,5 +39,6 @@ export interface QueuedMessage {
   created_at: string;
   updated_at: string;
   saving?: boolean;
+  unsaved?: boolean;
   error?: string;
 }

@@ -153,6 +153,9 @@ def resume_session(
     session = store.get_session(preview.session_id)
     assert session is not None
     runtime = conversation.runner.empty_runtime(session_id=preview.session_id, runtime_store=store)
+    if conversation.runtime is not None:
+        runtime.services.register_operation_abort = conversation.runtime.services.register_operation_abort
+        runtime.services.operation_interrupted = conversation.runtime.services.operation_interrupted
     runtime.state = resumed
     conversation.runtime = conversation.runner.bind(runtime)
     conversation.active_session = session

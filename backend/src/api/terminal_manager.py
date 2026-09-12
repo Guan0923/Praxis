@@ -205,10 +205,13 @@ class TerminalManager:
         with session.condition:
             session.condition.notify_all()
 
-    def close_thread(self, thread_id: str) -> None:
+    def capture_terminal_ids(self, thread_ids: set[str]) -> set[str]:
+        """Capture existing identities for cleanup without closing later replacements."""
         with self._lock:
-            ids = [key for key, session in self._sessions.items() if session.thread_id == thread_id]
-        for terminal_id in ids:
+            return {key for key, session in self._sessions.items() if session.thread_id in thread_ids}
+
+    def close_thread(self, thread_id: str) -> None:
+        for terminal_id in self.capture_terminal_ids({thread_id}):
             self.close(terminal_id)
 
     def close_all(self) -> None:

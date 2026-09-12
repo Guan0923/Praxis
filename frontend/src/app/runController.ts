@@ -18,26 +18,16 @@ export interface RunControllerCallbacks {
 }
 
 export function createRunController(callbacks: RunControllerCallbacks) {
-  function requestPause(conversationId: string, active: ActiveRun): void {
-    if (!active.turnId || active.cancelIssued) return;
-    active.cancelIssued = true;
-    void pauseTurn(active.turnId, active.sessionId).catch((error) => {
-      if (callbacks.activeRuns.get(conversationId) !== active) return;
-      active.stopRequested = false;
-      active.cancelIssued = false;
-      const message = `暂停失败，请重试：${String((error as Error).message ?? error)}`;
-      callbacks.onControlError?.(message);
-      callbacks.updateLastMessage(conversationId, (item) => ({
-        ...item,
-        error: message,
-      }));
-    });
-  }
+  const pendingPauses = new Set<string>();
+  const canReplaceSubscription = new WeakMap<ActiveRun, () => boolean>();
 
   async function runConversation(request: ChatRunRequest): Promise<void> {
     const previous = callbacks.activeRuns.get(request.conversationId);
     if (previous) {
-      if (!request.waitForActiveRun) return;
+      if (!request.attach && canReplaceSubscription.get(previous)?.()) {
+        // Explicitly replace a sealed subscription, not the backend execution.
+        previous.controller.abort();
+      } else if (!request.waitForActiveRun) return;
       await previous.settled;
       if (callbacks.activeRuns.has(request.conversationId)) return;
     }
@@ -51,6 +41,7 @@ export function createRunController(callbacks: RunControllerCallbacks) {
     const accumulator = runtimeNodeAccumulator();
     const pendingTurns = new Map<string, RuntimeStateNode>();
     let finalTurn: RuntimeStateNode | undefined;
+    canReplaceSubscription.set(active, () => finalTurn !== undefined && finalTurn.status !== "running");
     let admissionAccepted = false;
     let pendingActiveTurnId: string | undefined;
     let forcePathProjection = false;
@@ -128,8 +119,9 @@ export function createRunController(callbacks: RunControllerCallbacks) {
         || message.patch?.current_data_idx !== undefined
         || message.operations?.some((operation) => operation.op === "append_message") === true;
       scheduleFrameFlush();
-      if (active.stopRequested && !active.cancelIssued && turn.status === "running") {
-        requestPause(request.conversationId, active);
+      if (turn.status !== "running") {
+        // Publish the Turn state now; the same SSE may still carry continuation Turns.
+        flushPendingFrames();
       }
     };
 
@@ -267,20 +259,27 @@ export function createRunController(callbacks: RunControllerCallbacks) {
       }
     } finally {
       cancelScheduledFrame();
-      if (callbacks.activeRuns.get(request.conversationId)?.controller === controller) {
+      canReplaceSubscription.delete(active);
+      if (callbacks.activeRuns.get(request.conversationId) === active) {
         callbacks.activeRuns.delete(request.conversationId);
       }
-      await callbacks.refreshSessions().catch(() => undefined);
-      await callbacks.refreshQueuedMessages?.(request.conversationId).catch(() => undefined);
       releaseSettled();
+      const reportRefreshError = (error: unknown) => {
+        callbacks.onControlError?.(String((error as Error).message ?? error));
+      };
+      void Promise.resolve().then(() => callbacks.refreshSessions()).catch(reportRefreshError);
+      void Promise.resolve().then(() => callbacks.refreshQueuedMessages?.(request.conversationId)).catch(reportRefreshError);
     }
   }
 
-  function stopConversation(id: string): void {
-    const active = callbacks.activeRuns.get(id);
-    if (!active || active.stopRequested) return;
-    active.stopRequested = true;
-    requestPause(id, active);
+  function stopConversation(turn: Pick<RuntimeStateNode, "id" | "session_id" | "status">): void {
+    if (turn.status !== "running") return;
+    const key = `${turn.session_id}:${turn.id}`;
+    if (pendingPauses.has(key)) return;
+    pendingPauses.add(key);
+    void pauseTurn(turn.id, turn.session_id).catch((error) => {
+      callbacks.onControlError?.(`暂停失败，请重试：${String((error as Error).message ?? error)}`);
+    }).finally(() => pendingPauses.delete(key));
   }
 
   return { runConversation, stopConversation };

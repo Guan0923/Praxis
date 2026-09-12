@@ -66,7 +66,6 @@ export default function ChatPage({
   onSelectSession = async (id) => id,
   onReload = async () => undefined,
   onRefresh = async () => undefined,
-  running: runningProp,
   onRun,
   onStopRun,
   queuedMessages = [],
@@ -110,7 +109,6 @@ export default function ChatPage({
     onModeChange(value);
   }, [agentThreadView.isSubagent, agentThreadView.selectedThreadId, onModeChange]);
   const { chatPageRef, compact, isMobile } = useResponsiveChatLayout(active);
-  const [queueSubmitting, setQueueSubmitting] = useState(false);
   const [compactionPending, setCompactionPending] = useState(false);
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const [commandTriggerState, setCommandTriggerState] = useState<CommandTrigger | null>(null);
@@ -158,11 +156,13 @@ export default function ChatPage({
     handleChatScroll();
     if (chatScrollRef.current && chatScrollRef.current.scrollTop <= 24) void loadEarlier();
   };
-  // A queue flush has no optimistic assistant message by design. Keep the
-  // composer in its running interaction mode from the moment the flush
-  // request is sent until its SSE cleanup, including the tiny interval
-  // between the optimistic user bubble and the first turn.snapshot frame.
-  const busy = agentThreadView.isSubagent ? false : Boolean(runningProp) || queueSubmitting;
+  const activeRuntimeNode = conversation?.runtimeNodes?.find(
+    (node): node is RuntimeStateNode => isRuntimeTurnNode(node)
+      && node.id === conversation.activeTurnId
+      && node.session_id === conversation.sessionId
+      && node.thread_id === (conversation.threadId ?? conversation.sessionId),
+  );
+  const busy = !agentThreadView.isSubagent && activeRuntimeNode?.status === "running";
   const sandboxBlocked = sandboxHealth.phase !== "healthy";
   const interactionBusy = busy || compactionPending || sandboxBlocked;
   const projectUnavailable = conversation?.projectId !== undefined && conversation.projectAvailable === false;
@@ -218,12 +218,6 @@ export default function ChatPage({
   const fileMenuVisible = fileMenuAvailable;
   const display = configuredDisplayMode ?? "medium";
 
-  const activeRuntimeNode = conversation?.runtimeNodes?.find(
-    (node): node is RuntimeStateNode => isRuntimeTurnNode(node)
-      && node.id === conversation.activeTurnId
-      && node.session_id === conversation.sessionId
-      && node.thread_id === (conversation.threadId ?? conversation.sessionId),
-  );
   const todoTurnId = conversation?.activeTurnId ?? activeRuntimeNode?.id;
   const todo = useMemo(() => latestTodoList(messages, todoTurnId), [messages, todoTurnId]);
   const todoPanelKey = `${conversation?.id ?? "draft"}:${todoTurnId ?? "no-turn"}`;
@@ -299,9 +293,10 @@ export default function ChatPage({
   } = messageEditing;
   const hasDraft = Boolean(input.trim() || references.length > 0 || pendingUploads.some((upload) => upload.status === "done"));
   const composerActionState = composerAction(
-    agentThreadView.isSubagent ? undefined : busy ? "running" : activeRuntimeNode?.status,
+    agentThreadView.isSubagent ? undefined : activeRuntimeNode?.status,
     hasDraft,
     pendingUploads.some((upload) => upload.status === "uploading"),
+    queuedMessages.some((item) => item.state === "pending" && !item.saving && !item.error),
   );
   const actionMode = agentThreadView.isSubagent ? "send" : composerActionState.mode;
   const chatCommands = useChatCommands({
@@ -325,9 +320,7 @@ export default function ChatPage({
     conversation,
     activeRuntimeNode,
     queuedMessages,
-    queueSubmitting,
-    sandboxBlocked,
-    isSubagent: agentThreadView.isSubagent,
+    disabled: sandboxBlocked || sessionReadOnly || agentThreadView.isSubagent,
     input,
     collectedReferences,
     clearComposer,
@@ -335,23 +328,14 @@ export default function ChatPage({
     setInput,
     setReferences,
     setPendingUploads,
-    setQueueSubmitting,
     onQueuedMessagesChange,
     onQueuedMessagesRefresh,
-    onSetLast: setLast,
-    onDispatch: ({ conversationId, sessionId, sourceNodeId, messageIds, onBaseline }) => dispatchRun(
-      conversationId,
-      sessionId,
-      null,
-      false,
-      sourceNodeId,
-      undefined,
-      undefined,
-      true,
-      onBaseline,
-      { messageIds },
-    ),
-    onStop: stop,
+    onDispatch: ({ conversationId, sessionId, sourceNodeId, messageIds }) => new Promise<void>((resolve, reject) => {
+      void dispatchRun(
+        conversationId, sessionId, null, false, sourceNodeId, undefined, undefined,
+        true, undefined, { messageIds }, () => resolve(),
+      ).catch(reject);
+    }),
     onWarning: (content) => void message.warning(content),
   });
 
@@ -580,7 +564,7 @@ export default function ChatPage({
   }
 
   async function send() {
-    if (compactionPending || sandboxBlocked || sessionReadOnly || sendPendingRef.current) return;
+    if (compactionPending || sandboxBlocked || sessionReadOnly || sendPendingRef.current || queuedMessageFlow.startingTurn || queuedMessageFlow.takingOutMessage) return;
     const attempt = {};
     sendPendingRef.current = attempt;
     setSendPending(true);
@@ -638,7 +622,7 @@ export default function ChatPage({
         }
         return;
       }
-      if (busy || activeRuntimeNode?.status === "running") {
+      if (activeRuntimeNode?.status === "running") {
         const queued = queuedMessageFlow.queueCurrentPrompt(prompt, mergedReferences);
         releaseSend();
         await queued;
@@ -669,8 +653,8 @@ export default function ChatPage({
   }
 
   function stop() {
-    if (conversation && onStopRun) {
-      onStopRun(conversation.id);
+    if (activeRuntimeNode && onStopRun) {
+      onStopRun(activeRuntimeNode);
     }
   }
 
@@ -793,11 +777,12 @@ export default function ChatPage({
         onPermissionChange={(value) => void changePermissionMode(value)}
         onReasoningChange={(value) => void changeReasoningEffort(value)}
         onSettingsSelectChange={setOpenSettingsSelect}
-        onStop={queuedMessageFlow.pauseOrSteer}
+        onStop={actionMode === "steer" ? queuedMessageFlow.sendPendingMessages : stop}
         onSend={() => void send()}
         actionMode={actionMode}
-        submitDisabled={queuedMessageFlow.takingOutMessage || sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || composerActionState.disabled || (sendPending && actionMode === "send")}
-        disabled={queuedMessageFlow.takingOutMessage || sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly}
+        submitDisabled={sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || composerActionState.disabled || ((sendPending || queuedMessageFlow.startingTurn || queuedMessageFlow.takingOutMessage) && (actionMode === "send" || actionMode === "resume"))}
+        disabled={sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly}
+        inputDisabled={queuedMessageFlow.takingOutMessage}
         disabledReason={sandboxBlocked
           ? sandboxHealth.phase === "checking" ? "正在检查沙箱 Broker" : "沙箱 Broker 不可用"
           : sessionReadOnly ? ownership === "unknown" ? "正在确认窗口操作权" : "当前 session 正在另一个窗口对话"

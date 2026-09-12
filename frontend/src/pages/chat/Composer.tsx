@@ -28,7 +28,7 @@ const PERMISSION_LABELS: Record<PermissionMode, string> = {
   full_access: "完全访问",
 };
 export type SettingsSelectKey = "mode" | "permission" | "reasoning";
-export type ComposerActionMode = "send" | "pause" | "resume";
+export type ComposerActionMode = "send" | "pause" | "resume" | "steer";
 
 export interface ComposerProps {
   input: string;
@@ -67,6 +67,7 @@ export interface ComposerProps {
   onStop: () => void;
   onSend: () => void;
   disabled?: boolean;
+  inputDisabled?: boolean;
   disabledReason?: string;
   // File references: completion menu + inline editor nodes.
   fileCandidates: FileCandidate[];
@@ -102,7 +103,6 @@ export default function Composer(props: ComposerProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const actionMode = props.actionMode ?? (props.busy ? "pause" : "send");
-  const steeringAvailable = props.queuedMessages?.some((item) => item.state === "pending" && !item.saving && !item.error);
 
   function openFilePicker() {
     if (props.disabled || props.uploadsDisabled) return;
@@ -281,7 +281,7 @@ export default function Composer(props: ComposerProps) {
           <input ref={fileInputRef} type="file" multiple hidden aria-hidden="true" onChange={handleFilesChange} />
           <FileMentionEditor
             ref={props.editorRef}
-            disabled={props.disabled}
+            disabled={props.disabled || props.inputDisabled}
             placeholder={props.disabledReason || "输入任务，按 Enter 发送"}
             onChange={props.onEditorChange}
             onPasteFiles={handlePaste}
@@ -290,41 +290,17 @@ export default function Composer(props: ComposerProps) {
             <IconAction className="file-upload-trigger" label="上传文件" icon={<PaperClipOutlined />} disabled={props.disabled || props.uploadsDisabled} onClick={openFilePicker} />
             {props.compact ? compactSettingsControls : settingsControls}
           </div>
-          {actionMode === "pause" ? (
-            <button
-              className="send-btn stop composer-reveal-item"
-              data-reveal-index="5"
-              type="button"
-              aria-label={steeringAvailable ? "追加指令" : "暂停"}
-              title={steeringAvailable ? "追加指令" : "暂停"}
-              onClick={props.onStop}
-              disabled={props.submitDisabled}
-            >
-              {steeringAvailable ? <SendOutlined aria-hidden="true" /> : <PauseCircleTwoTone aria-hidden="true" />}
-            </button>
-          ) : actionMode === "resume" ? (
-            <button
-              className="send-btn composer-reveal-item"
-              data-reveal-index="5"
-              type="button"
-              aria-label="继续"
-              onClick={props.onSend}
-              disabled={props.submitDisabled}
-            >
-              <PlayCircleTwoTone aria-hidden="true" />
-            </button>
-          ) : (
-            <button
-              className="send-btn composer-reveal-item"
-              data-reveal-index="5"
-              type="button"
-              aria-label={props.startMode ? "开始" : "发送"}
-              onClick={props.onSend}
-              disabled={props.submitDisabled ?? (props.disabled || props.uploadsUploading || (!props.startMode && !props.input.trim() && props.pendingUploads.every((upload) => upload.status !== "done")))}
-            >
-              <ArrowUpOutlined aria-hidden="true" />
-            </button>
-          )}
+          <button
+            className={actionMode === "pause" ? "send-btn stop" : "send-btn"}
+            type="button"
+            aria-label={actionMode === "pause" ? "暂停" : actionMode === "steer" ? "追加指令" : actionMode === "resume" ? "继续" : props.startMode ? "开始" : "发送"}
+            onClick={actionMode === "pause" || actionMode === "steer" ? props.onStop : props.onSend}
+            disabled={props.submitDisabled ?? (props.disabled || props.uploadsUploading || (!props.startMode && !props.input.trim() && props.pendingUploads.every((upload) => upload.status !== "done")))}
+          >
+            {actionMode === "pause" ? <PauseCircleTwoTone aria-hidden="true" />
+              : actionMode === "steer" ? <SendOutlined aria-hidden="true" />
+                : actionMode === "resume" ? <PlayCircleTwoTone aria-hidden="true" /> : <ArrowUpOutlined aria-hidden="true" />}
+          </button>
         </div>
       </div>
     </div>

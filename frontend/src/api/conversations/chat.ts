@@ -210,7 +210,7 @@ export async function streamChat(
   try {
     turn = await requestJson<RuntimeStateNode>(
       "/api/turns",
-      { ...jsonBody(body), signal },
+      { ...jsonBody(body), signal, operation: { sessionId: options.sessionId, group: `thread-turn:${options.threadId ?? options.sessionId}` } },
     );
     options.onAccepted?.(turn);
   } catch (error) {
@@ -270,7 +270,7 @@ export async function streamResume(
       running_mode: mode,
       provider_name: providerName,
       ...(model ? { model } : {}),
-    }), signal, operation: { sessionId } },
+    }), signal, operation: { sessionId, group: `turn-control:${sourceNodeId}:resume` } },
   );
   return streamEndpoint(
     `/api/turns/${encodeURIComponent(sourceNodeId)}/stream?session_id=${encodeURIComponent(sessionId)}`,
@@ -299,7 +299,7 @@ export async function streamAttachedTurn(
 export async function pauseTurn(turnId: string, sessionId?: string): Promise<void> {
   await requestJson(`/api/turns/${encodeURIComponent(turnId)}/pause`, {
     method: "POST",
-    operation: { sessionId, group: `turn-control:${turnId}` },
+    operation: { sessionId, group: `turn-control:${turnId}:pause` },
   });
 }
 
@@ -314,6 +314,6 @@ export async function steerTurn(
       delivery_id: deliveryId,
       message_ids: messageIds,
     }),
-    operation: { sessionId, group: `turn-control:${turnId}` },
+    operation: { sessionId, group: `turn-control:${turnId}:input` },
   });
 }
