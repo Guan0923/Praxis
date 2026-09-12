@@ -292,6 +292,7 @@ function RuntimeItemCollapse({
   const label = runtimeItemLabel(item, expanded, active);
   return (
     <Collapse
+      destroyOnHidden
       className={`runtime-collapse runtime-item-collapse runtime-${item.type.replace("_", "-")}`}
       data-item-type={item.type}
       ghost
@@ -301,7 +302,7 @@ function RuntimeItemCollapse({
       items={[{
         key: itemKey,
         label,
-        children: runtimeItemBody(item, display, active),
+        children: expanded ? runtimeItemBody(item, display, active) : null,
       }]}
     />
   );
@@ -393,16 +394,17 @@ function ParallelToolGroup({
           <span className="tool-call-id">{callId}</span>
         </span>
       ),
-      children: (
+      children: outerExpanded && innerExpanded.includes(childKey) ? (
         <div className="parallel-tool-body">
           {runtimeItemBody(call, display, active && !result)}
           {result ? runtimeItemBody(result, display, false) : null}
         </div>
-      ),
+      ) : null,
     };
   });
   return (
     <Collapse
+      destroyOnHidden
       className="runtime-collapse runtime-parallel-collapse"
       ghost
       size="small"
@@ -411,8 +413,9 @@ function ParallelToolGroup({
       items={[{
         key: itemKey,
         label: running ? <RuntimeStatusLabel text="并行调用工具" shimmer={!outerExpanded} /> : <span className="runtime-static-label">并行调用工具</span>,
-        children: (
+        children: outerExpanded ? (
           <Collapse
+            destroyOnHidden
             className="runtime-parallel-inner-collapse"
             ghost
             size="small"
@@ -420,7 +423,7 @@ function ParallelToolGroup({
             onChange={(keys) => setInnerExpanded((Array.isArray(keys) ? keys : [keys]).map(String))}
             items={children}
           />
-        ),
+        ) : null,
       }]}
     />
   );

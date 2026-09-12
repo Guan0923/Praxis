@@ -391,6 +391,21 @@ describe("assistant Item presentation", () => {
     },
   );
 
+  it("mounts reasoning only while expanded and restores the latest content", async () => {
+    const item: TurnItem = { type: "reasoning", text: "initial detail", status: "running" };
+    const view = render(renderAssistant(assistant([item], true)));
+    const header = () => view.container.querySelector(".runtime-item-collapse .ant-collapse-header")!;
+    expect(view.container.querySelector(".thinking-content")).toBeNull();
+    fireEvent.click(header());
+    await waitFor(() => expect(view.container.querySelector(".thinking-content")).toHaveTextContent("initial detail"));
+    fireEvent.click(header());
+    await waitFor(() => expect(view.container.querySelector(".thinking-content")).toBeNull());
+    view.rerender(renderAssistant(assistant([{ ...item, text: "latest detail" }], true)));
+    expect(view.container.querySelector(".thinking-content")).toBeNull();
+    fireEvent.click(header());
+    await waitFor(() => expect(view.container.querySelector(".thinking-content")).toHaveTextContent("latest detail"));
+  });
+
   it("keeps manual expansion across active changes while new Items stay folded", async () => {
     const first: TurnItem = { type: "reasoning", text: "流式思考", status: "running" };
     const tool: TurnItem = { type: "tool_call", call_id: "call-1", name: "read_file", arguments: {}, status: "running" };

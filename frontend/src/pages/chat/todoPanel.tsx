@@ -180,6 +180,7 @@ export function SessionTodoPanel({
   const open = userOpen ?? busy;
   return (
     <Collapse
+      destroyOnHidden
       className="todo-panel"
       size="small"
       items={[
@@ -204,7 +205,7 @@ export function SessionTodoPanel({
               }}
             />
           ) : null,
-          children: (
+          children: open ? (
             <div className="todo-body">
               <ul className="todo-list">
                 {todos.map((item) => (
@@ -220,7 +221,7 @@ export function SessionTodoPanel({
                 ))}
               </ul>
             </div>
-          ),
+          ) : null,
         },
       ]}
       activeKey={open ? ["todo"] : []}

@@ -135,7 +135,7 @@ function traceItemPanels(items: TurnTraceItem[]): NonNullable<CollapseProps["ite
       result.push(panel(`trace-group:${groupId}`, "tool", "并行调用工具", {
         status: failed ? "failed" : "success",
         timestamp: completedAt,
-        body: <Collapse className="trace-parallel-inner-collapse" items={children} />,
+        body: <Collapse destroyOnHidden className="trace-parallel-inner-collapse" items={children} />,
       }));
       return;
     }
@@ -278,6 +278,7 @@ function TurnTraceContent({ turn, dataIdx, active }: {
       {loading && !trace ? <div className="trace-loading"><Spin /></div> : null}
       {trace && innerItems.length > 0
         ? <Collapse
+            destroyOnHidden
             className="trace-inner-collapse"
             classNames={{ title: "trace-collapse-title" }}
             items={innerItems}
@@ -370,6 +371,7 @@ export default function TracePage({ turns }: TracePageProps) {
         </Button>
       </div>
       <Collapse
+        destroyOnHidden
         className="trace-turn-collapse"
         classNames={{ title: "trace-collapse-title" }}
         activeKey={activeTurnIds}
