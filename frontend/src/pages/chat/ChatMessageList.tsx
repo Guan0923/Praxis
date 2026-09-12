@@ -29,7 +29,7 @@ interface ChatMessageListProps {
   saveEdit: (message: ChatMessage) => Promise<void>;
   beginEdit: (message: ChatMessage) => void;
   handleUserBubbleClick: (event: ReactMouseEvent<HTMLDivElement>, message: ChatMessage) => void;
-  messageVersion: (message: ChatMessage) => { index: number; total: number } | undefined;
+  messageVersion: (message: ChatMessage) => { index: number; total: number; busy?: boolean } | undefined;
   changeMessageVersion: (message: ChatMessage, direction: -1 | 1) => Promise<void>;
   onDecision: (request: DecisionRequest, choice: string, options?: { supplement?: string; answers?: Record<string, string[]> }) => Promise<void>;
   onFork?: (messageId: string) => void;
@@ -185,7 +185,7 @@ function MessageTools({
   interactionBusy: boolean;
   canEdit: boolean;
   beginEdit: (message: ChatMessage) => void;
-  messageVersion: (message: ChatMessage) => { index: number; total: number } | undefined;
+  messageVersion: (message: ChatMessage) => { index: number; total: number; busy?: boolean } | undefined;
   changeMessageVersion: (message: ChatMessage, direction: -1 | 1) => Promise<void>;
 }) {
   const version = messageVersion(message);
@@ -199,7 +199,7 @@ function MessageTools({
             size="small"
             icon={<LeftOutlined />}
             aria-label="上一个消息版本"
-            disabled={interactionBusy || version.index === 0}
+            disabled={version.busy || version.index === 0}
             onClick={() => void changeMessageVersion(message, -1)}
           />
           <span aria-live="polite">{version.index + 1} / {version.total}</span>
@@ -208,7 +208,7 @@ function MessageTools({
             size="small"
             icon={<RightOutlined />}
             aria-label="下一个消息版本"
-            disabled={interactionBusy || version.index >= version.total - 1}
+            disabled={version.busy || version.index >= version.total - 1}
             onClick={() => void changeMessageVersion(message, 1)}
           />
         </div>

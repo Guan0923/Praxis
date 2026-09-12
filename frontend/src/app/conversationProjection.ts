@@ -63,7 +63,9 @@ export function withRefreshedTurns(conversation: Conversation, refreshed: Runtim
 }
 
 export function withTurnPage(conversation: Conversation, page: TurnPage, append = false): Conversation {
-  const nodes = new Map((append ? conversation.runtimeNodes ?? [] : []).map((node) => [node.id, node]));
+  const retained = append ? conversation.runtimeNodes ?? []
+    : (conversation.runtimeNodes ?? []).filter((node) => node.thread_id !== (conversation.threadId ?? conversation.sessionId));
+  const nodes = new Map(retained.map((node) => [node.id, node]));
   for (const node of page.turns) {
     if (!append || !nodes.has(node.id)) nodes.set(node.id, node);
   }

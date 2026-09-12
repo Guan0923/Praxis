@@ -16,6 +16,7 @@ import IconAction from "../components/IconAction";
 import type { SandboxHealthState } from "./useSandboxHealth";
 import RightPanel, { RightPanelLauncher, useRightPanel } from "../components/rightPanel/RightPanel";
 import { allowAllFilePanelsToLeave } from "../components/rightPanel/filePanelLifecycle";
+import { flushViews } from "./viewState";
 
 export const DEFAULT_RIGHT_PANEL_WIDTH = 420;
 export const RIGHT_PANEL_CLOSE_THRESHOLD = 280;
@@ -31,6 +32,8 @@ export function rightPanelResizeOutcome(width: number, savedWidth: number) {
 }
 
 export interface AgentShellProps {
+  routeUnavailable?: boolean;
+  synchronized?: boolean;
   profile: LocalProfile;
   page: Page;
   current: Conversation | null;
@@ -127,12 +130,14 @@ export default function AgentShell(props: AgentShellProps) {
   };
   const closeMobile = () => setMobileSidebarOpen(false);
   const navigate = (page: Page) => {
+    void flushViews();
     props.onNavigate(page);
     closeMobile();
   };
   const select = async (id: string) => {
     props.sandboxHealth.notifyUserBackendRequest();
     if (!await allowAllFilePanelsToLeave()) return;
+    void flushViews();
     props.onSelect(id);
     closeMobile();
   };
@@ -209,10 +214,15 @@ export default function AgentShell(props: AgentShellProps) {
     && Boolean(sourceTurn && "cwd" in sourceTurn && sourceTurn.cwd)
     && panel.payload?.capabilities.terminal_available === true;
   const mainContent = (
+        props.routeUnavailable ? <div role="status" style={{ padding: 24 }}>
+          <p>对话不存在、已归档或已删除。</p>
+          <button onClick={() => navigate("trash")}>前往回收站</button>
+        </div> :
         <ChatPage
           active={props.page === "chat"}
           conversation={props.current}
           agentThreadNavigation
+          retainedConversationIds={props.activeConversations.filter((item) => item.messagesLoaded).map((item) => item.id)}
           mode={props.current ? props.modeBySession[props.current.threadId ?? props.current.sessionId ?? props.current.id] ?? "agent" : props.draftMode}
           displayMode={props.displayMode}
           providerConfig={props.providerConfig}
@@ -276,6 +286,7 @@ export default function AgentShell(props: AgentShellProps) {
         {sidebarCollapsed && !isMobile ? <Button className="sidebar-reopen-button" type="default" size="small" onClick={() => setSidebarCollapsed(false)} aria-label="展开侧边栏" aria-expanded={false} aria-controls="chat-sidebar" icon={<MenuOutlined />} /> : null}
         {isMobile && <div className="mobile-sidebar-bar"><Button type="text" icon={<MenuOutlined />} onClick={() => setMobileSidebarOpen(true)} aria-label="打开会话列表">会话列表</Button></div>}
         <Layout.Content className="main" style={{ minHeight: 0 }}>
+          {props.synchronized === false ? <div role="status" className="sync-status">正在同步后端状态</div> : null}
           <div className={`retained-page retained-page--chat${chatWasHidden ? " retained-page--returned" : ""}`} hidden={props.page !== "chat"}>
           {visited.has("chat") || props.page === "chat" ? <>
           {!isMobile ? (

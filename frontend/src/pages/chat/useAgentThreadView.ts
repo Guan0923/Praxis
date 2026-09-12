@@ -1,6 +1,9 @@
 import type { TurnPage } from "../../api/conversations/turns";
 import { reportFromError } from "../../api/errorReport";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { UNSAFE_LocationContext, UNSAFE_NavigationContext } from "react-router-dom";
+import { ApiError, requestJson } from "../../api/transport/request";
+import { chatPath, parseChatPath } from "../../app/conversationNavigation";
 import { getSessionNodes, sendAgentThreadMessage, streamAgentThread } from "../../api";
 import { withLoadedTurns } from "../../app/conversationProjection";
 import { applyRuntimeNodeFrame, runtimeNodeAccumulator } from "../../app/runtime/runtimeNodeReducer";
@@ -18,6 +21,7 @@ import type {
 interface UseAgentThreadViewOptions {
   canonical: Conversation | null;
   enabled: boolean;
+  retainedConversationIds?: string[];
   onUpdate: (id: string, updater: (conversation: Conversation) => Conversation) => void;
 }
 
@@ -27,22 +31,48 @@ function mergeNodes(current: RuntimeTreeNode[] | undefined, updates: RuntimeTree
   return [...nodes.values()];
 }
 
-export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThreadViewOptions) {
+export function useAgentThreadView({ canonical, enabled, onUpdate, retainedConversationIds }: UseAgentThreadViewOptions) {
+  const router = useChatRoute();
   const [historyByThread, setHistoryByThread] = useState<Record<string, Pick<Conversation, "historyCursor" | "historyHasMore">>>({});
   const [selectedByRootThread, setSelectedByRootThread] = useState<Record<string, string>>({});
   const [pendingByThread, setPendingByThread] = useState<Record<string, ChatMessage[]>>({});
   const [treeInvalidation, setTreeInvalidation] = useState(0);
   const [streamError, setStreamError] = useState<Error | string | null>(null);
+  const [validTargets, setValidTargets] = useState<Set<string>>(() => new Set());
   const updateRef = useRef(onUpdate);
+  const observers = useRef(new Map<string, { controller: AbortController; owner: string; restart: () => void }>());
   const rootTreeStateByThread = useRef<Record<string, string>>({});
   updateRef.current = onUpdate;
+  useEffect(() => () => {
+    for (const observer of observers.current.values()) observer.controller.abort();
+    observers.current.clear();
+  }, []);
+  useEffect(() => {
+    const restart = () => {
+      for (const observer of [...observers.current.values()]) {
+        observer.controller.abort(); observer.restart();
+      }
+    };
+    window.addEventListener("praxis-sync-reset", restart);
+    return () => window.removeEventListener("praxis-sync-reset", restart);
+  }, []);
+  useEffect(() => {
+    if (!retainedConversationIds) return;
+    const retained = new Set(retainedConversationIds);
+    if (canonical?.id) retained.add(canonical.id);
+    for (const [key, observer] of observers.current) if (!retained.has(observer.owner)) {
+      observer.controller.abort(); observers.current.delete(key);
+    }
+  }, [retainedConversationIds]);
 
   const sessionId = canonical?.sessionId;
   const rootThreadId = canonical?.threadId;
   const selectedThreadId = rootThreadId
-    ? selectedByRootThread[rootThreadId] ?? rootThreadId
+    ? (enabled && router?.route?.threadId === rootThreadId ? router.route.agentId ?? rootThreadId : selectedByRootThread[rootThreadId] ?? rootThreadId)
     : canonical?.threadId;
   const isSubagent = Boolean(enabled && sessionId && selectedThreadId && selectedThreadId !== rootThreadId);
+  const targetKey = `${sessionId}:${rootThreadId}:${selectedThreadId}`;
+  useEffect(() => { setStreamError(null); }, [targetKey]);
   const rootTurnState = (canonical?.runtimeNodes ?? [])
     .filter(isRuntimeTurnNode)
     .filter((node) => node.thread_id === rootThreadId)
@@ -62,6 +92,7 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
 
   const viewConversation = useMemo(() => {
     if (!canonical || !isSubagent || !selectedThreadId) return canonical;
+    if (!validTargets.has(targetKey)) return null;
     const turns = (canonical.runtimeNodes ?? [])
       .filter(isRuntimeTurnNode)
       .filter((node) => node.thread_id === selectedThreadId)
@@ -78,11 +109,10 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
       canonical.runtimeNodes ?? [],
     );
     return { ...projected, ...historyByThread[selectedThreadId] };
-  }, [canonical, isSubagent, selectedThreadId, historyByThread]);
+  }, [canonical, isSubagent, selectedThreadId, historyByThread, validTargets, targetKey]);
 
   const viewRef = useRef(viewConversation);
   viewRef.current = viewConversation;
-  useEffect(() => { setHistoryByThread({}); }, [canonical?.id]);
 
   const pendingKey = sessionId && selectedThreadId ? `${sessionId}:${selectedThreadId}` : "";
   const canonicalDeliveryIds = useMemo(
@@ -110,8 +140,12 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
 
   useEffect(() => {
     if (!enabled || !isSubagent || !canonical?.id || !sessionId || !selectedThreadId) return;
-    const controller = new AbortController();
+    const observerKey = `${sessionId}:${selectedThreadId}`;
+    if (observers.current.has(observerKey)) return;
     const conversationId = canonical.id;
+    const startObserver = () => {
+    const controller = new AbortController();
+    observers.current.set(observerKey, { controller, owner: conversationId, restart: startObserver });
     let retryMs = 500;
     let lastEventId = "";
 
@@ -128,10 +162,17 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
     };
 
     const run = async () => {
+      let validated = false;
       while (!controller.signal.aborted) {
         const accumulator = runtimeNodeAccumulator();
         try {
-          await reload();
+          if (!validated) {
+            await requestJson(`/api/conversation-target/${encodeURIComponent(sessionId)}/${encodeURIComponent(rootThreadId!)}/${encodeURIComponent(selectedThreadId)}`);
+            if (controller.signal.aborted) return;
+            validated = true;
+            setValidTargets((current) => new Set([...current, targetKey]));
+          }
+          if (!canonical.runtimeNodes?.some((node) => node.thread_id === selectedThreadId)) await reload();
           const result = await streamAgentThread(sessionId, selectedThreadId, (event) => {
             if (event.type === "thread.ready") {
               setStreamError(null);
@@ -158,13 +199,18 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
         } catch (error) {
           if (controller.signal.aborted) return;
           setStreamError(error instanceof Error ? error : String(error));
+          if (error instanceof ApiError && (error.status === 404 || error.status === 409)) return;
           await new Promise<void>((resolve) => globalThis.setTimeout(resolve, retryMs));
           retryMs = Math.min(5_000, retryMs * 2);
         }
       }
     };
     void run();
-    return () => controller.abort();
+    };
+    startObserver();
+    if (!retainedConversationIds) return () => {
+      observers.current.get(observerKey)?.controller.abort(); observers.current.delete(observerKey);
+    };
   }, [canonical?.id, enabled, isSubagent, selectedThreadId, sessionId]);
 
   function applyHistoryPage(page: TurnPage, append = true) {
@@ -180,6 +226,10 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
 
   function selectThread(threadId: string) {
     if (!rootThreadId) return;
+    if (enabled && router && sessionId) {
+      router.navigate(chatPath(sessionId, rootThreadId, threadId));
+      return;
+    }
     setSelectedByRootThread((current) => ({ ...current, [rootThreadId]: threadId }));
   }
 
@@ -237,4 +287,11 @@ export function useAgentThreadView({ canonical, enabled, onUpdate }: UseAgentThr
     applyHistoryPage,
     sendMessage,
   };
+}
+
+function useChatRoute() {
+  const location = useContext(UNSAFE_LocationContext);
+  const navigation = useContext(UNSAFE_NavigationContext);
+  return location && navigation ? { route: parseChatPath(location.location.pathname),
+    navigate: (path: string) => navigation.navigator.push(path) } : null;
 }

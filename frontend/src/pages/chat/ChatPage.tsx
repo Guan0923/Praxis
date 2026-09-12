@@ -1,4 +1,5 @@
 import { ApiError } from "../../api/transport/request";
+import { ViewStateContext, useViewState, viewKey } from "../../app/viewState";
 import { getTurnPage } from "../../api/conversations/turns";
 import { withTurnPage } from "../../app/conversationProjection";
 import { ErrorDisplay } from "../../components/ErrorDisplay";
@@ -52,6 +53,7 @@ export default function ChatPage({
   showButtonTooltips = true,
   conversation: canonicalConversation,
   agentThreadNavigation = false,
+  retainedConversationIds,
   displayMode: configuredDisplayMode,
   providerConfig,
   mode: selectedMode,
@@ -81,9 +83,12 @@ export default function ChatPage({
   const agentThreadView = useAgentThreadView({
     canonical: canonicalConversation,
     enabled: agentThreadNavigation,
+    retainedConversationIds,
     onUpdate,
   });
   const conversation = agentThreadView.conversation;
+  const savedKey = viewKey(conversation?.sessionId, conversation?.threadId);
+  const savedView = useViewState(savedKey);
   const ownership = useSessionOwnership(conversation?.sessionId);
   const sessionReadOnly = Boolean(conversation?.sessionId) && ownership !== "writable";
   useEffect(() => {
@@ -120,12 +125,13 @@ export default function ChatPage({
     ? [...(conversation?.messages ?? []), unboundMessage]
     : conversation?.messages ?? [];
   const { chatScrollRef, handleScroll: handleChatScroll, isAtBottom, scrollToBottom } = useChatScroll(
-    conversation?.id,
+    savedKey || conversation?.id,
     messages,
     active,
+    { key: savedKey, hasMore: conversation?.historyHasMore, loadEarlier },
   );
   const historyRequestRef = useRef<string | null>(null);
-  const loadEarlier = async () => {
+  async function loadEarlier() {
     if (!conversation?.sessionId || conversation.historyHasMore !== true || historyRequestRef.current) return;
     const id = conversation.id;
     const cursor = conversation.historyCursor;
@@ -161,10 +167,11 @@ export default function ChatPage({
   const sandboxBlocked = sandboxHealth.phase !== "healthy";
   const interactionBusy = busy || compactionPending || sandboxBlocked;
   const projectUnavailable = conversation?.projectId !== undefined && conversation.projectAvailable === false;
-  const completionDisabled = compactionPending || sandboxBlocked || projectUnavailable;
+  const completionDisabled = compactionPending || sandboxBlocked || projectUnavailable || Boolean(savedKey && !savedView.loaded);
   const composerFiles = useComposerFiles({
     conversationId: conversation?.id,
     sessionId: conversation?.sessionId,
+    threadId: conversation?.threadId,
     completionDisabled,
     preserveDraft: (id) => {
       if (!id || createdConversationRef.current !== id) return false;
@@ -287,7 +294,7 @@ export default function ChatPage({
     onFork: agentThreadView.isSubagent ? undefined : onFork,
     onUpdate,
     runPrompt,
-    onError: (error) => setLast({ error: String((error as Error).message ?? error) }),
+    onError: (error) => { void message.error({ content: <ErrorDisplay error={error} />, duration: 0 }); },
   });
   const {
     editingMessageId,
@@ -362,9 +369,6 @@ export default function ChatPage({
     onWarning: (content) => void message.warning(content),
   });
 
-  useEffect(() => {
-    if (agentThreadView.streamError) void message.error({ content: <ErrorDisplay error={agentThreadView.streamError} />, duration: 0 });
-  }, [agentThreadView.streamError, message]);
 
   function updateLast(updater: (message: ChatMessage) => ChatMessage, conversationId = conversation?.id) {
     if (!conversationId) return;
@@ -674,8 +678,11 @@ export default function ChatPage({
   }
 
   return (
+    <ViewStateContext.Provider value={savedKey}>
     <ButtonTooltipContext.Provider value={showButtonTooltips}>
     <div ref={chatPageRef} className={`chat-page${compact ? " chat-page--compact" : ""}`}>
+      {savedView.error ? <div role="alert" className="chat-state-error">界面状态尚未保存：{savedView.error.message}</div> : null}
+      {agentThreadView.streamError ? <div role="alert" className="chat-state-error"><ErrorDisplay error={agentThreadView.streamError} /></div> : null}
       {currentThreadId ? (
         <ChatToolbar
           visible={hasTurnTree || agentThreadView.isSubagent}
@@ -806,5 +813,6 @@ export default function ChatPage({
       </>}
     </div>
     </ButtonTooltipContext.Provider>
+    </ViewStateContext.Provider>
   );
 }

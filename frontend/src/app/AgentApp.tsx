@@ -1,4 +1,8 @@
 import { deletedConversations } from "./conversationDeletion";
+import { useConversationNavigation } from "./conversationNavigation";
+import { subscribeApplicationEvents } from "../api/applicationSync";
+import { receiveVersion, overlayPendingVersions } from "./versionSelection";
+import { flushViews, receiveView, reloadViews } from "./viewState";
 import { trimConversationDetails } from "./conversationCache";
 import { ErrorDisplay } from "../components/ErrorDisplay";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -39,12 +43,10 @@ import { useSandboxHealth } from "./useSandboxHealth";
 import { hydrateConversationCatalog } from "./conversationHydration";
 import { useQueuedMessages } from "./useQueuedMessages";
 import { useSandboxRunLifecycle } from "./useSandboxRunLifecycle";
-import { subscribeVisibleSidebarRefresh } from "./sidebarRefresh";
 import type {
   ChatMessage,
   ChatMode,
   Conversation,
-  Page,
   DisplayMode,
   RuntimeStateNode,
   RuntimeTreeNode,
@@ -58,7 +60,6 @@ function AgentApp() {
   const initialSettings = useInitialSettings();
   const { message } = AntApp.useApp();
   const [profile, setProfile] = useState<LocalProfile>({ display_name: "本地用户", agent_preferences: "" });
-  const [page, setPage] = useState<Page>("chat");
   const [conversations, rawSetConversations] = useState<Conversation[]>([]);
   const setConversations = useCallback((update: React.SetStateAction<Conversation[]>) => {
     rawSetConversations((previous) => {
@@ -67,7 +68,7 @@ function AgentApp() {
     });
   }, []);
   const [archiveReadState, setArchiveReadState] = useState<ArchiveReadState>(() => loadArchiveReadState());
-  const [currentId, setCurrentId] = useState<string | null>(null);
+  const { page, currentId, setCurrentId, setPage, route } = useConversationNavigation(conversations);
   const [actionError, setActionError] = useState<Error | string | null>(null);
   const [modeBySession, setModeBySession] = useState<Record<string, ChatMode>>(() => loadSessionModes(localStorage));
   const [draftMode, setDraftMode] = useState<ChatMode>("agent");
@@ -86,6 +87,11 @@ function AgentApp() {
   const newConversationPromiseRef = useRef<Promise<string> | null>(null);
   const sandboxHealth = useSandboxHealth();
   const [panelConversations, setPanelConversations] = useState<Record<string, Conversation>>({});
+  const [synchronized, setSynchronized] = useState(false);
+  const liveConversations = useRef(conversations);
+  liveConversations.current = conversations;
+  const livePanels = useRef(panelConversations);
+  livePanels.current = panelConversations;
 
   const refreshSessions = useCallback((): Promise<void> => {
     if (refreshPromiseRef.current) return refreshPromiseRef.current;
@@ -150,21 +156,62 @@ function AgentApp() {
 
   useEffect(() => {
     let disposed = false;
-    void hydrateConversationCatalog().then((catalog) => {
+    const refreshDetails = async (sessions?: Set<string>) => {
+      const cached = [...liveConversations.current, ...Object.values(livePanels.current)];
+      await Promise.all(cached.filter((item) => item.sessionId && item.messagesLoaded
+        && (!sessions || sessions.has(item.sessionId)) && !activeRunsRef.current.has(item.id)).map(async (item) => {
+        const page = await getTurnPage(item.sessionId!, item.threadId);
+        if (!disposed) updateConversation(item.id, (current) => current.messagesLoaded
+          ? withRefreshedTurns(current, page.turns) : current);
+      }));
+    };
+    const refreshCatalog = async () => {
+      const catalog = await hydrateConversationCatalog();
       if (disposed) return;
       setProjects(catalog.projects);
       setRemovedProjects(catalog.removedProjects);
       setProjectsLoaded(true);
-      setConversations(catalog.conversations);
-    });
+      setConversations((previous) => catalog.conversations.map((item) => {
+        const old = previous.find((existing) => existing.id === item.id);
+        return old ? { ...old, ...item, messages: old.messages, runtimeNodes: old.runtimeNodes,
+          messagesLoaded: old.messagesLoaded, historyCursor: old.historyCursor,
+          historyHasMore: old.historyHasMore, activeTurnId: old.activeTurnId } : item;
+      }));
+    };
+    const unsubscribe = subscribeApplicationEvents(async (event) => {
+      if (event.type === "sync.reset") {
+        setSynchronized(false);
+        if (event.reason === "restart") {
+          for (const run of activeRunsRef.current.values()) run.controller.abort();
+          activeRunsRef.current.clear();
+        }
+        window.dispatchEvent(new Event("praxis-sync-reset"));
+        await refreshCatalog();
+        await Promise.all([refreshDetails(), reloadViews()]);
+      } else if (event.type === "sync.ready") {
+        await flushViews();
+      } else if (event.type === "catalog.changed") await refreshCatalog();
+      else if (event.type === "session.changed") {
+        await Promise.all([refreshCatalog(), refreshDetails(new Set([event.session_id]))]);
+      } else if (event.type === "view.changed") receiveView(event.view);
+      else if (event.type === "panel.changed") window.dispatchEvent(new CustomEvent("praxis-panel-changed", { detail: event.session_id }));
+      else if (event.type === "version.changed") {
+        for (const item of [...liveConversations.current, ...Object.values(livePanels.current)]) {
+          if (item.sessionId === event.selection.session_id && item.runtimeNodes?.some((node) => node.id === event.selection.id)) {
+            receiveVersion(event.selection, updateConversation, item.id);
+          }
+        }
+      }
+    }, setSynchronized, (error) => setActionError(error instanceof Error ? error : String(error)));
+    const save = () => { void flushViews(); };
+    window.addEventListener("pagehide", save);
     return () => {
       disposed = true;
+      unsubscribe();
+      window.removeEventListener("pagehide", save);
+      save();
     };
   }, []);
-
-  useEffect(() => {
-    return subscribeVisibleSidebarRefresh(refreshSessions);
-  }, [refreshSessions]);
 
   const visibleProjectIds = useMemo(() => new Set(projects.map((project) => project.project_id)), [projects]);
   const activeConversations = useMemo(
@@ -183,7 +230,8 @@ function AgentApp() {
   useEffect(() => {
     if (page === "trash") setArchiveReadState((previous) => markArchivedAsRead(previous, archivedConversations));
   }, [archivedConversations, page]);
-  const current = activeConversations.find((conversation) => conversation.id === currentId) ?? activeConversations[0] ?? null;
+  const current = activeConversations.find((conversation) => conversation.id === currentId
+    && (!route || conversation.sessionId === route.sessionId)) ?? null;
   useEffect(() => {
     for (const conversation of conversations) {
       if (!conversation.sessionId) continue;
@@ -198,11 +246,6 @@ function AgentApp() {
   // Removing a project can hide the currently selected conversation. Keep
   // the chat page in a deterministic empty/ordinary state instead of letting
   // the fallback silently select an unrelated project session.
-  useEffect(() => {
-    if (currentId && !activeConversations.some((conversation) => conversation.id === currentId)) {
-      setCurrentId(activeConversations.find((conversation) => !conversation.projectId)?.id ?? null);
-    }
-  }, [activeConversations, currentId]);
 
   useEffect(() => {
     if (current && current.sessionId && (!current.messagesLoaded || !current.runtimeNodes)) {
@@ -221,24 +264,19 @@ function AgentApp() {
       };
     }
     return undefined;
-  }, [current?.id, current?.sessionId, current?.messagesLoaded, current?.runtimeNodes]);
+  }, [current?.id, current?.sessionId, current?.threadId, current?.messagesLoaded]);
 
   useEffect(() => {
     if (currentId) visitedConversationsRef.current.set(currentId, ++visitCounterRef.current);
-    if (current?.sessionId && current.messagesLoaded && (current.runtimeNodes?.length ?? 0) > 0) {
-      void getTurnPage(current.sessionId, current.threadId).catch((error) => {
-        setActionError(error instanceof Error ? error : String(error));
-      });
-    }
   }, [currentId]);
 
 
 
   function updateConversation(id: string, updater: (conversation: Conversation) => Conversation) {
-    setConversations((previous) => previous.map((conversation) => (conversation.id === id ? updater(conversation) : conversation)));
+    setConversations((previous) => previous.map((conversation) => (conversation.id === id ? overlayPendingVersions(updater(conversation)) : conversation)));
     setPanelConversations((previous) => {
       const conversation = previous[id];
-      return conversation ? { ...previous, [id]: updater(conversation) } : previous;
+      return conversation ? { ...previous, [id]: overlayPendingVersions(updater(conversation)) } : previous;
     });
   }
 
@@ -588,6 +626,8 @@ function AgentApp() {
       onRevokeSkillTrust={revokeProjectSkillTrustFromSidebar}
       onRestoreProject={restoreProjectFromTrash}
       onSelect={(id) => { setCurrentId(id); setPage("chat"); }}
+      routeUnavailable={page === "chat" && Boolean(route) && projectsLoaded && !current}
+      synchronized={synchronized}
       onNavigate={setPage}
       onRename={renameConversation}
       onArchive={archiveConversation}

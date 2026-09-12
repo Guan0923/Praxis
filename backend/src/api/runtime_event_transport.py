@@ -122,6 +122,9 @@ def publish_terminal(
     cache = getattr(state, "conversation_cache", None)
     if cache is not None:
         cache.finish(thread_id, turn_id)
+    sync = getattr(state, "application_sync", None)
+    if sync is not None:
+        sync.publish("session.changed", session_id=session_id)
 
 
 def _terminal_envelope(

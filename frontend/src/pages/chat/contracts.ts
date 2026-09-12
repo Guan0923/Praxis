@@ -19,6 +19,7 @@ export interface ChatPageProps {
   showButtonTooltips?: boolean;
   conversation: Conversation | null;
   agentThreadNavigation?: boolean;
+  retainedConversationIds?: string[];
   displayMode?: DisplayMode;
   providerConfig?: ProviderConfig | null;
   mode?: ChatMode;

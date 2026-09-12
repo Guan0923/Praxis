@@ -42,6 +42,7 @@ class RewindTurnRequest(TurnExecutionConfig):
 
 
 class CurrentDataRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
     current_data_idx: int = Field(ge=0)
 
 

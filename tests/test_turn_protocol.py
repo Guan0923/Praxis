@@ -891,7 +891,7 @@ def test_root_turn_is_listed_but_rejects_every_turn_operation(tmp_path: Path) ->
             ),
             ("post", f"/api/turns/{root.id}/fork", {}),
             ("post", f"/api/turns/{root.id}/compact", None),
-            ("patch", f"/api/turns/{root.id}/current-data", {"current_data_idx": 0}),
+            ("patch", f"/api/turns/{root.id}/current-data", {"session_id": root.session_id, "current_data_idx": 0}),
             ("patch", f"/api/turns/{root.id}/config", {}),
         ]
         for method, url, body in requests:

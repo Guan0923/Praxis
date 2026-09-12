@@ -287,7 +287,7 @@ function RuntimeItemCollapse({
   display: DisplayMode;
   active: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useSavedExpansion(itemKey);
 
   const label = runtimeItemLabel(item, expanded, active);
   return (
@@ -366,8 +366,8 @@ function ParallelToolGroup({
   display: DisplayMode;
   active: boolean;
 }) {
-  const [outerExpanded, setOuterExpanded] = useState(false);
-  const [innerExpanded, setInnerExpanded] = useState<string[]>([]);
+  const [outerExpanded, setOuterExpanded] = useSavedExpansion(itemKey);
+  const [innerExpanded, setInnerExpanded] = useSavedExpansionKeys(`${itemKey}:`);
   const calls = items
     .filter((item) => item.type === "tool_call" && parallelGroupId(item) === groupId)
     .sort((left, right) => Number(left.parallel_index ?? 0) - Number(right.parallel_index ?? 0));
@@ -558,3 +558,4 @@ export function AssistantMessage({
     </div>
   );
 }
+import { useSavedExpansion, useSavedExpansionKeys } from "../../app/viewState";

@@ -29,6 +29,26 @@ import type {
   ToolEvent,
 } from "../../types";
 import ChatPage, { CHAT_COMPACT_WIDTH, composerAction } from "./ChatPage";
+import { clearViewStateCache } from "../../app/viewState";
+
+const viewFixtures = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+beforeEach(() => { clearViewStateCache(); viewFixtures.clear(); });
+
+vi.mock("../../api/transport/request", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../api/transport/request")>();
+  const states = viewFixtures;
+  return { ...original, requestJson: vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.startsWith("/api/conversation-target/")) return {};
+    if (!url.startsWith("/api/view-state/")) return original.requestJson(url, init);
+    const [session_id, thread_id] = url.split("/").slice(-2);
+    const state = states.get(url) ?? { session_id, thread_id, revision: 0, draft: "", references: [], uploads: [], reading: null, expanded: {} };
+    if (init?.method === "PATCH") {
+      Object.assign(state, JSON.parse(String(init.body)), { revision: Number(state.revision) + 1 });
+      states.set(url, state);
+    }
+    return structuredClone(state);
+  }) };
+});
 
 vi.mock("../../api", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../api")>(),
@@ -518,7 +538,7 @@ describe("ChatPage bottom anchoring", () => {
     expect(screen.queryByRole("button", { name: "滚动到底部" })).not.toBeInTheDocument();
   });
 
-  it("follows message growth only while the reader remains at the bottom", () => {
+  it("follows message growth only while the reader remains at the bottom", async () => {
     const firstMessages = [scrollMessage("assistant-1", "assistant", "first")];
     const view = render(<ScrollHarness messages={firstMessages} />);
     const scrollContainer = document.querySelector<HTMLDivElement>("[data-conversation-scroll]")!;
@@ -528,7 +548,7 @@ describe("ChatPage bottom anchoring", () => {
 
     metrics.scrollHeight = 1200;
     view.rerender(<ScrollHarness messages={[...firstMessages, scrollMessage("assistant-2", "assistant", "streaming")]} />);
-    expect(metrics.scrollTop).toBe(600);
+    await waitFor(() => expect(metrics.scrollTop).toBe(600));
 
     metrics.scrollTop = 300;
     fireEvent.scroll(scrollContainer);

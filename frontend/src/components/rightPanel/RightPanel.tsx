@@ -40,6 +40,7 @@ export function useRightPanel(
   onHydrate: (window: RightPanelWindow) => Promise<void>,
   onForget: (windowId: string) => void,
 ): RightPanelController {
+  const { message } = App.useApp();
   const ownership = useSessionOwnership(sessionId);
   const writable = !sessionId || ownership === "writable";
   const [payload, setPayload] = useState<RightPanelPayload | null>(null);
@@ -49,6 +50,14 @@ export function useRightPanel(
   const requestRef = useRef(0);
   hydrateRef.current = onHydrate;
   forgetRef.current = onForget;
+  const [invalidation, setInvalidation] = useState(0);
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === sessionId) setInvalidation((value) => value + 1);
+    };
+    window.addEventListener("praxis-panel-changed", refresh);
+    return () => window.removeEventListener("praxis-panel-changed", refresh);
+  }, [sessionId]);
 
   useEffect(() => {
     let active = true;
@@ -63,11 +72,12 @@ export function useRightPanel(
       .then((next) => {
         if (!active || requestId !== requestRef.current) return;
         setPayload(next);
-        void Promise.all(next.windows.filter((item) => item.kind === "side_chat").map(hydrateRef.current));
+        return Promise.all(next.windows.filter((item) => item.kind === "side_chat").map(hydrateRef.current));
       })
+      .catch((error) => { if (active) void message.error({ content: <ErrorDisplay error={error} /> }); })
       .finally(() => { if (active && requestId === requestRef.current) setLoading(false); });
     return () => { active = false; };
-  }, [sessionId]);
+  }, [sessionId, invalidation]);
 
   const createWindow = async (kind: "side_chat" | "terminal" | "files") => {
     if (!sessionId) throw new Error("当前没有可用会话。");

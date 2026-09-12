@@ -13,6 +13,10 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("../../api", () => api);
+vi.mock("../../api/transport/request", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../api/transport/request")>(),
+  requestJson: vi.fn().mockResolvedValue({}),
+}));
 
 interface StreamCall {
   sessionId: string;
@@ -261,7 +265,7 @@ describe("useAgentThreadView", () => {
     expect(streams[0].signal.aborted).toBe(false);
   });
 
-  it("reloads history and reconnects after an unexpected idle stream end", async () => {
+  it("reconnects using stream snapshots without reloading cached history", async () => {
     api.streamAgentThread
       .mockImplementationOnce(async (
         sessionId: string,
@@ -286,7 +290,7 @@ describe("useAgentThreadView", () => {
     fireEvent.click(screen.getByRole("button", { name: "select child A" }));
 
     await waitFor(() => expect(api.streamAgentThread).toHaveBeenCalledTimes(2), { timeout: 2_000 });
-    expect(api.getSessionNodes.mock.calls.filter(([sessionId]) => sessionId === "session_a").length).toBeGreaterThanOrEqual(2);
+    expect(api.getSessionNodes.mock.calls.filter(([sessionId]) => sessionId === "session_a")).toHaveLength(0);
   });
 
   it("recovers from a revision gap when the reconnected stream starts from a rebased snapshot", async () => {

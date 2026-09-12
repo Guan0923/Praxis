@@ -34,6 +34,8 @@ class SQLiteRightPanelMixin:
         if active_window_id is not ...:
             changes["active_window_id"] = active_window_id
         result = replace(current, **changes)
+        if result == current:
+            return current
         now = utc_now()
         with self._connection(session_id, write=True) as connection:
             self._assert_writable(connection)

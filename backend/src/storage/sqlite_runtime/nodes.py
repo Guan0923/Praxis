@@ -414,6 +414,40 @@ class SQLiteNodeMixin:
         self.update_node(node)
         return node
 
+    def select_turn_version(self, session_id: str, turn_id: str, index: int) -> dict:
+        if not self.paths.session_db(session_id).is_file():
+            raise KeyError(turn_id)
+        with self._connection(session_id, write=True, refresh_index=False, notify=False) as connection:
+            row = connection.execute(
+                "SELECT json_extract(payload_json, '$.status'), json_extract(payload_json, '$.thread_id'), "
+                "json_array_length(payload_json, '$.data') FROM json_objects "
+                "WHERE session_id=? AND namespace='runtime_node' AND object_id=?",
+                (session_id, turn_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(turn_id)
+            if row[0] is None:
+                raise ValueError("根 Turn 仅用于记录对话起点。")
+            if row[0] == "running":
+                raise RuntimeStateValidationError("Cannot select a version while the Turn is running.")
+            if not 0 <= index < row[2]:
+                raise RuntimeStateValidationError("current_data_idx is out of range.")
+            record = self._json_object(connection, session_id, "version_selection", turn_id) or {"revision": 0}
+            result = {
+                "session_id": session_id,
+                "thread_id": row[1],
+                "id": turn_id,
+                "current_data_idx": index,
+                "revision": record["revision"] + 1,
+            }
+            connection.execute(
+                "UPDATE json_objects SET payload_json=json_set(payload_json, '$.current_data_idx', ?) "
+                "WHERE session_id=? AND namespace='runtime_node' AND object_id=?",
+                (index, session_id, turn_id),
+            )
+            self._put_json_object(connection, session_id, "version_selection", turn_id, result, utc_now())
+        return result
+
     def pause_turn(self, turn_id: str, message: str = "Paused by user.") -> TreeRuntimeState:
         node = _require_runtime_turn(self.find_node(turn_id), turn_id)
         if node.status != "running":

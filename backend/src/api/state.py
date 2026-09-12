@@ -71,6 +71,10 @@ class WebAppState:
         self.system_job_scope = self.job_registry.root_scope()
         self.message_queue = message_queue if message_queue is not None else MemoryMessageQueue()
         self.runtime_event_stream = MemoryRuntimeEventStream()
+        from .application_sync import ApplicationSync
+
+        self.application_sync = ApplicationSync(self.runtime_event_stream)
+        self.projects.on_change = lambda: self.application_sync.publish("catalog.changed")
         self.todo_store = MemoryTodoListStore()
         self.started_at = utc_iso()
         self.closing = False
@@ -88,6 +92,9 @@ class WebAppState:
         self.conversation_deletion = ConversationDeletion(self)
         self.message_queue.on_change = self.conversation_cache.trim
         self.agent_thread_index = AgentThreadIndex()
+        self.agent_thread_index.on_store_change = lambda session_id, kind: self.application_sync.publish(
+            kind, session_id=session_id
+        )
 
         self.active_runtime_configs: dict[str, RuntimeConfigUpdate] = {}
         self.active_runtime_bridges: dict[str, object] = {}

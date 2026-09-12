@@ -1,7 +1,6 @@
 import type { TextAreaRef } from "antd/es/input/TextArea";
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { patchTurnCurrentData } from "../../api";
-import { projectTurnPath } from "../../app/runtime/runtimeDetailProjection";
+import { selectVersion } from "../../app/versionSelection";
 import { isRuntimeTurnNode } from "../../app/runtime/runtimeNodeNormalization";
 import type { ChatMessage, Conversation, FileReference, RuntimeStateNode } from "../../types";
 import type { RewindResult } from "./contracts";
@@ -125,27 +124,13 @@ export function useMessageEditing({
   }
 
   async function changeMessageVersion(message: ChatMessage, direction: -1 | 1) {
-    if (!conversation || !message.nodeId || interactionBusy) return;
-    const turn = conversation.runtimeNodes?.find((item) => item.id === message.nodeId);
-    if (!turn || !isRuntimeTurnNode(turn)) return;
-    const nextIndex = turn.current_data_idx + direction;
-    if (nextIndex < 0 || nextIndex >= turn.data.length) return;
-    try {
-      const updated = await patchTurnCurrentData(turn.id, nextIndex, conversation.sessionId);
-      onUpdate(conversation.id, (current) => {
-        const map = new Map((current.runtimeNodes ?? []).map((item) => [`${item.session_id}:${item.id}`, item] as const));
-        map.set(`${updated.session_id}:${updated.id}`, updated);
-        const activeTurnId = current.activeTurnId ?? activeRuntimeNode?.id ?? updated.id;
-        return { ...current, runtimeNodes: [...map.values()], messages: projectTurnPath(map, activeTurnId, true) };
-      });
-    } catch (error) {
-      onError(error);
-    }
+    if (!conversation || !message.nodeId) return;
+    await selectVersion(conversation, message.nodeId, direction, onUpdate, onError);
   }
 
   function messageVersion(message: ChatMessage) {
     const turn = conversation?.runtimeNodes?.find((item) => item.id === message.nodeId);
-    return turn && isRuntimeTurnNode(turn) ? { index: turn.current_data_idx, total: turn.data.length } : undefined;
+    return turn && isRuntimeTurnNode(turn) ? { index: turn.current_data_idx, total: turn.data.length, busy: turn.status === "running" } : undefined;
   }
 
   return {

@@ -7,6 +7,13 @@ import type { ProjectInfo } from "../api/projects";
 import type { RuntimeRootNode, RuntimeStateNode } from "../types";
 import type { AgentShellProps } from "./AgentShell";
 import AgentApp from "./AgentApp";
+import { MemoryRouter } from "react-router-dom";
+
+vi.mock("../api/applicationSync", () => ({ subscribeApplicationEvents: (onEvent: (event: { type: string }) => Promise<void>, onStatus: (ready: boolean) => void) => {
+  let active = true;
+  queueMicrotask(() => { if (active) void onEvent({ type: "sync.reset" }).then(() => onStatus(true)); });
+  return () => { active = false; };
+} }));
 import { TURN_PROTOCOL_VERSION } from "./runtime/runtimeNodeNormalization";
 
 const api = vi.hoisted(() => ({
@@ -125,9 +132,12 @@ function turn(
 }
 
 async function renderReady(strict = false): Promise<void> {
-  const app = <AntApp><AgentApp /></AntApp>;
+  const app = <MemoryRouter><AntApp><AgentApp /></AntApp></MemoryRouter>;
   render(strict ? <StrictMode>{app}</StrictMode> : app);
   await waitFor(() => expect(shell.props?.projectsLoaded).toBe(true));
+  if (shell.props?.activeConversations[0]) {
+    await act(async () => shell.props!.onSelect(shell.props!.activeConversations[0].id));
+  }
 }
 
 async function expectKnownEmptySession(sessionId: string): Promise<void> {
@@ -180,7 +190,8 @@ describe("AgentApp new conversation initialization", () => {
       await Promise.all([first, second]);
     });
 
-    expect(shell.props?.current?.id).toBe("session-refreshed");
+    expect(shell.props?.current).toBeNull();
+    expect(shell.props?.activeConversations[0]?.id).toBe("session-refreshed");
   });
 
   it("keeps the last successful Sidebar summaries when refresh fails", async () => {

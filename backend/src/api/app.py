@@ -13,7 +13,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .error_handlers import install_error_handlers
@@ -113,6 +113,7 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
     from .routes.sidebar_threads import router as sidebar_threads_router
     from .routes.skill_settings import router as skill_settings_router
     from .routes.turns import router as turns_router
+    from .routes.view_state import router as view_state_router
     from .routes.window_control import router as window_control_router
     from .session_files import router as session_files_router
     from .shared.benchmark import create_benchmark_app
@@ -133,6 +134,17 @@ def create_app(state: WebAppState | None = None) -> FastAPI:
     app.include_router(turns_router)
     app.include_router(session_files_router)
     app.include_router(window_control_router)
+    app.include_router(view_state_router)
+    frontend_dist = Path(os.environ.get("PRAXIS_FRONTEND_DIST", str(REPO_ROOT / "frontend" / "dist"))).expanduser()
+    if frontend_dist.is_dir():
+
+        @app.get("/benchmark", include_in_schema=False)
+        @app.get("/trash", include_in_schema=False)
+        @app.get("/chat/{session_id}/{thread_id}", include_in_schema=False)
+        @app.get("/chat/{session_id}/{thread_id}/agent/{agent_thread_id}", include_in_schema=False)
+        def frontend_page():
+            return FileResponse(frontend_dist / "index.html", headers={"Cache-Control": "no-cache"})
+
     app.mount("/benchmark", create_benchmark_app(resolved))
 
     @app.get("/api/health")

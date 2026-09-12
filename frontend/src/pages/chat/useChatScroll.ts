@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../../types";
+import { patchView, useViewState } from "../../app/viewState";
 
 const BOTTOM_THRESHOLD_PX = 24;
 
@@ -35,7 +36,9 @@ function isAtBottom(scrollContainer: HTMLDivElement): boolean {
   return scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight <= BOTTOM_THRESHOLD_PX;
 }
 
-export function useChatScroll(conversationId: string | undefined, messages: ChatMessage[], active = true) {
+export function useChatScroll(conversationId: string | undefined, messages: ChatMessage[], active = true,
+  persistence?: { key: string; hasMore?: boolean; loadEarlier: () => Promise<void> }) {
+  const saved = useViewState(persistence?.key ?? "");
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const scrollConversationIdRef = useRef<string | undefined>(undefined);
@@ -43,6 +46,10 @@ export function useChatScroll(conversationId: string | undefined, messages: Chat
   const positionRef = useRef<ReadingPosition | null>(null);
   const restoringRef = useRef(false);
   const restoreOnRevealRef = useRef(false);
+  const loadedKey = useRef<string | undefined>(undefined);
+  const interrupted = useRef(false);
+  const persistenceRef = useRef(persistence);
+  persistenceRef.current = persistence;
 
   const syncBottomState = useCallback((scrollContainer: HTMLDivElement) => {
     if (scrollContainer.clientHeight === 0) return;
@@ -60,7 +67,24 @@ export function useChatScroll(conversationId: string | undefined, messages: Chat
     scrollConversationIdRef.current = conversationId;
     if (conversationChanged) {
       shouldStickToBottomRef.current = true;
+      setIsAtBottomState(true);
       positionRef.current = null;
+      loadedKey.current = undefined;
+      interrupted.current = false;
+    }
+    if (persistence?.key && !saved.loaded) return;
+    if (persistence?.key && loadedKey.current !== persistence.key) {
+      loadedKey.current = persistence.key;
+      const reading = saved.value.reading;
+      if (reading) {
+        positionRef.current = { ...reading, messageId: reading.messageId ?? undefined };
+        shouldStickToBottomRef.current = reading.atBottom;
+      }
+    }
+    if (!interrupted.current && positionRef.current?.messageId && !shouldStickToBottomRef.current
+      && !messages.some((item) => item.id === positionRef.current?.messageId) && persistence?.hasMore) {
+      void persistence.loadEarlier();
+      return;
     }
     if (scrollContainer.clientHeight === 0 || restoringRef.current) return;
     if (!shouldStickToBottomRef.current) {
@@ -69,7 +93,7 @@ export function useChatScroll(conversationId: string | undefined, messages: Chat
     }
     scrollContainer.scrollTop = scrollContainer.scrollHeight;
     syncBottomState(scrollContainer);
-  }, [conversationId, messages, syncBottomState, active]);
+  }, [conversationId, messages, syncBottomState, active, saved.loaded, persistence?.key, persistence?.hasMore]);
 
   useLayoutEffect(() => {
     if (!active) {
@@ -90,7 +114,7 @@ export function useChatScroll(conversationId: string | undefined, messages: Chat
       } else if (restoringRef.current && positionRef.current) {
         restorePosition(scrollContainer, positionRef.current);
       }
-      if (!restoringRef.current) syncBottomState(scrollContainer);
+      if (!restoringRef.current && !persistenceRef.current?.key) syncBottomState(scrollContainer);
       else if (frame === undefined) {
         // Keep the anchor through the first resize delivery after revealing Splitter.
         frame = requestAnimationFrame(() => {
@@ -107,7 +131,7 @@ export function useChatScroll(conversationId: string | undefined, messages: Chat
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(restore) : null;
     observer?.observe(scrollContainer);
     observer?.observe(scrollContent);
-    const interruptRestore = () => { restoringRef.current = false; };
+    const interruptRestore = () => { restoringRef.current = false; interrupted.current = true; };
     scrollContainer.addEventListener("wheel", interruptRestore, { passive: true });
     scrollContainer.addEventListener("pointerdown", interruptRestore);
     scrollContainer.addEventListener("keydown", interruptRestore);
@@ -124,7 +148,13 @@ export function useChatScroll(conversationId: string | undefined, messages: Chat
 
   const handleScroll = useCallback(() => {
     const scrollContainer = chatScrollRef.current;
-    if (active && scrollContainer && !restoringRef.current) syncBottomState(scrollContainer);
+    if (active && scrollContainer && !restoringRef.current) {
+      if (!interrupted.current && positionRef.current?.messageId && persistenceRef.current?.hasMore
+        && !scrollContainer.querySelector(`[data-scroll-message-id="${CSS.escape(positionRef.current.messageId)}"]`)) return;
+      syncBottomState(scrollContainer);
+      if (persistenceRef.current?.key && positionRef.current) patchView(persistenceRef.current.key,
+        { reading: { ...positionRef.current, atBottom: shouldStickToBottomRef.current } }, 1000);
+    }
   }, [syncBottomState, active]);
 
   const scrollToBottom = useCallback(() => {

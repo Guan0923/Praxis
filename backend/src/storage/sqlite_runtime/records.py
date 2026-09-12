@@ -42,6 +42,9 @@ class SQLiteJsonObjectMixin:
         payload: dict[str, object],
         updated_at: str,
     ) -> None:
+        namespaces = getattr(connection, "changed_namespaces", None)
+        if namespaces is not None:
+            namespaces.add(namespace)
         connection.execute(
             "INSERT INTO json_objects(session_id,namespace,object_id,payload_json,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(session_id,namespace,object_id) DO UPDATE SET payload_json=excluded.payload_json,updated_at=excluded.updated_at",
             (

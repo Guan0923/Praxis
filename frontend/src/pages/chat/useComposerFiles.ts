@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type SetStateAction } from "react";
+import { patchView, useViewState, viewKey, viewSnapshot } from "../../app/viewState";
 import {
   deleteSessionFile,
   searchSessionFiles,
@@ -12,6 +13,7 @@ import type { PendingUpload } from "./contracts";
 interface ComposerFilesOptions {
   conversationId?: string;
   sessionId?: string;
+  threadId?: string;
   completionDisabled: boolean;
   preserveDraft?: (conversationId?: string) => boolean;
   onTextChanged: (change: FileMentionChange) => void;
@@ -20,22 +22,74 @@ interface ComposerFilesOptions {
 export function useComposerFiles({
   conversationId,
   sessionId,
+  threadId,
   completionDisabled,
   preserveDraft,
   onTextChanged,
 }: ComposerFilesOptions) {
-  const [input, setInput] = useState("");
-  const [references, setReferences] = useState<FileReference[]>([]);
+  const key = viewKey(sessionId, threadId ?? conversationId);
+  const saved = useViewState(key);
+  const [input, rawSetInput] = useState("");
+  const [references, rawSetReferences] = useState<FileReference[]>([]);
   const [fileTriggerState, setFileTriggerState] = useState<FileTrigger | null>(null);
   const [fileCandidates, setFileCandidates] = useState<FileCandidate[]>([]);
   const [activeFileIndex, setActiveFileIndex] = useState(0);
   const [fileMenuDismissedFor, setFileMenuDismissedFor] = useState<string | null>(null);
-  const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
+  const [pendingUploads, rawSetPendingUploads] = useState<PendingUpload[]>([]);
+  const values = useRef({ input, references, pendingUploads });
+  const owner = useRef(key);
+  owner.current = key;
+  const setInput = (action: SetStateAction<string>) => {
+    const previous = owner.current === key ? values.current.input : viewSnapshot(key).draft;
+    const next = typeof action === "function" ? action(previous) : action;
+    if (next === previous) return;
+    if (owner.current === key) { values.current.input = next; rawSetInput(next); }
+    patchView(key, { draft: next });
+  };
+  const setReferences = (action: SetStateAction<FileReference[]>) => {
+    const previous = owner.current === key ? values.current.references : viewSnapshot(key).references;
+    const next = typeof action === "function" ? action(previous) : action;
+    if (JSON.stringify(next) === JSON.stringify(previous)) return;
+    if (owner.current === key) { values.current.references = next; rawSetReferences(next); }
+    patchView(key, { references: next });
+  };
+  const setPendingUploads = (action: SetStateAction<PendingUpload[]>) => {
+    const previous = owner.current === key ? values.current.pendingUploads : viewSnapshot(key).uploads;
+    const next = typeof action === "function" ? action(previous) : action;
+    if (owner.current === key) { values.current.pendingUploads = next; rawSetPendingUploads(next); }
+    patchView(key, { uploads: next.filter((item) => item.status === "done" && item.path).map(({ file: _file, error: _error, ...item }) => item) });
+  };
   const fileSearchTimerRef = useRef<number | null>(null);
   const latestFileTriggerRef = useRef<FileTrigger | null>(null);
   const fileMenuDismissedPromptRef = useRef<string | null>(null);
   const discardedUploadUidsRef = useRef(new Set<string>());
   const editorRef = useRef<FileMentionEditorHandle>(null);
+  const restoredKey = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (restoredKey.current !== key && preserveDraft?.(conversationId)) {
+      restoredKey.current = key;
+      patchView(key, { draft: values.current.input, references: values.current.references });
+      return;
+    }
+    if (key && !saved.loaded) {
+      if (restoredKey.current !== key) {
+        restoredKey.current = key;
+        values.current = { input: "", references: [], pendingUploads: [] };
+        rawSetInput(""); rawSetReferences([]); rawSetPendingUploads([]);
+        editorRef.current?.clear();
+      }
+      return;
+    }
+    if (restoredKey.current === key && saved.value.draft === values.current.input
+      && JSON.stringify(saved.value.references) === JSON.stringify(values.current.references)
+      && JSON.stringify(saved.value.uploads) === JSON.stringify(values.current.pendingUploads.filter((item) => item.status === "done"))) return;
+    restoredKey.current = key;
+    const { draft, references: refs, uploads } = saved.value;
+    values.current = { input: draft, references: refs, pendingUploads: uploads };
+    rawSetInput(draft); rawSetReferences(refs); rawSetPendingUploads(uploads);
+    editorRef.current?.restore(draft, refs);
+  }, [key, saved.loaded, saved.value]);
 
   const fileMenuAvailable = !completionDisabled
     && fileMenuDismissedFor !== input
@@ -43,22 +97,17 @@ export function useComposerFiles({
     && fileCandidates.length > 0;
 
   useEffect(() => {
-    if (preserveDraft?.(conversationId)) return;
     for (const upload of pendingUploads) {
       if (upload.status === "uploading") discardedUploadUidsRef.current.add(upload.uid);
     }
-    editorRef.current?.clear();
-    setInput("");
-    setReferences([]);
     setFileTriggerState(null);
     setFileCandidates([]);
     fileMenuDismissedPromptRef.current = null;
     setFileMenuDismissedFor(null);
-    setPendingUploads([]);
     // Upload callbacks use the uid set above to delete files that finish after
     // the composer has moved to another conversation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationId]);
+  }, [key]);
 
   useEffect(() => () => {
     if (fileSearchTimerRef.current !== null) window.clearTimeout(fileSearchTimerRef.current);
@@ -191,7 +240,7 @@ export function useComposerFiles({
   }
 
   function clearComposer() {
-    editorRef.current?.clear();
+    if (owner.current === key) editorRef.current?.clear();
     setInput("");
     setReferences([]);
   }

@@ -14,6 +14,7 @@ from .sqlite_runtime import SQLiteRuntimeMixin
 from .sqlite_schema import SQLiteSchemaMixin
 from .sqlite_sessions import SQLiteSessionMixin
 from .sqlite_sidebar_threads import SQLiteSidebarThreadMixin
+from .sqlite_view_state import SQLiteViewStateMixin
 
 
 class SQLiteSessionStore(
@@ -23,6 +24,7 @@ class SQLiteSessionStore(
     SQLiteSessionMixin,
     SQLiteSidebarThreadMixin,
     SQLiteRightPanelMixin,
+    SQLiteViewStateMixin,
     SQLiteRuntimeMixin,
     SQLiteSchemaMixin,
 ):

@@ -456,13 +456,16 @@ def compact_turn(
 @router.patch("/{turn_id}/current-data")
 def patch_current_data(turn_id: str, body: CurrentDataRequest, request: Request) -> dict[str, object]:
     store = session_store(request.app.state.web)
-    _turn(store, turn_id)
     try:
-        return store.set_turn_current_data(turn_id, body.current_data_idx).to_dict()
+        result = store.select_turn_version(body.session_id, turn_id, body.current_data_idx)
+        request.app.state.web.application_sync.publish("version.changed", selection=result)
+        return result
     except KeyError as exc:
         return error_response(exc, status_code=404, detail="未知 Turn。")
     except RuntimeStateValidationError as exc:
         return error_response(exc, status_code=422, detail=str(exc))
+    except ValueError as exc:
+        return error_response(exc, status_code=409, detail=str(exc))
 
 
 @router.patch("/{turn_id}/config")

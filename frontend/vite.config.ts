@@ -32,7 +32,9 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": { target: backendUrl, ws: true },
-      "/benchmark": backendUrl,
+      "/benchmark": { target: backendUrl, bypass(req) {
+        if (req.url === "/benchmark" && req.headers.accept?.includes("text/html")) return "/index.html";
+      } },
     },
   },
 });

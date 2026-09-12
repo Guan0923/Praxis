@@ -79,6 +79,7 @@ class ProjectStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self._lock = threading.RLock()
+        self.on_change = None
         with self._connection() as connection:
             connection.executescript(PROJECTS_SCHEMA)
 
@@ -90,8 +91,11 @@ class ProjectStore:
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA busy_timeout = 10000")
             try:
+                baseline = connection.total_changes
                 yield connection
                 connection.commit()
+                if connection.total_changes > baseline and self.on_change is not None:
+                    self.on_change()
             except Exception:
                 connection.rollback()
                 raise

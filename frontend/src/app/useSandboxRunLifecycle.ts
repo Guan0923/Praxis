@@ -120,7 +120,7 @@ export function useSandboxRunLifecycle({
 
   useEffect(() => {
     if (sandboxHealth.phase !== "healthy") return;
-    for (const conversation of Object.values(panelConversations)) {
+    for (const conversation of [...conversations, ...Object.values(panelConversations)]) {
       if (!conversation.sessionId || activeRunsRef.current.has(conversation.id)) continue;
       const activeTurn = conversation.runtimeNodes?.find(
         (node): node is RuntimeStateNode => isRuntimeTurnNode(node)
@@ -145,5 +145,5 @@ export function useSandboxRunLifecycle({
         sourceNodeId: activeTurn.id,
       });
     }
-  }, [panelConversations, sandboxHealth.phase]);
+  }, [conversations, panelConversations, sandboxHealth.phase]);
 }

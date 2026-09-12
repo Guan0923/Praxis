@@ -1,11 +1,13 @@
-import { Navigate, Route, Routes } from "react-router-dom";
 import AgentApp from "./AgentApp";
 
 export default function AppRoutes() {
-  return (
-    <Routes>
-      <Route path="/" element={<AgentApp />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
-  );
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (!["/", "/benchmark", "/trash"].includes(pathname) && !parseChatPath(pathname)) navigate("/", { replace: true });
+  }, [pathname, navigate]);
+  return <AgentApp />;
 }
+import { useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { parseChatPath } from "./conversationNavigation";
