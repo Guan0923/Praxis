@@ -4,7 +4,7 @@ import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { UNSAFE_LocationContext, UNSAFE_NavigationContext } from "react-router-dom";
 import { ApiError, requestJson } from "../../api/transport/request";
 import { chatPath, parseChatPath } from "../../app/conversationNavigation";
-import { getSessionNodes, sendAgentThreadMessage, streamAgentThread } from "../../api";
+import { getTurnPage, sendAgentThreadMessage, streamAgentThread } from "../../api";
 import { withLoadedTurns } from "../../app/conversationProjection";
 import { applyRuntimeNodeFrame, runtimeNodeAccumulator } from "../../app/runtime/runtimeNodeReducer";
 import { isRuntimeTurnNode } from "../../app/runtime/runtimeNodeNormalization";
@@ -33,7 +33,7 @@ function mergeNodes(current: RuntimeTreeNode[] | undefined, updates: RuntimeTree
 
 export function useAgentThreadView({ canonical, enabled, onUpdate, retainedConversationIds }: UseAgentThreadViewOptions) {
   const router = useChatRoute();
-  const [historyByThread, setHistoryByThread] = useState<Record<string, Pick<Conversation, "historyCursor" | "historyHasMore">>>({});
+  const [historyByThread, setHistoryByThread] = useState<Record<string, Pick<Conversation, "activeTurnId" | "historyCursor" | "historyHasMore">>>({});
   const [selectedByRootThread, setSelectedByRootThread] = useState<Record<string, string>>({});
   const [pendingByThread, setPendingByThread] = useState<Record<string, ChatMessage[]>>({});
   const [treeInvalidation, setTreeInvalidation] = useState(0);
@@ -93,23 +93,16 @@ export function useAgentThreadView({ canonical, enabled, onUpdate, retainedConve
   const viewConversation = useMemo(() => {
     if (!canonical || !isSubagent || !selectedThreadId) return canonical;
     if (!validTargets.has(targetKey)) return null;
-    const turns = (canonical.runtimeNodes ?? [])
-      .filter(isRuntimeTurnNode)
-      .filter((node) => node.thread_id === selectedThreadId)
-      .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+    const history = historyByThread[`${sessionId}:${selectedThreadId}`];
+    if (!history) return null;
+    const turns = (canonical.runtimeNodes ?? []).filter((node) => node.thread_id === selectedThreadId);
     const projected = withLoadedTurns(
-      {
-        ...canonical,
-        threadId: selectedThreadId,
-        activeTurnId: undefined,
-        lastNodeId: undefined,
-        hiddenBeforeTurnId: turns[0]?.parent_id || undefined,
-        messages: [],
-      },
-      canonical.runtimeNodes ?? [],
+      { ...canonical, ...history, threadId: selectedThreadId, hiddenBeforeTurnId: undefined, messages: [] },
+      turns,
+      history.activeTurnId ?? null,
     );
-    return { ...projected, ...historyByThread[selectedThreadId] };
-  }, [canonical, isSubagent, selectedThreadId, historyByThread, validTargets, targetKey]);
+    return { ...projected, runtimeNodes: canonical.runtimeNodes };
+  }, [canonical, isSubagent, selectedThreadId, sessionId, historyByThread, validTargets, targetKey]);
 
   const viewRef = useRef(viewConversation);
   viewRef.current = viewConversation;
@@ -148,6 +141,7 @@ export function useAgentThreadView({ canonical, enabled, onUpdate, retainedConve
     observers.current.set(observerKey, { controller, owner: conversationId, restart: startObserver });
     let retryMs = 500;
     let lastEventId = "";
+    let streamRevision = 0;
 
     const commitNodes = (nodes: RuntimeTreeNode[]) => {
       updateRef.current(conversationId, (current) => ({
@@ -157,8 +151,15 @@ export function useAgentThreadView({ canonical, enabled, onUpdate, retainedConve
     };
 
     const reload = async () => {
-      const nodes = await getSessionNodes(sessionId, selectedThreadId);
-      if (!controller.signal.aborted) commitNodes(nodes);
+      const revision = streamRevision;
+      const page = await getTurnPage(sessionId, selectedThreadId);
+      if (controller.signal.aborted || revision !== streamRevision) return;
+      updateRef.current(conversationId, (current) => ({ ...current,
+        runtimeNodes: mergeNodes((current.runtimeNodes ?? []).filter((node) => node.thread_id !== selectedThreadId), page.turns),
+      }));
+      setHistoryByThread((current) => ({ ...current, [observerKey]: {
+        activeTurnId: page.current_turn_id ?? undefined, historyCursor: page.next_cursor, historyHasMore: page.has_more,
+      } }));
     };
 
     const run = async () => {
@@ -172,7 +173,7 @@ export function useAgentThreadView({ canonical, enabled, onUpdate, retainedConve
             validated = true;
             setValidTargets((current) => new Set([...current, targetKey]));
           }
-          if (!canonical.runtimeNodes?.some((node) => node.thread_id === selectedThreadId)) await reload();
+          await reload();
           const result = await streamAgentThread(sessionId, selectedThreadId, (event) => {
             if (event.type === "thread.ready") {
               setStreamError(null);
@@ -181,7 +182,7 @@ export function useAgentThreadView({ canonical, enabled, onUpdate, retainedConve
             }
             if (event.type === "turn.terminal") {
               setTreeInvalidation((current) => current + 1);
-              void reload();
+              void reload().catch((error) => { if (!controller.signal.aborted) setStreamError(error); });
               return;
             }
             if (event.type === "turn.snapshot") {
@@ -190,7 +191,11 @@ export function useAgentThreadView({ canonical, enabled, onUpdate, retainedConve
               accumulator.revisions.delete(key);
             }
             const turn = applyRuntimeNodeFrame(accumulator, event);
+            streamRevision += 1;
             commitNodes([turn]);
+            if (turn.thread_id === selectedThreadId && turn.id === event.current_turn_id) setHistoryByThread((current) => ({ ...current,
+              [observerKey]: { ...current[observerKey], activeTurnId: event.current_turn_id ?? undefined },
+            }));
           }, controller.signal, lastEventId, (cursor) => {
             lastEventId = cursor;
           });
@@ -221,7 +226,7 @@ export function useAgentThreadView({ canonical, enabled, onUpdate, retainedConve
     updateRef.current(canonical.id, (current) => current.messagesLoaded === false ? current : {
       ...current, runtimeNodes: append ? mergeNodes(page.turns, current.runtimeNodes ?? []) : mergeNodes(current.runtimeNodes, page.turns),
     });
-    setHistoryByThread((current) => ({ ...current, [selectedThreadId]: { historyCursor: page.next_cursor, historyHasMore: page.has_more } }));
+    setHistoryByThread((current) => ({ ...current, [`${sessionId}:${selectedThreadId}`]: { activeTurnId: append ? viewRef.current?.activeTurnId : page.current_turn_id ?? undefined, historyCursor: page.next_cursor, historyHasMore: page.has_more } }));
   }
 
   function selectThread(threadId: string) {

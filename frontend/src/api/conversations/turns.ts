@@ -4,6 +4,7 @@ import { requestJson } from "../transport/request";
 import { versionAfterRead, versionReadClock } from "./versionClock";
 
 export interface TurnPage {
+  current_turn_id: string | null;
   turns: RuntimeTreeNode[];
   next_cursor: string | null;
   has_more: boolean;
@@ -14,15 +15,14 @@ export async function getTurnPage(sessionId: string, threadId = sessionId, befor
   const query = new URLSearchParams({ session_id: sessionId, thread_id: threadId, limit: "5" });
   if (before) query.set("before", before);
   const page = await requestJson<TurnPage>(`/api/turns/history?${query.toString()}`);
+  if (!before && page.current_turn_id !== null && !page.turns.some((turn) => turn.id === page.current_turn_id)) {
+    throw new Error("Current Turn is missing; reload conversation history.");
+  }
   return { ...page, turns: page.turns.map((value) => {
     const turn = normalizeRuntimeNode(value);
     const index = versionAfterRead(turn.session_id, turn.id, started);
     return index !== undefined && isRuntimeTurnNode(turn) && turn.data[index] ? { ...turn, current_data_idx: index } : turn;
   }) };
-}
-
-export async function listTurns(sessionId: string, threadId = sessionId): Promise<RuntimeTreeNode[]> {
-  return (await getTurnPage(sessionId, threadId)).turns;
 }
 
 export function threadTraceDownloadUrl(sessionId: string, threadId: string): string {

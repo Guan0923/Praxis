@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -272,6 +273,7 @@ def test_sse_reconnect_rebases_from_sqlite_and_emits_standard_cursor_ids(
     thread_events = asyncio.run(thread_baseline())
     assert '"type":"thread.ready"' in thread_events[0]
     assert '"type":"turn.snapshot"' in thread_events[1]
+    assert json.loads(thread_events[1].split("data: ", 1)[1])["current_turn_id"] == final.id
 
 
 def test_turn_sse_waits_for_the_accepted_rewind_delivery_before_using_existing_turn(

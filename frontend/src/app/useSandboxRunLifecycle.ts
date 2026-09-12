@@ -1,8 +1,8 @@
 import { useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
-import { getSessionNodes, pauseTurn } from "../api";
+import { getTurnPage, pauseTurn } from "../api";
 import type { Conversation, RuntimeStateNode } from "../types";
 import type { ActiveRun, ChatRunRequest } from "./types";
-import { withLoadedTurns, withRefreshedTurns } from "./conversationProjection";
+import { withLoadedTurns, withTurnPage } from "./conversationProjection";
 import { isRuntimeTurnNode } from "./runtime/runtimeNodeNormalization";
 import type { SandboxHealthState } from "./useSandboxHealth";
 
@@ -79,8 +79,8 @@ export function useSandboxRunLifecycle({
         const target = turnSessions.get(turnId);
         if (!target) return;
         try {
-          const nodes = await getSessionNodes(target.sessionId, target.threadId);
-          updateConversation(target.conversationId, (conversation) => withRefreshedTurns(conversation, nodes));
+          const page = await getTurnPage(target.sessionId, target.threadId);
+          updateConversation(target.conversationId, (conversation) => withTurnPage(conversation, page));
         } catch {
           // The next health transition or session reload retries reconciliation.
         }

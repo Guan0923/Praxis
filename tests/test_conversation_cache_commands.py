@@ -234,7 +234,7 @@ def test_history_cursor_allows_new_turn_but_rejects_rewind(tmp_path):
             node.status = "success"
             store.finalize_node(node)
             parent = node
-        _, cursor = store.load_turn_page(sid, sid)
+        cursor = store.load_turn_page(sid, sid).next_cursor
         child = RuntimeState.create(
             session_id=sid,
             thread_id=sid,
@@ -245,7 +245,7 @@ def test_history_cursor_allows_new_turn_but_rejects_rewind(tmp_path):
         store.create_node(child)
         child.status = "success"
         store.finalize_node(child)
-        assert len(store.load_turn_page(sid, sid, before=cursor)[0]) == 3
+        assert len(store.load_turn_page(sid, sid, before=cursor).turns) == 3
         store.append_turn_version("cursor-4", {"type": "text", "text": "rewind", "status": "success"})
         with pytest.raises(ValueError, match="history changed"):
             store.load_turn_page(sid, sid, before=cursor)

@@ -55,7 +55,7 @@ def main():
         state.session_store.finalize_node(child.turn)
         first["agent"] = child.node.thread_id
         manifest.write_text(json.dumps(records), encoding="utf-8")
-    child_turn = state.session_store.load_turn_page(records[0]["session"], records[0]["agent"])[0][-1]
+    child_turn = state.session_store.load_turn_page(records[0]["session"], records[0]["agent"]).turns[-1]
     if not child_turn.provider_name:
         child_turn.provider_name = "local"
         state.session_store.update_node(child_turn)

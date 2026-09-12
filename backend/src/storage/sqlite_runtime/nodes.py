@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextlib import ExitStack
 from copy import deepcopy
+from dataclasses import dataclass
+from sqlite3 import Connection
 
 from backend.domain.runtime_state import (
     NodeFrame,
@@ -19,6 +22,13 @@ from backend.domain.runtime_state import (
 )
 from backend.domain.runtime_state import RuntimeState as TreeRuntimeState
 from backend.domain.state import utc_now
+
+
+@dataclass
+class TurnPage:
+    turns: list[TreeRuntimeState]
+    next_cursor: str | None
+    current_turn_id: str | None
 
 
 def _require_runtime_turn(node: RuntimeNode | None, turn_id: str) -> TreeRuntimeState:
@@ -265,15 +275,43 @@ class SQLiteNodeMixin:
             ]
         return [node for node_id in ids if (node := self.get_node(session_id, node_id)) is not None]
 
-    def load_turn_page(
-        self, session_id: str, thread_id: str, *, before: str | None = None, limit: int = 5
-    ) -> tuple[list[TreeRuntimeState], str | None]:
+    def load_turn_page(self, session_id: str, thread_id: str, *, before: str | None = None, limit: int = 5) -> TurnPage:
+        # Keep the head and its nodes in the same read transaction.
+        with ExitStack() as stack:
+            connections: dict[str, Connection] = {}
+
+            def connection_for(sid: str) -> Connection:
+                if sid not in connections:
+                    connections[sid] = stack.enter_context(self._connection(sid))
+                return connections[sid]
+
+            def read_node(sid: str, turn_id: str) -> RuntimeNode | None:
+                value = self._json_object(connection_for(sid), sid, "runtime_node", turn_id)
+                return runtime_node_from_dict(value) if value is not None else None
+
+            connection = connection_for(session_id)
+            row = connection.execute(
+                "SELECT * FROM runtime_threads WHERE session_id=? AND thread_id=?", (session_id, thread_id)
+            ).fetchone()
+            thread = self._runtime_thread(row)
+            if thread is None:
+                raise KeyError("Conversation not found.")
+            return self._read_turn_page(
+                session_id, thread_id, thread.current_turn_id, read_node, connection, before, limit
+            )
+
+    def _read_turn_page(
+        self,
+        session_id: str,
+        thread_id: str,
+        head: str | None,
+        read_node: Callable[[str, str], RuntimeNode | None],
+        connection: Connection,
+        before: str | None,
+        limit: int,
+    ) -> TurnPage:
         import json
 
-        thread = self.get_runtime_thread(session_id, thread_id)
-        if thread is None:
-            raise KeyError("Conversation not found.")
-        head = thread.current_turn_id
         current_session, current_id = session_id, head
         if before:
             try:
@@ -285,21 +323,20 @@ class SQLiteNodeMixin:
                     raise ValueError("Invalid history cursor.")
                 if cursor["thread"] != thread_id:
                     raise ValueError("Conversation history changed; reload the latest page.")
-                cursor_head = self.get_node(session_id, cursor["head"])
+                cursor_head = read_node(session_id, cursor["head"])
                 if not isinstance(cursor_head, TreeRuntimeState) or (
                     "version" in cursor and cursor_head.current_data_idx != cursor["version"]
                 ):
                     raise ValueError("Conversation history changed; reload the latest page.")
                 if head != cursor["head"]:
-                    with self._connection(session_id) as connection:
-                        continuation = connection.execute(
-                            "WITH RECURSIVE ancestry(id) AS (VALUES (?) UNION "
-                            "SELECT json_extract(n.payload_json, '$.parent_id') FROM ancestry a "
-                            "JOIN json_objects n ON n.object_id=a.id AND n.namespace='runtime_node' AND n.session_id=? "
-                            "WHERE json_extract(n.payload_json, '$.parent_session_id')=?) "
-                            "SELECT 1 FROM ancestry WHERE id=? LIMIT 1",
-                            (head, session_id, session_id, cursor["head"]),
-                        ).fetchone()
+                    continuation = connection.execute(
+                        "WITH RECURSIVE ancestry(id) AS (VALUES (?) UNION "
+                        "SELECT json_extract(n.payload_json, '$.parent_id') FROM ancestry a "
+                        "JOIN json_objects n ON n.object_id=a.id AND n.namespace='runtime_node' AND n.session_id=? "
+                        "WHERE json_extract(n.payload_json, '$.parent_session_id')=?) "
+                        "SELECT 1 FROM ancestry WHERE id=? LIMIT 1",
+                        (head, session_id, session_id, cursor["head"]),
+                    ).fetchone()
                     if continuation is None:
                         raise ValueError("Conversation history changed; reload the latest page.")
                 current_session, current_id = cursor["session"], cursor["turn"]
@@ -312,7 +349,7 @@ class SQLiteNodeMixin:
             if key in seen:
                 raise ValueError("Conversation history contains a cycle.")
             seen.add(key)
-            node = self.get_node(current_session, current_id)
+            node = read_node(current_session, current_id)
             if node is None or isinstance(node, RuntimeRootState):
                 break
             page.append(node)
@@ -321,7 +358,7 @@ class SQLiteNodeMixin:
         cursor = None
         if more:
             following = page[limit]
-            head_node = self.get_node(session_id, head) if head else None
+            head_node = read_node(session_id, head) if head else None
             cursor = json.dumps(
                 {
                     "thread": thread_id,
@@ -331,7 +368,7 @@ class SQLiteNodeMixin:
                     "turn": following.id,
                 }
             )
-        return list(reversed(page[:limit])), cursor
+        return TurnPage(list(reversed(page[:limit])), cursor, head)
 
     def load_nodes(self, session_id: str) -> list[RuntimeNode]:
         if not self.paths.session_db(session_id).exists():

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Conversation, RuntimeStateNode, RuntimeTreeNode } from "../types";
-import { withLoadedTurns, withRefreshedTurns } from "./conversationProjection";
+import { withLoadedTurns, withTurnPage } from "./conversationProjection";
 import { TURN_PROTOCOL_VERSION } from "./runtime/runtimeNodeNormalization";
 
 const turn = (
@@ -74,7 +74,7 @@ describe("side-chat conversation projection", () => {
     expect(projected.messages.every((message) => message.id.startsWith("child:message:"))).toBe(true);
   });
 
-  it("selects the latest side-chat leaf during a cold hydration", () => {
+  it("uses the backend head during a cold hydration", () => {
     const nodes: RuntimeTreeNode[] = [
       { id: "root", session_id: "session", thread_id: "session" },
       turn("anchor", "root", "thread-side", "copied-context"),
@@ -90,7 +90,7 @@ describe("side-chat conversation projection", () => {
       messagesLoaded: false,
     };
 
-    const projected = withLoadedTurns(conversation, nodes);
+    const projected = withTurnPage(conversation, { turns: nodes, current_turn_id: "child", next_cursor: null, has_more: false });
 
     expect(projected.activeTurnId).toBe("child");
     expect(projected.lastNodeId).toBe("child");
@@ -102,12 +102,42 @@ describe("side-chat conversation projection", () => {
 });
 
 
-it("refreshes the recent page without dropping appended history", () => {
-  const nodes = Array.from({ length: 10 }, (_, index) => turn(String(index), index ? String(index - 1) : "root", "session", String(index)));
-  const conversation = withLoadedTurns({ id: "session", title: "history", sessionId: "session", messages: [] }, nodes);
-  const refreshed = withRefreshedTurns(conversation, nodes.slice(5).map((node) => ({ ...node, status: "paused" })));
-  expect(refreshed.runtimeNodes).toHaveLength(10);
-  expect(refreshed.messages[0].content).toBe("0");
-  expect(refreshed.runtimeNodes?.at(-1)).toMatchObject({ status: "paused" });
-  expect(refreshed.historyCursor).toBe(conversation.historyCursor);
+const conversation: Conversation = { id: "session", title: "history", sessionId: "session", threadId: "session", messages: [] };
+
+it("replaces an old cached head with the backend head, ignoring unrelated leaves and timestamps", () => {
+  const first = turn("first", "root", "session", "first");
+  const second = turn("second", "first", "session", "second");
+  const unrelated = { ...turn("unrelated", "root", "session", "wrong"), timestamp: "2099-01-01" };
+  const old = withLoadedTurns(conversation, [first, unrelated], first.id);
+  const refreshed = withTurnPage(old, { current_turn_id: second.id, turns: [first, second], next_cursor: "server-cursor", has_more: true });
+  expect(refreshed.activeTurnId).toBe(second.id);
+  expect(refreshed.messages.map((message) => message.content)).toEqual(["first", "first-answer", "second", "second-answer"]);
+  expect(refreshed.historyCursor).toBe("server-cursor");
+});
+
+it("does not change the displayed head when appending older history", () => {
+  const first = turn("first", "root", "session", "first");
+  const second = turn("second", "first", "session", "second");
+  const current = withTurnPage(conversation, { current_turn_id: second.id, turns: [second], next_cursor: "opaque", has_more: true });
+  const appended = withTurnPage(current, { current_turn_id: "newer-server-head", turns: [first], next_cursor: null, has_more: false }, true);
+  expect(appended.activeTurnId).toBe(second.id);
+  expect(appended.messages[0].content).toBe("first");
+  expect(appended.historyCursor).toBeNull();
+  expect(appended.historyHasMore).toBe(false);
+});
+
+it("retains an undelivered user message across a history refresh", () => {
+  const pending = { id: "pending", role: "user" as const, content: "pending", events: [], pending: true, deliveryId: "delivery" };
+  const refreshed = withTurnPage({ ...conversation, messages: [pending] }, { current_turn_id: null, turns: [], next_cursor: null, has_more: false });
+  expect(refreshed.messages).toEqual([pending]);
+});
+
+it("does not guess a head from cached nodes for an empty thread", () => {
+  const empty = withTurnPage(conversation, { current_turn_id: null, turns: [], next_cursor: null, has_more: false });
+  expect(empty.activeTurnId).toBeUndefined();
+  expect(empty.messages).toEqual([]);
+});
+
+it("rejects a missing backend head instead of choosing a leaf", () => {
+  expect(() => withTurnPage(conversation, { current_turn_id: "missing", turns: [turn("other", "root", "session", "wrong")], next_cursor: null, has_more: false })).toThrow("Current Turn is missing");
 });

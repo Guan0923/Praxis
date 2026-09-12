@@ -1,8 +1,7 @@
-import type { RuntimeStateNode, RuntimeTreeNode, SidebarThread } from "../../types";
-import { isRuntimeTurnNode, normalizeRuntimeNode } from "../../app/runtime/runtimeNodeNormalization";
+import type { RuntimeStateNode, SidebarThread } from "../../types";
+import { normalizeRuntimeNode } from "../../app/runtime/runtimeNodeNormalization";
 import { requestJson } from "../transport/request";
 import { archiveSidebarThread, createSidebarThread, deleteSidebarThread, listSidebarThreads, renameSidebarThread, restoreSidebarThread } from "./sidebarThreads";
-import { listTurns } from "./turns";
 
 export interface SessionInfo {
   session_id: string;
@@ -66,16 +65,6 @@ export async function restoreSession(threadId: string, sessionId?: string): Prom
 
 export async function deleteSession(threadId: string, sessionId: string): Promise<void> {
   await deleteSidebarThread(threadId, sessionId);
-}
-
-export async function getSessionNodes(sessionId: string, threadId = sessionId): Promise<RuntimeTreeNode[]> {
-  return (await listTurns(sessionId, threadId)).map(normalizeRuntimeNode);
-}
-
-export async function getSessionLeaves(sessionId: string): Promise<RuntimeStateNode[]> {
-  const nodes = (await getSessionNodes(sessionId)).filter(isRuntimeTurnNode);
-  const parents = new Set(nodes.map((item) => `${item.parent_session_id}:${item.parent_id}`));
-  return nodes.filter((item) => !parents.has(`${item.session_id}:${item.id}`));
 }
 
 export async function patchRuntimeConfig(

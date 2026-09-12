@@ -10,7 +10,7 @@ import {
   compactTurn,
   createQueuedMessage,
   deleteQueuedMessage,
-  getSessionNodes,
+  getTurnPage,
   listAgentThreadChildren,
   patchRuntimeConfig,
   searchSessionFiles,
@@ -56,7 +56,7 @@ vi.mock("../../api", async (importOriginal) => ({
   compactTurn: vi.fn(),
   createQueuedMessage: vi.fn(),
   deleteQueuedMessage: vi.fn().mockResolvedValue(undefined),
-  getSessionNodes: vi.fn(),
+  getTurnPage: vi.fn(),
   listAgentThreadChildren: vi.fn(),
   patchRuntimeConfig: vi.fn(),
   searchSessionFiles: vi.fn(),
@@ -161,6 +161,7 @@ function SubagentHarness({
     parent_thread_id: root.thread_id,
     status: "running" as const,
   };
+  vi.mocked(getTurnPage).mockResolvedValue({ current_turn_id: includeChildTurn ? child.id : null, turns: includeChildTurn ? [root, child] : [], next_cursor: null, has_more: false });
   const [conversation, setConversation] = useState<Conversation>({
     id: "session-rewind",
     sessionId: "session-rewind",
@@ -857,7 +858,7 @@ describe("ChatPage rewind projection", () => {
 
     resolveCompact(turn("turn-compact", "compact"));
     await waitFor(() => expect(screen.queryByText("正在执行compaction操作中")).toBeNull());
-    expect(onReload).toHaveBeenCalledWith("session-rewind", "turn-compact");
+    expect(onReload).toHaveBeenCalledWith("session-rewind");
     expect(vi.mocked(compactTurn)).toHaveBeenCalledTimes(1);
   });
 
@@ -1606,7 +1607,7 @@ describe("ChatPage Trace navigation", () => {
 describe("ChatPage Agent Thread navigation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getSessionNodes).mockResolvedValue([]);
+    vi.mocked(getTurnPage).mockResolvedValue({ current_turn_id: null, turns: [], next_cursor: null, has_more: false });
     vi.mocked(listAgentThreadChildren).mockImplementation(async (_sessionId, threadId) => (
       threadId === "session-rewind"
         ? [{

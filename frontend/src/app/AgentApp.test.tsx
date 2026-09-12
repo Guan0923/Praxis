@@ -153,7 +153,7 @@ async function expectKnownEmptySession(sessionId: string): Promise<void> {
 
 describe("AgentApp new conversation initialization", () => {
   beforeEach(() => {
-    api.getTurnPage.mockImplementation(async (sid: string, tid?: string) => ({ turns: await api.getSessionNodes(sid, tid), next_cursor: null, has_more: false }));
+    api.getTurnPage.mockImplementation(async (sid: string, tid?: string) => { const turns = await api.getSessionNodes(sid, tid); return { turns, current_turn_id: turns[turns.length - 1]?.id ?? null, next_cursor: null, has_more: false }; });
     localStorage.clear();
     vi.clearAllMocks();
     shell.props = null;
@@ -351,7 +351,7 @@ describe("AgentApp new conversation initialization", () => {
     expect(document.querySelectorAll(".ant-message-notice")).toHaveLength(1);
   });
 
-  it("keeps the active rewind boundary when sidebar summaries and the full Turn tree reload", async () => {
+  it("uses the backend head instead of an old local rewind boundary after reload", async () => {
     const initial = { ...session("session-rewind"), thread_id: "session-rewind" };
     const syntheticRoot: RuntimeRootNode = {
       session_id: initial.session_id,
@@ -377,9 +377,9 @@ describe("AgentApp new conversation initialization", () => {
       await shell.props!.onReload(initial.thread_id);
     });
 
-    expect(shell.props?.current?.activeTurnId).toBe(root.id);
+    expect(shell.props?.current?.activeTurnId).toBe(descendant.id);
     expect(shell.props?.current?.runtimeNodes).toHaveLength(3);
-    expect(shell.props?.current?.messages.map((message) => message.content)).toEqual(["保留消息", "回答"]);
+    expect(shell.props?.current?.messages.map((message) => message.content)).toEqual(["保留消息", "回答", "应隐藏消息", "回答"]);
   });
 
   it("uses the backend branch-suffixed title when the UI creates a fork", async () => {

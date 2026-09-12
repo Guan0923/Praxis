@@ -20,7 +20,7 @@ interface UseChatCommandsOptions {
   activeRuntimeNode?: RuntimeStateNode;
   clearComposer: () => void;
   onInsert: (content: string) => Promise<void>;
-  onReload: (conversationId: string, preferredActiveTurnId?: string) => Promise<void>;
+  onReload: (conversationId: string) => Promise<void>;
   onInfo: (content: string) => void;
 }
 
@@ -86,8 +86,8 @@ export function useChatCommands({
     if (!conversation || !activeRuntimeNode) return;
     setCompactionPending(true);
     try {
-      const compacted = await compactTurn(activeRuntimeNode.id, conversation.sessionId);
-      await onReload(conversation.id, compacted.id);
+      await compactTurn(activeRuntimeNode.id, conversation.sessionId);
+      await onReload(conversation.id);
     } catch (error) {
       await onInsert(String((error as Error).message ?? error));
     } finally {

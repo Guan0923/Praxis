@@ -165,7 +165,7 @@ export interface AgentThreadSummary {
   task_result: string;
 }
 
-export type AgentThreadStreamEvent = RuntimeNodeFrame
+export type AgentThreadStreamEvent = (RuntimeNodeFrame & { current_turn_id: string | null })
   | { type: "thread.ready"; session_id: string; thread_id: string }
   | {
       type: "turn.terminal";

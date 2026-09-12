@@ -19,7 +19,6 @@ import { fileKeyAction } from "../../commands/fileCompletion";
 import Composer from "./Composer";
 import { latestTodoList } from "./todoPanel";
 import { messagesBeforeRewind, projectTurnPath, pruneTurnDescendants } from "../../app/runtime/runtimeDetailProjection";
-import { leafNodes } from "../../app/runtime/runtimeNodeReducer";
 import { isRuntimeTurnNode } from "../../app/runtime/runtimeNodeNormalization";
 import type {
   ChatMessage,
@@ -219,25 +218,12 @@ export default function ChatPage({
   const fileMenuVisible = fileMenuAvailable;
   const display = configuredDisplayMode ?? "medium";
 
-  const activeRuntimeNode = (() => {
-    const nodes = (conversation?.runtimeNodes ?? []).filter(
-      (node) => !conversation?.threadId || node.thread_id === conversation.threadId,
-    );
-    if (conversation?.activeTurnId) {
-      const persisted = nodes.find((node) => node.id === conversation.activeTurnId);
-      if (persisted && isRuntimeTurnNode(persisted)) return persisted;
-    }
-    const sessionLeaves = leafNodes(nodes, conversation?.sessionId);
-    if (!sessionLeaves.length) return undefined;
-    if (conversation?.lastNodeId) {
-      const selected = sessionLeaves.find(
-        (node) => node.id === conversation.lastNodeId && node.session_id === conversation.sessionId,
-      );
-      if (selected) return selected;
-    }
-    const sorted = [...sessionLeaves].sort((left, right) => left.timestamp.localeCompare(right.timestamp) || left.id.localeCompare(right.id));
-    return sorted[sorted.length - 1];
-  })();
+  const activeRuntimeNode = conversation?.runtimeNodes?.find(
+    (node): node is RuntimeStateNode => isRuntimeTurnNode(node)
+      && node.id === conversation.activeTurnId
+      && node.session_id === conversation.sessionId
+      && node.thread_id === (conversation.threadId ?? conversation.sessionId),
+  );
   const todoTurnId = conversation?.activeTurnId ?? activeRuntimeNode?.id;
   const todo = useMemo(() => latestTodoList(messages, todoTurnId), [messages, todoTurnId]);
   const todoPanelKey = `${conversation?.id ?? "draft"}:${todoTurnId ?? "no-turn"}`;

@@ -31,7 +31,7 @@ export interface ChatPageProps {
   onFork?: (conversationId: string, messageId: string) => Promise<void>;
   onRewind?: (conversationId: string, messageId: string) => Promise<RewindResult | string | undefined>;
   onSelectSession?: (id: string) => Promise<string>;
-  onReload?: (id: string, preferredActiveTurnId?: string) => Promise<void>;
+  onReload?: (id: string) => Promise<void>;
   onRefresh?: () => Promise<void>;
   running?: boolean;
   onRun?: (request: ChatRunRequest) => Promise<void>;
