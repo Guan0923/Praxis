@@ -155,105 +155,79 @@ def filesystem_read_tools(files: WorkspaceFiles) -> tuple[Tool, ...]:
 def filesystem_mutation_tools(files: WorkspaceFiles) -> tuple[Tool, ...]:
     return (
         Tool(
-            "create_directory",
+            "file_operation",
             (
-                "Creates a directory and any missing parent directories. Succeeds without changes if the "
-                "directory already exists."
+                "Creates files or directories, writes UTF-8 files, or deletes files and directory trees. "
+                "Create requires type=file or directory and never overwrites a file. Missing parent directories "
+                "are created for file creation and whole-file writes. Write replaces the whole file only when "
+                "start_line and end_line are both -1 and expected_content is empty; otherwise the inclusive "
+                "line range must match expected_content exactly. Empty content clears the file or deletes the "
+                "selected lines. Delete removes the target, including all contents of a directory."
             ),
-            files.create_directory,
-            object_schema(
-                {
-                    "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": _PATH_RULES + "The directory to create.",
-                    },
-                },
-                ["path"],
-            ),
-            requires_confirmation=True,
-            read_only=False,
-            workspace_confined=True,
-        ),
-        Tool(
-            "write_file",
-            (
-                "Creates a UTF-8 text file and any missing parent directories, or replaces the complete file when "
-                "overwrite is true."
-            ),
-            files.write_file,
-            object_schema(
-                {
-                    "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": _PATH_RULES + "The file to write.",
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "The complete UTF-8 text to write to the file.",
-                    },
-                    "overwrite": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": (
-                            "Whether to replace an existing file. Defaults to false; when false, an existing file "
-                            "is rejected."
-                        ),
-                    },
-                },
-                ["path", "content"],
-            ),
-            requires_confirmation=True,
-            read_only=False,
-            workspace_confined=True,
-        ),
-        Tool(
-            "edit_file",
-            (
-                "Replaces an inclusive line range in an existing UTF-8 text file after verifying the current "
-                "line contents."
-            ),
-            files.edit_file,
-            object_schema(
-                {
-                    "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": _PATH_RULES + "The existing UTF-8 text file to edit.",
-                    },
-                    "start_line": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "The one-based first line of the inclusive range to replace.",
-                    },
-                    "end_line": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "The one-based last line of the inclusive range to replace.",
-                    },
-                    "expected_lines": {
-                        "type": "array",
-                        "minItems": 1,
-                        "items": {"type": "string"},
-                        "description": (
-                            "The current unnumbered contents of every selected line, in order. The edit is "
-                            "rejected if they no longer match."
-                        ),
-                    },
-                    "replacement_lines": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "The replacement lines without line-break characters. Use an empty array to delete "
-                            "the selected range or an array containing an empty string for one blank line."
-                        ),
-                    },
-                },
-                ["path", "start_line", "end_line", "expected_lines", "replacement_lines"],
-            ),
+            files.file_operation,
+            _file_operation_schema(),
             requires_confirmation=True,
             read_only=False,
             workspace_confined=True,
         ),
     )
+
+
+def _file_operation_schema() -> dict[str, object]:
+    properties = {
+        "operation": {
+            "type": "string",
+            "enum": ["create", "write", "delete"],
+            "description": "Create a target, write a file, or delete a file or directory tree.",
+        },
+        "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": _PATH_RULES + "The target file or directory. Workspace roots cannot be deleted.",
+        },
+        "type": {
+            "type": "string",
+            "enum": ["file", "directory"],
+            "description": "Required for create only: the kind of target to create.",
+        },
+        "content": {
+            "type": "string",
+            "description": (
+                "Required text for write; optional initial text for create with type=file, defaulting to empty. "
+                "An empty string clears the file or deletes selected lines; one newline inserts one blank line."
+            ),
+        },
+        "start_line": {
+            "type": "integer",
+            "anyOf": [{"const": -1}, {"minimum": 1}],
+            "default": -1,
+            "description": "Write only: the one-based first line, inclusive, or -1 for a whole-file write.",
+        },
+        "end_line": {
+            "type": "integer",
+            "anyOf": [{"const": -1}, {"minimum": 1}],
+            "default": -1,
+            "description": "Write only: the one-based last line, inclusive, or -1 for a whole-file write.",
+        },
+        "expected_content": {
+            "type": "string",
+            "default": "",
+            "description": (
+                "Write only: exact selected line contents joined with newlines, without the last line ending. "
+                "Defaults to empty. A mismatch is rejected; read the file again before editing."
+            ),
+        },
+    }
+    branches = []
+    for operation, target_type, fields, required in (
+        ("create", "file", ("type", "content"), ("type",)),
+        ("create", "directory", ("type",), ("type",)),
+        ("write", None, ("content", "start_line", "end_line", "expected_content"), ("content",)),
+        ("delete", None, (), ()),
+    ):
+        branch_properties = {name: {} for name in ("operation", "path", *fields)}
+        branch_properties["operation"] = {"const": operation}
+        if target_type is not None:
+            branch_properties["type"] = {"const": target_type}
+        branches.append(object_schema(branch_properties, ["operation", "path", *required]))
+    return {**object_schema(properties, ["operation", "path"]), "oneOf": branches}

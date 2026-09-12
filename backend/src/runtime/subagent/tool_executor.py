@@ -116,13 +116,14 @@ class LockedToolExecutor:
                 return self._tools.invoke_with_context(name, arguments, context, confirmed=confirmed)
             return self._tools.invoke(name, arguments, confirmed=confirmed)
 
-        if name in {"write_file", "edit_file"}:
+        if name == "file_operation":
+            operation = arguments.get("operation")
+            if operation == "delete" or (operation == "create" and arguments.get("type") == "directory"):
+                with self._locks.command():
+                    return call()
             path = arguments.get("path")
             if not isinstance(path, str):
                 raise ToolError("Workspace mutation requires a path.")
             with self._locks.file(normalized_workspace_path(self._workspaces, path)):
-                return call()
-        if name == "create_directory":
-            with self._locks.command():
                 return call()
         return call()

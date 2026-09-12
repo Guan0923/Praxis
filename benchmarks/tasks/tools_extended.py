@@ -41,8 +41,9 @@ TASKS = (
         description="Find one configuration value and edit only that exact value.",
         capability="tools",
         prompt=(
-            "Use glob and grep to find the only config file containing FEATURE_FLAG=off, then use edit_file "
-            "to change only that value to FEATURE_FLAG=on. Preserve every other line."
+            "Use glob and grep to find the only config file containing FEATURE_FLAG=off, then use file_operation "
+            "with operation=write, start_line, end_line, expected_content, and content to change only that value "
+            "to FEATURE_FLAG=on. Preserve every other line."
         ),
         seed=Seed(files=(SeedFile("config/app.env", _CONFIG_BEFORE),)),
         checkers=(
@@ -50,7 +51,7 @@ TASKS = (
             content_equals("config/app.env", _CONFIG_AFTER),
             tool_used("glob"),
             tool_used("grep"),
-            tool_used("edit_file"),
+            tool_used("file_operation"),
         ),
         budgets=Budgets(max_tool_calls=16),
         planner_modes=frozenset({"llm"}),

@@ -30,7 +30,6 @@ _SERIAL_TOOLS = frozenset(
         "set_thread_node_status",
         "get_thread_node",
         "pause_current_turn",
-        "create_directory",
     }
 )
 
@@ -136,7 +135,11 @@ class ToolBatchExecutor:
 
         def resource_gate(index: int) -> _FairGate | None:
             tool = tools[index]
-            if tool.name not in {"write_file", "edit_file"}:
+            if tool.name != "file_operation":
+                return None
+            if tool.arguments.get("operation") == "delete" or (
+                tool.arguments.get("operation") == "create" and tool.arguments.get("type") == "directory"
+            ):
                 return None
             path = tool.arguments.get("path")
             if not isinstance(path, str):
@@ -181,7 +184,12 @@ class ToolBatchExecutor:
                 raise ToolError("Tool was not started because this tool batch was interrupted.")
             with slots.enter(deadline, stop):
                 ensure_start_allowed()
-                serial = serial_gate if tools[index].name in _SERIAL_TOOLS else None
+                tool = tools[index]
+                serial_file_operation = tool.name == "file_operation" and (
+                    tool.arguments.get("operation") == "delete"
+                    or (tool.arguments.get("operation") == "create" and tool.arguments.get("type") == "directory")
+                )
+                serial = serial_gate if tool.name in _SERIAL_TOOLS or serial_file_operation else None
                 resource = resource_gate(index)
                 contexts = [gate.enter(deadline, stop) for gate in (serial, resource) if gate is not None]
                 if not contexts:

@@ -2,10 +2,78 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+
 from ..base import ToolError
 
 
 class FileWriteMixin:
+    def file_operation(
+        self,
+        operation: str,
+        path: str,
+        *,
+        type: str | None = None,
+        content: str = "",
+        start_line: int = -1,
+        end_line: int = -1,
+        expected_content: str = "",
+    ) -> str:
+        """Dispatch schema-validated file operations through the existing write safeguards."""
+
+        if operation == "create":
+            if type == "directory":
+                return self.create_directory(path)
+            if type == "file":
+                return self.write_file(path, content)
+            raise ToolError("Create requires type=file or directory.")
+        if operation == "delete":
+            return self.delete_path(path)
+        if operation != "write":
+            raise ToolError(f"Unknown file operation: {operation}")
+        if start_line == -1 and end_line == -1 and expected_content == "":
+            return self.write_file(path, content, overwrite=True)
+
+        self._validate_integer("start_line", start_line, minimum=1)
+        self._validate_integer("end_line", end_line, minimum=1)
+        if end_line < start_line:
+            raise ToolError("end_line must be greater than or equal to start_line.")
+        # An empty expectation denotes one blank line, while empty replacement text deletes the range.
+        expected_lines = self._normalise_newlines(expected_content).split("\n")
+        if len(expected_lines) != end_line - start_line + 1:
+            raise ToolError("expected_content must contain every selected line. Read the file again before editing.")
+        replacement_lines = [line for line, _ending in self._line_records(content)]
+        return self.edit_file(path, start_line, end_line, expected_lines, replacement_lines)
+
+    def delete_path(self, path: str) -> str:
+        """Delete one confined entry after checking the entire target tree before mutation."""
+
+        target = self._write_path(path)
+        protected_roots = (*self.workspaces, *self.read_file_roots)
+        if any(root.is_relative_to(target) for root in protected_roots):
+            raise ToolError("Cannot delete a workspace or read-only root, or an ancestor of one.")
+        display_path = self._display_path(target)
+        try:
+            if target.is_dir():
+                pending = [target]
+                while pending:
+                    directory = self._write_path(str(pending.pop()))
+                    with os.scandir(directory) as entries:
+                        for entry in entries:
+                            child = self._write_path(entry.path)
+                            if child.is_dir():
+                                pending.append(child)
+                target = self._write_path(str(target))
+                shutil.rmtree(target)
+                return f"Deleted directory {display_path} and its contents."
+            if not target.is_file():
+                raise ToolError(f"Not a file or directory: {display_path}")
+            target.unlink()
+        except OSError as exc:
+            raise ToolError(f"Could not delete {display_path}: {exc.strerror or str(exc)}") from exc
+        return f"Deleted file {display_path}."
+
     def create_directory(self, path: str) -> str:
         """Recursively create one approved-workspace directory."""
 
@@ -81,7 +149,10 @@ class FileWriteMixin:
             raise ToolError(f"Line range {start_line}-{end_line} exceeds the file's {len(records)} lines.")
         selected = [content for content, _ending in records[start_line - 1 : end_line]]
         if selected != expected_lines:
-            raise ToolError("The selected lines no longer match expected_lines; file was not changed.")
+            raise ToolError(
+                "The selected lines no longer match the expected content; file was not changed. "
+                "Read the file again before editing."
+            )
         newline = self._dominant_newline(original)
         prefix = "".join(content + ending for content, ending in records[: start_line - 1])
         suffix = "".join(content + ending for content, ending in records[end_line:])

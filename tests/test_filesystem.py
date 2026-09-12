@@ -190,20 +190,20 @@ def test_create_directory_is_recursive_idempotent_and_registered_as_approved_wri
     assert (tmp_path / "one" / "two" / "three").is_dir()
 
     registry = build_tool_registry(tmp_path)
-    assert "create_directory" in registry.names()
-    assert "create_directory" not in registry.read_only_names()
-    assert registry.requires_confirmation("create_directory") is True
+    assert "file_operation" in registry.names()
+    assert "file_operation" not in registry.read_only_names()
+    assert registry.requires_confirmation("file_operation") is True
     assert {name for name in registry.names() if registry.is_workspace_confined(name)} == {
-        "create_directory",
-        "write_file",
-        "edit_file",
+        "file_operation",
         "run_command",
         "write_stdin",
     }
     with pytest.raises(ConfirmationRequired):
-        registry.invoke("create_directory", {"path": str(tmp_path / "approved")})
+        registry.invoke(
+            "file_operation", {"operation": "create", "type": "directory", "path": str(tmp_path / "approved")}
+        )
     with pytest.raises(ToolError, match="Invalid arguments"):
-        registry.invoke("create_directory", {}, confirmed=True)
+        registry.invoke("file_operation", {}, confirmed=True)
 
 
 def test_create_directory_rejects_files_traversal_absolute_paths_and_links(tmp_path: Path) -> None:
@@ -238,8 +238,8 @@ def test_write_file_keeps_created_parents_when_file_creation_fails(tmp_path: Pat
     monkeypatch.setattr(files, "_exclusive_create", fail_create)
     with pytest.raises(OSError, match="simulated file creation failure"):
         registry.invoke(
-            "write_file",
-            {"path": str(tmp_path / "created" / "before" / "failure.txt"), "content": "content"},
+            "file_operation",
+            {"operation": "write", "path": str(tmp_path / "created" / "before" / "failure.txt"), "content": "content"},
             confirmed=True,
         )
 

@@ -84,8 +84,8 @@ class PlanResearchPlanner:
             return AgentAction(type="final_answer", answer="Implemented from the reviewed plan.")
         return AgentAction(
             type="tool_call",
-            tool="write_file",
-            arguments={"path": str(self.workspace / "result.txt"), "content": "done"},
+            tool="file_operation",
+            arguments={"operation": "write", "path": str(self.workspace / "result.txt"), "content": "done"},
         )
 
 

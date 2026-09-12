@@ -130,17 +130,25 @@ def test_same_file_writes_are_serialized_and_results_keep_model_order() -> None:
     probe = ConcurrencyProbe()
     probe.release.set()
 
-    def write_file(path: str, content: str) -> str:
-        del path
+    def file_operation(operation: str, path: str, content: str) -> str:
+        del operation, path
         time.sleep(0.05 if content == "first" else 0.01)
         return probe.run(content=content) + ":" + content
 
-    tools = ToolRegistry([Tool("write_file", "write", write_file, read_only=False)])
+    tools = ToolRegistry([Tool("file_operation", "write", file_operation, read_only=False)])
     runtime = runtime_for(tools, parallel=2)
     message = AssistantMessage(
         tool_messages=[
-            ToolMessage(name="write_file", call_id="write_1", arguments={"path": "same.txt", "content": "first"}),
-            ToolMessage(name="write_file", call_id="write_2", arguments={"path": "same.txt", "content": "second"}),
+            ToolMessage(
+                name="file_operation",
+                call_id="write_1",
+                arguments={"operation": "write", "path": "same.txt", "content": "first"},
+            ),
+            ToolMessage(
+                name="file_operation",
+                call_id="write_2",
+                arguments={"operation": "write", "path": "same.txt", "content": "second"},
+            ),
         ]
     )
     runtime.state.active_message = message
@@ -151,6 +159,37 @@ def test_same_file_writes_are_serialized_and_results_keep_model_order() -> None:
     assert [outcome.output for outcome in result.outcomes] == ["ok:first", "ok:second"]
     assert [tool.parallel_index for tool in message.tool_messages] == [0, 1]
     assert len({tool.parallel_group_id for tool in message.tool_messages}) == 1
+
+
+def test_create_directory_and_delete_share_serial_subqueue() -> None:
+    serial = ConcurrencyProbe(expected=1)
+    normal = ConcurrencyProbe(expected=2)
+    tools = ToolRegistry([Tool("file_operation", "mutate", serial.run), Tool("inspect", "read", normal.run)])
+    runtime = runtime_for(tools, parallel=4)
+    message = AssistantMessage(
+        tool_messages=[
+            ToolMessage(
+                name="file_operation",
+                call_id="mkdir",
+                arguments={"operation": "create", "type": "directory", "path": "new"},
+            ),
+            ToolMessage(name="file_operation", call_id="delete", arguments={"operation": "delete", "path": "old"}),
+            ToolMessage(name="inspect", call_id="inspect_1"),
+            ToolMessage(name="inspect", call_id="inspect_2"),
+        ]
+    )
+    worker, result = execute_in_thread(runtime, message)
+    try:
+        assert serial.ready.wait(3)
+        assert normal.ready.wait(3)
+        assert serial.maximum == 1
+        assert normal.maximum == 2
+    finally:
+        serial.release.set()
+        normal.release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert all(outcome.success for outcome in result[0].outcomes)
 
 
 def test_completion_events_are_real_time_but_results_keep_model_order() -> None:

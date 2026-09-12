@@ -402,35 +402,49 @@ def test_web_tool_missing_or_invalid_network_mode_requires_approval(sandbox_conf
     assert len(approvals) == 1
 
 
-@pytest.mark.parametrize("tool_name", ["create_directory", "write_file", "edit_file"])
+@pytest.mark.parametrize(
+    "case", ["create_directory", "create_file", "write_file", "edit_file", "delete_file", "delete_directory"]
+)
 @pytest.mark.parametrize(
     ("permission_mode", "expected_approvals"),
     [("read_only", 1), ("workspace_write", 0), ("full_access", 0)],
 )
 def test_workspace_file_mutation_approval_matrix_executes_real_handler(
     tmp_path: Path,
-    tool_name: str,
+    case: str,
     permission_mode: str,
     expected_approvals: int,
 ) -> None:
     paths = {
         "create_directory": tmp_path / "created" / "nested",
-        "write_file": tmp_path / "written.txt",
+        "create_file": tmp_path / "new" / "created.txt",
+        "write_file": tmp_path / "new" / "written.txt",
         "edit_file": tmp_path / "edited.txt",
+        "delete_file": tmp_path / "deleted.txt",
+        "delete_directory": tmp_path / "deleted",
     }
-    arguments: dict[str, object] = {"path": str(paths[tool_name])}
-    if tool_name == "write_file":
+    arguments: dict[str, object] = {"operation": "write", "path": str(paths[case])}
+    if case.startswith("create_"):
+        arguments.update(operation="create", type="directory" if case == "create_directory" else "file")
+    if case == "write_file":
         arguments["content"] = "created"
-    if tool_name == "edit_file":
+    if case == "edit_file":
         (tmp_path / "edited.txt").write_text("before", encoding="utf-8")
         arguments.update(
             {
                 "start_line": 1,
                 "end_line": 1,
-                "expected_lines": ["before"],
-                "replacement_lines": ["after"],
+                "expected_content": "before",
+                "content": "after",
             }
         )
+    if case.startswith("delete_"):
+        arguments["operation"] = "delete"
+        if case == "delete_directory":
+            paths[case].mkdir()
+            (paths[case] / "child.txt").write_text("remove", encoding="utf-8")
+        else:
+            paths[case].write_text("remove", encoding="utf-8")
 
     class FileToolPlanner:
         def __init__(self) -> None:
@@ -440,7 +454,7 @@ def test_workspace_file_mutation_approval_matrix_executes_real_handler(
             self.calls += 1
             if self.calls == 1:
                 return AssistantMessage(
-                    tool_messages=[ToolMessage(name=tool_name, call_id="call_file", arguments=arguments)]
+                    tool_messages=[ToolMessage(name="file_operation", call_id="call_file", arguments=arguments)]
                 )
             return AssistantMessage(content="done")
 
@@ -459,12 +473,16 @@ def test_workspace_file_mutation_approval_matrix_executes_real_handler(
     assert result.status == "completed"
     assert len(approvals) == expected_approvals
     assert [event.kind for event in events].count("approval_requested") == expected_approvals
-    if tool_name == "create_directory":
+    if case == "create_directory":
         assert (tmp_path / "created" / "nested").is_dir()
-    elif tool_name == "write_file":
-        assert (tmp_path / "written.txt").read_text(encoding="utf-8") == "created"
-    else:
+    elif case == "create_file":
+        assert paths[case].read_text(encoding="utf-8") == ""
+    elif case == "write_file":
+        assert paths[case].read_text(encoding="utf-8") == "created"
+    elif case == "edit_file":
         assert (tmp_path / "edited.txt").read_text(encoding="utf-8") == "after"
+    else:
+        assert not paths[case].exists()
 
 
 @pytest.mark.parametrize(
