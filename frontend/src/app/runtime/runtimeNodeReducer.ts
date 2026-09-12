@@ -156,7 +156,7 @@ export function applyRuntimeNodeFrame(
         throw new Error("Turn Message delta is out of order");
       }
       const previousMessage = version[version.length - 1];
-      if (!["user", "assistant"].includes(String(operation.message.role)) || !Array.isArray(operation.message.content)) {
+      if (!["user", "assistant", "developer"].includes(String(operation.message.role)) || !Array.isArray(operation.message.content)) {
         throw new Error("Turn Message delta has an invalid role");
       }
       if (operation.message.role === "user" && previousMessage?.role === "user") {

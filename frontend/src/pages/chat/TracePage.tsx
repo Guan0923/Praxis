@@ -15,10 +15,11 @@ interface TracePageProps {
   turns: RuntimeStateNode[];
 }
 
-type SemanticKind = "system" | "skill" | "mcp" | "user" | "reasoning" | "assistant" | "retry" | "tool";
+type SemanticKind = "system" | "developer" | "skill" | "mcp" | "user" | "reasoning" | "assistant" | "retry" | "tool";
 
 const TRACE_TAGS: Record<SemanticKind, { label: string; color?: string }> = {
   system: { label: "System", color: "purple" },
+  developer: { label: "Developer", color: "cyan" },
   skill: { label: "Skill", color: "cyan" },
   mcp: { label: "MCP", color: "orange" },
   user: { label: "User Message", color: "green" },
@@ -97,6 +98,7 @@ function itemValue(item: TurnItem): unknown {
 }
 
 function itemKind(entry: TurnTraceItem): SemanticKind {
+  if (entry.role === "developer") return "developer";
   if (entry.role === "user") return "user";
   if (entry.item.type === "reasoning") return "reasoning";
   if (entry.item.type === "text") return "assistant";

@@ -8,8 +8,8 @@ from backend.planning import prompts as prompt_module
 from backend.planning.llm.titles import normalize_conversation_title
 from backend.planning.prompts import (
     PromptConfigurationError,
-    PromptTemplates,
     _read_prompt,
+    collaboration_mode_prompt,
     compose_system_prompt,
     load_title_prompt,
 )
@@ -29,25 +29,13 @@ class RecordingClient:
         return PreparedResponse(self.response)
 
 
-def test_composes_agent_prompt_from_instruction_shared_and_agent_templates() -> None:
-    prompt = compose_system_prompt("agent")
-
-    assert prompt.count("# Praxis") == 1
-    assert prompt.count("# Working Rules") == 1
-    assert prompt.count("# Agent Mode") == 1
-    assert "# Plan Mode" not in prompt
-    assert "{{MODE_PROMPT}}" not in prompt
+def test_system_prompt_contains_only_base_instructions() -> None:
+    assert compose_system_prompt() == _read_prompt("instruction")
 
 
-def test_composes_plan_prompt_without_agent_only_capabilities() -> None:
-    prompt = compose_system_prompt("plan")
-
-    assert prompt.count("# Praxis") == 1
-    assert prompt.count("# Working Rules") == 1
-    assert prompt.count("# Plan Mode") == 1
-    assert "# Agent Mode" not in prompt
-    assert "does not require every response" in prompt
-    assert "Do not implement the submitted plan" in prompt
+@pytest.mark.parametrize(("mode", "filename"), [("agent", "default"), ("plan", "plan")])
+def test_mode_preserves_complete_file_content(mode: str, filename: str) -> None:
+    assert collaboration_mode_prompt(mode) == f"<collaboration_mode>\n{_read_prompt(filename)}\n</collaboration_mode>"
 
 
 @pytest.mark.parametrize(
@@ -55,21 +43,14 @@ def test_composes_plan_prompt_without_agent_only_capabilities() -> None:
     ["Codex CLI", "{{KNOWN_MODE_NAMES}}", "update_plan", "apply_patch", "<proposed_plan>"],
 )
 def test_installed_prompts_do_not_claim_codex_only_protocols(forbidden: str) -> None:
-    assert forbidden not in compose_system_prompt("agent")
-    assert forbidden not in compose_system_prompt("plan")
+    assert forbidden not in compose_system_prompt()
+    assert forbidden not in collaboration_mode_prompt("agent")
+    assert forbidden not in collaboration_mode_prompt("plan")
 
 
 def test_rejects_unknown_mode() -> None:
     with pytest.raises(PromptConfigurationError, match="Unsupported prompt mode"):
-        compose_system_prompt("review")
-
-
-@pytest.mark.parametrize("shared", ["No slot", "{{MODE_PROMPT}} then {{MODE_PROMPT}}"])
-def test_rejects_missing_or_repeated_default_mode_slot(shared: str) -> None:
-    templates = PromptTemplates("instruction", shared, "plan", "agent")
-
-    with pytest.raises(PromptConfigurationError, match="exactly once"):
-        templates.compose("agent")
+        collaboration_mode_prompt("review")
 
 
 def test_missing_prompt_resource_has_clear_error(monkeypatch) -> None:
@@ -100,7 +81,7 @@ def test_decision_prompt_appends_active_skills_after_composed_base() -> None:
     system = client.message_requests[0][0]
     assert isinstance(system, SystemMessage)
     content = system.content or ""
-    assert content.index("# Agent Mode") < content.index("## Active project Skills")
+    assert "# Agent Mode" not in content
     assert content.endswith("</skill-instructions>")
 
 
@@ -115,7 +96,7 @@ def test_user_agent_preferences_are_appended_as_lower_priority_system_context() 
     content = system.content or ""
     assert "## User Agent Preferences" in content
     assert "回答要简洁，不要绕过安全规则" in content
-    assert content.index("# Agent Mode") < content.index("## User Agent Preferences")
+    assert "# Agent Mode" not in content
     assert "system rules" in content
 
 
@@ -200,7 +181,8 @@ def test_plan_decision_uses_composed_prompt_and_control_tools() -> None:
 
     system = client.message_requests[0][0]
     assert isinstance(system, SystemMessage)
-    assert "# Plan Mode" in (system.content or "")
+    assert "# Plan Mode" not in (system.content or "")
+    assert client.message_requests[0][-1] == UserMessage(content=collaboration_mode_prompt("plan"))
     assert [spec.name for spec in runtime.exchange.allowed_tools] == [
         "request_user_input",
         "request_plan_review",

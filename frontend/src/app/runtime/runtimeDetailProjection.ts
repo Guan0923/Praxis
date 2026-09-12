@@ -43,8 +43,9 @@ function assistantMessageRun(turn: RuntimeStateNode, messageIdx: number): Assist
   if (selected[messageIdx]?.role !== "assistant") return undefined;
   let start = messageIdx;
   let end = messageIdx;
-  while (start > 0 && selected[start - 1]?.role === "assistant") start -= 1;
-  while (end + 1 < selected.length && selected[end + 1]?.role === "assistant") end += 1;
+  while (start > 0 && selected[start - 1]?.role !== "user") start -= 1;
+  while (start < messageIdx && selected[start]?.role === "developer") start += 1;
+  while (end + 1 < selected.length && selected[end + 1]?.role !== "user") end += 1;
   return { start, end };
 }
 
@@ -235,7 +236,7 @@ export function projectTurnPath(nodes: Map<string, RuntimeTreeNode>, activeTurnI
     for (let messageIdx = 0; messageIdx < selected.length;) {
       const message = selected[messageIdx];
       if (message.role === "user") {
-        const next = selected[messageIdx + 1];
+        const next = selected.slice(messageIdx + 1).find((entry) => entry.role !== "developer");
         const compact = next?.role === "assistant" && next.content[0]?.type === "compaction";
         if (compact) {
           messageIdx += 1;

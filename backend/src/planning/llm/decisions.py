@@ -34,7 +34,7 @@ class DecisionMixin:
                 verb = "is" if len(collisions) == 1 else "are"
                 raise PlanningError(f"{names} {verb} reserved for the Plan-mode control protocol.")
             allowed = [*allowed, REQUEST_USER_INPUT_SPEC, REQUEST_PLAN_REVIEW_SPEC]
-        system = SystemMessage(content=compose_system_prompt(runtime.run.mode))
+        system = SystemMessage(content=compose_system_prompt())
         if runtime.exchange.continuation_pending:
             system.content += (
                 "\n\n[Continue interrupted generation]\n"

@@ -790,8 +790,17 @@ def test_late_tool_failure_after_steering_settles_the_previous_assistant_call() 
 
     assert completed is not None and completed.status == "success"
     messages = completed.data[completed.current_data_idx]
-    assert [message["role"] for message in messages] == ["user", "assistant", "user", "assistant"]
-    first_call = next(item for item in messages[1]["content"] if item.get("call_id") == "call_stale")
+    assert [message["role"] for message in messages] == [
+        "user",
+        "assistant",
+        "developer",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    first_call = next(
+        item for message in messages for item in message["content"] if item.get("call_id") == "call_stale"
+    )
     assert first_call["type"] == "tool_call" and first_call["status"] == "failed"
     assert not any(item["status"] == "running" for message in messages for item in message["content"])
 
@@ -1092,7 +1101,7 @@ def test_model_retry_streams_a_nonterminal_item_and_settles_on_the_next_request(
         {
             "op": "set_item_status",
             "data_idx": 0,
-            "message_idx": 1,
+            "message_idx": 3,
             "item_idx": 0,
             "status": "success",
         },
@@ -1137,11 +1146,13 @@ def test_multiple_model_retries_keep_order_and_reconnect_snapshot() -> None:
         )
     )
     first_delta = original.next_event()
+    while first_delta["operations"][0]["op"] == "append_message":
+        first_delta = original.next_event()
     assert first_delta["operations"][0]["item"]["attempt"] == 1
 
     reconnected = stream.subscribe("turn_retry_order")
     snapshot = reconnected.next_event()
-    retry_items = snapshot["turn"]["data"][0][1]["content"]
+    retry_items = snapshot["turn"]["data"][0][-1]["content"]
     assert [(item["attempt"], item["status"]) for item in retry_items] == [(1, "running")]
 
     bridge.handle(RuntimeEvent("model_request", "Model decision request"))
@@ -1952,8 +1963,11 @@ def test_http_compact_uses_llm_bridge_and_never_accepts_a_supplied_summary(tmp_p
         assert compacted["parent_id"] == source.id
         assert compacted["compactionId"] == compacted["id"]
         assert compacted["status"] == "success"
-        assert compacted["data"][0][1]["content"][0]["summary"] == summary
-        assert CHECKPOINT_PREAMBLE not in compacted["data"][0][1]["content"][0]["summary"]
+        compact_item = next(
+            item for message in compacted["data"][0] for item in message["content"] if item["type"] == "compaction"
+        )
+        assert compact_item["summary"] == summary
+        assert CHECKPOINT_PREAMBLE not in compact_item["summary"]
         assert llm_client.operations == ["summarize"]
         assert resolved_provider_names == ["checkpoint-provider"]
         assert llm_client.transcripts and "seed compact history" in llm_client.transcripts[0]
@@ -2119,7 +2133,7 @@ def test_real_sqlite_http_sse_round_trip_reconstructs_the_persisted_turn_from_de
         assert persisted["parent_id"] == root["id"]
         assert persisted["compactionId"] == turn_id
         assert persisted["data"][0][0]["content"] == [{"type": "text", "text": "hello   sidebar", "status": "success"}]
-        assert persisted["data"][0][1]["content"][-1]["type"] == "text"
+        assert persisted["data"][0][-1]["content"][-1]["type"] == "text"
         refreshed_sidebar = next(
             item for item in client.get("/api/sidebar-threads").json() if item["thread_id"] == sidebar["thread_id"]
         )

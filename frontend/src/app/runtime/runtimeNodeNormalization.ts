@@ -144,7 +144,7 @@ export function normalizeRuntimeNode(node: RuntimeTreeNode): RuntimeTreeNode {
     for (let index = 0; index < version.length; index += 1) {
       const message = version[index];
       const expectedRole = index === 0 ? "user" : undefined;
-      if ((expectedRole && message?.role !== expectedRole) || !["user", "assistant"].includes(String(message?.role)) || !Array.isArray(message.content)) {
+      if ((expectedRole && message?.role !== expectedRole) || !["user", "assistant", "developer"].includes(String(message?.role)) || !Array.isArray(message.content)) {
         throw new Error("A Turn must start with user and contain valid Messages");
       }
       if (message.role === "user" && index > 0 && version[index - 1]?.role === "user") {

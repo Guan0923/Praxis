@@ -5,7 +5,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from backend.domain import AssistantMessage, ChatMessage, SystemMessage, ToolMessage, ToolSpec, UserMessage
+from backend.domain import (
+    AssistantMessage,
+    ChatMessage,
+    DeveloperMessage,
+    SystemMessage,
+    ToolMessage,
+    ToolSpec,
+    UserMessage,
+)
 from backend.runtime.core.context import AgentRuntime
 
 from ..errors import ModelRequestError
@@ -60,6 +68,8 @@ def _wire_messages_from(source: list[ChatMessage]) -> list[dict[str, Any]]:
             if tool.call_id and tool.status != "pending" and tool.content is not None:
                 completed_tools[tool.call_id] = tool
     for position, message in enumerate(source):
+        if isinstance(message, DeveloperMessage):
+            message = UserMessage(content=message.content, provider_options=message.provider_options)
         if isinstance(message, SystemMessage):
             options = _provider_options(message)
             unknown = set(options) - {"extra_body"}

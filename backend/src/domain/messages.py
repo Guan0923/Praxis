@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias
 
-MessageRole = Literal["system", "user", "assistant", "tool"]
+MessageRole = Literal["system", "user", "assistant", "tool", "developer"]
 ToolStatus = Literal["pending", "succeeded", "failed", "indeterminate"]
 
 CHECKPOINT_PREAMBLE = (
@@ -47,6 +47,13 @@ class UserMessage(Message):
 
 
 @dataclass(kw_only=True)
+class DeveloperMessage(Message):
+    name: str = "developer"
+    role: Literal["developer"] = field(default="developer", init=False)
+    content: str | None = None
+
+
+@dataclass(kw_only=True)
 class ToolMessage(Message):
     """One assistant-requested tool call together with its eventual result."""
 
@@ -84,7 +91,7 @@ class AssistantMessage(Message):
     tool_messages: list[ToolMessage] = field(default_factory=list)
 
 
-ChatMessage: TypeAlias = SystemMessage | UserMessage | AssistantMessage
+ChatMessage: TypeAlias = SystemMessage | UserMessage | AssistantMessage | DeveloperMessage
 
 
 @dataclass(frozen=True)
@@ -175,6 +182,12 @@ def message_from_dict(data: dict[str, Any]) -> ChatMessage:
     role = data.get("role")
     content = data.get("content")
     text = content if isinstance(content, str) or content is None else str(content)
+    if role == "developer":
+        return DeveloperMessage(
+            name=str(data.get("name") or "developer"),
+            content=text,
+            provider_options=_provider_options_from_dict(data),
+        )
     if role == "system":
         return SystemMessage(
             name=str(data.get("name") or "system"),

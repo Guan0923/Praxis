@@ -31,7 +31,7 @@ PermissionMode: TypeAlias = Literal["read_only", "workspace_write", "full_access
 RunningMode: TypeAlias = Literal["agent", "plan"]
 ReasoningEffort: TypeAlias = Literal["low", "medium", "high", "xhigh", "max"]
 ThinkingMode: TypeAlias = Literal["enable", "disable"]
-MessageRole: TypeAlias = Literal["user", "assistant"]
+MessageRole: TypeAlias = Literal["user", "assistant", "developer"]
 ContentBlockType: TypeAlias = Literal[
     "text",
     "reasoning",
@@ -56,7 +56,7 @@ PERMISSION_MODES = frozenset({"read_only", "workspace_write", "full_access"})
 RUNNING_MODES = frozenset({"agent", "plan"})
 REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 THINKING_MODES = frozenset({"enable", "disable"})
-MESSAGE_ROLES = frozenset({"user", "assistant"})
+MESSAGE_ROLES = frozenset({"user", "assistant", "developer"})
 CONTENT_BLOCK_TYPES = frozenset(
     {
         "text",
@@ -294,7 +294,7 @@ def normalize_content(content: str | Mapping[str, Any] | Sequence[Mapping[str, A
 
 def message_payload(role: MessageRole, content: Any = None, **metadata: Any) -> dict[str, Any]:
     if role not in MESSAGE_ROLES:
-        raise RuntimeStateValidationError("message.role must be user or assistant.")
+        raise RuntimeStateValidationError("message.role must be user, assistant or developer.")
     if role == "user" and isinstance(content, Mapping):
         content = [{**content, "status": "success"}]
     elif role == "user" and isinstance(content, Sequence) and not isinstance(content, (str, bytes, bytearray)):

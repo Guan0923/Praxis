@@ -390,18 +390,18 @@ def test_preinitialization_skill_item_is_not_backfilled_and_stream_item_is_appen
 
     baseline = store.load_turn_trace(turn.session_id, turn.id, 0)
     assert baseline is not None
-    assert [item.item["type"] for item in baseline.items] == ["text"]
+    assert [item.role for item in baseline.items] == ["user", "developer"]
 
     bridge.handle(RuntimeEvent("thinking_start", "", {}))
     bridge.handle(RuntimeEvent("thinking_delta", "part one", {}))
     bridge.handle(RuntimeEvent("thinking_delta", " part two", {}))
     during_stream = store.load_turn_trace(turn.session_id, turn.id, 0)
-    assert during_stream is not None and during_stream.last_sequence == 1
+    assert during_stream is not None and during_stream.last_sequence == 2
 
     bridge.handle(RuntimeEvent("thinking_end", "", {}))
     completed = store.load_turn_trace(turn.session_id, turn.id, 0)
     assert completed is not None
-    assert completed.last_sequence == 2
+    assert completed.last_sequence == 3
     assert completed.items[-1].item == {
         "type": "reasoning",
         "text": "part one part two",
@@ -426,7 +426,7 @@ def test_tool_call_result_and_steering_are_appended_in_canonical_order(tmp_path:
         )
     )
     running = store.load_turn_trace(turn.session_id, turn.id, 0)
-    assert running is not None and running.last_sequence == 1
+    assert running is not None and running.last_sequence == 2
 
     bridge.handle(
         RuntimeEvent(
@@ -444,9 +444,9 @@ def test_tool_call_result_and_steering_are_appended_in_canonical_order(tmp_path:
     )
     trace = store.load_turn_trace(turn.session_id, turn.id, 0)
     assert trace is not None
-    assert [item.item["type"] for item in trace.items] == ["text", "tool_call", "tool_result", "text"]
-    assert [item.role for item in trace.items] == ["user", "assistant", "assistant", "user"]
-    assert trace.items[1].item["status"] == "success"
+    assert [item.item["type"] for item in trace.items] == ["text", "text", "tool_call", "tool_result", "text"]
+    assert [item.role for item in trace.items] == ["user", "developer", "assistant", "assistant", "user"]
+    assert trace.items[2].item["status"] == "success"
 
     duplicate = store.append_turn_trace_item(
         turn.session_id,
@@ -475,7 +475,7 @@ def test_model_retry_is_audited_after_the_next_attempt_starts(tmp_path: Path) ->
     )
     during_delay = store.load_turn_trace(turn.session_id, turn.id, 0)
     assert during_delay is not None
-    assert [item.item["type"] for item in during_delay.items] == ["text"]
+    assert [item.role for item in during_delay.items] == ["user", "developer"]
 
     bridge.handle(RuntimeEvent("model_request", "Model decision request"))
     trace = store.load_turn_trace(turn.session_id, turn.id, 0)
@@ -538,7 +538,10 @@ def test_resumed_bridge_rebinds_existing_trace_before_projecting_items(tmp_path:
 
     trace = store.load_turn_trace(turn.session_id, turn.id, 0)
     assert trace is not None
-    assert [item.item["text"] for item in trace.items if item.item["type"] == "text"] == ["hello", "resumed"]
+    assert [item.item["text"] for item in trace.items if item.item["type"] == "text" and item.role != "developer"] == [
+        "hello",
+        "resumed",
+    ]
 
 
 def test_child_turn_ignores_predecision_items_until_its_trace_is_initialized(tmp_path: Path) -> None:
@@ -558,7 +561,7 @@ def test_child_turn_ignores_predecision_items_until_its_trace_is_initialized(tmp
     initialize_trace(runtime)
     trace = store.load_turn_trace(child.session_id, child.id, child.current_data_idx)
     assert trace is not None
-    assert [item.item["type"] for item in trace.items] == ["text"]
+    assert [item.role for item in trace.items] == ["user", "developer"]
     assert trace.items[0].item["text"] == "follow up"
 
 

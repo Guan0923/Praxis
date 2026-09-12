@@ -10,6 +10,7 @@ from typing import Any
 from backend.domain import (
     AssistantMessage,
     ChatMessage,
+    DeveloperMessage,
     SystemMessage,
     ToolMessage,
     ToolSpec,
@@ -110,8 +111,13 @@ class ResponsesAdapter:
         required_tool_name = parameters.get("required_tool_name")
         items: list[dict[str, Any]] = []
         for message in runtime.exchange.messages or runtime.state.messages:
-            if isinstance(message, SystemMessage | UserMessage):
-                items.append({"role": message.role, "content": message.content or ""})
+            if isinstance(message, SystemMessage | UserMessage | DeveloperMessage):
+                items.append(
+                    {
+                        "role": "user" if isinstance(message, DeveloperMessage) else message.role,
+                        "content": message.content or "",
+                    }
+                )
             elif isinstance(message, AssistantMessage):
                 if message.content:
                     items.append({"role": "assistant", "content": message.content})
@@ -310,7 +316,7 @@ class MessagesAdapter:
         for message in runtime.exchange.messages or runtime.state.messages:
             if isinstance(message, SystemMessage):
                 system.append({"type": "text", "text": message.content or ""})
-            elif isinstance(message, UserMessage):
+            elif isinstance(message, UserMessage | DeveloperMessage):
                 messages.append({"role": "user", "content": [{"type": "text", "text": message.content or ""}]})
             elif isinstance(message, AssistantMessage):
                 blocks: list[dict[str, Any]] = []

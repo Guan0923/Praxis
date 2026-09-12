@@ -10,11 +10,67 @@ from typing import Any
 from backend.domain import TracePersistenceError
 from backend.domain.execution_config import RuntimeConfigUpdate
 from backend.domain.runtime_state import RuntimeState, RuntimeStateValidationError
+from backend.planning.prompts import collaboration_mode_prompt
 from backend.providers.token_usage import normalize_provider_usage
 from backend.runtime.persistence.recording import turn_trace_audit_value
 
 
 class _ItemProjectionMixin:
+    def _last_user_message_index(self) -> int:
+        return max(index for index, message in enumerate(self.assistant.selected_messages) if message["role"] == "user")
+
+    def _append_collaboration_mode(self, mode: str) -> None:
+        if self.assistant is None:
+            return
+        self.assistant = self.writer.append_message(
+            self.assistant,
+            {
+                "role": "developer",
+                "content": [{"type": "text", "text": collaboration_mode_prompt(mode), "status": "success"}],
+            },
+            persist=True,
+        )
+        self.last_node = self.assistant
+        self.assistant_message_idx = None
+        self.assistant_blocks = []
+        self.protected_item_count = 0
+        self._record_completed_item(len(self.assistant.selected_messages) - 1, 0)
+        self._ensure_assistant_message()
+
+    def _initialize_collaboration_mode(self) -> None:
+        current = self.assistant
+        if current is None:
+            return
+        previous = next(
+            (
+                item.get("text")
+                for message in reversed(current.selected_messages)
+                if message["role"] == "developer"
+                for item in message["content"]
+                if str(item.get("text", "")).startswith("<collaboration_mode>\n")
+            ),
+            None,
+        )
+        if previous != collaboration_mode_prompt(self.running_mode):
+            self._append_collaboration_mode(self.running_mode)
+
+    def _drain_collaboration_modes(self, *, item_finished: bool = False) -> None:
+        if not self._pending_modes or self.closed or self.assistant is None:
+            return
+        if self._stream_item_type is not None:
+            return
+        if self._model_request_active and not item_finished:
+            return
+        if not item_finished and any(
+            item.get("status") == "running"
+            for message in self.assistant.selected_messages
+            for item in message["content"]
+        ):
+            return
+        modes, self._pending_modes = self._pending_modes, []
+        for mode in modes:
+            self._append_collaboration_mode(mode)
+
     @staticmethod
     def _json_value(value: Any) -> Any:
         if value is None or isinstance(value, (str, bool, int)):
@@ -100,6 +156,7 @@ class _ItemProjectionMixin:
         self._stream_item_index = None
         self._stream_item_type = None
         self._stream_text = ""
+        self._drain_collaboration_modes(item_finished=True)
 
     def _append_item(
         self,
@@ -229,6 +286,7 @@ class _ItemProjectionMixin:
             raise RuntimeStateValidationError("permission_mode must be read_only, workspace_write, or full_access.")
         if running not in {"agent", "plan"}:
             raise RuntimeStateValidationError("running_mode must be agent or plan.")
+        mode_changed = running != self.running_mode
         self.provider_name, self.model_config = provider_name, model
         self.permission_mode, self.running_mode = permission, running
         if self.assistant is None:
@@ -240,4 +298,7 @@ class _ItemProjectionMixin:
         if self.runtime is not None:
             pending = self.runtime.services.pending_runtime_config
             self.runtime.services.pending_runtime_config = pending.merged(config) if pending is not None else config
+        if mode_changed:
+            self._pending_modes.append(running)
+            self._drain_collaboration_modes()
         return self.assistant

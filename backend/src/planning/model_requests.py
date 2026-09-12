@@ -269,6 +269,21 @@ class ModelRequestExecutor:
                 updated_at=timestamp,
             )
             initialize(runtime.state.session_id, trace)
+            for mode_message_idx, message in enumerate(turn.data[run.data_idx]):
+                if message["role"] != "developer":
+                    continue
+                for mode_item_idx, item in enumerate(message["content"]):
+                    if item.get("status") in {"success", "failed"}:
+                        store.append_turn_trace_item(
+                            runtime.state.session_id,
+                            run.turn_id,
+                            run.data_idx,
+                            message_idx=mode_message_idx,
+                            item_idx=mode_item_idx,
+                            role="developer",
+                            item=turn_trace_audit_value(item),
+                            completed_at=timestamp,
+                        )
             runtime.services.turn_trace_initialized = True
         except TracePersistenceError:
             raise

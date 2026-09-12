@@ -616,9 +616,11 @@ def test_plan_decision_exposes_request_user_input_without_registering_it() -> No
     ]
     system = runtime.exchange.messages[0]
     assert isinstance(system, SystemMessage)
-    assert "request_user_input" in (system.content or "")
-    assert "request_plan_review" in (system.content or "")
-    assert "does not require every response" in (system.content or "")
+    mode = runtime.exchange.messages[-1]
+    assert isinstance(mode, UserMessage)
+    assert "request_user_input" in (mode.content or "")
+    assert "request_plan_review" in (mode.content or "")
+    assert "does not require every response" in (mode.content or "")
 
 
 def test_llm_planner_rejects_unknown_native_tool() -> None:

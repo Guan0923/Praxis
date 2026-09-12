@@ -94,7 +94,7 @@ class RequestMixin:
             runtime.exchange.context["trace_system_message"] = trace_system_message
             return prepared
         if self._context_manager is None:
-            return [system, *runtime.state.messages, *(extra or [])]
+            return [system, *runtime.model_messages(), *(extra or [])]
         parameters = dict(runtime.state.request_parameters)
         overrides = runtime.exchange.context.get("request_parameters")
         if isinstance(overrides, dict):
@@ -102,6 +102,7 @@ class RequestMixin:
         prepared = self._context_manager.prepare(
             runtime,
             system,
+            history=runtime.model_messages(),
             extra=extra,
             tools=tools,
             request_parameters=parameters,
@@ -131,7 +132,7 @@ class RequestMixin:
         if canonical_nodes:
             return [system, *canonical, *(extra or [])]
         boundary = min(max(runtime.run.turn_start_index, 0), len(runtime.state.messages))
-        return [system, *runtime.state.messages[boundary:], *(extra or [])]
+        return [system, *runtime.model_messages()[boundary:], *(extra or [])]
 
     def _with_user_preferences(self, system: SystemMessage) -> SystemMessage:
         preferences = getattr(self, "user_preferences", "")

@@ -152,6 +152,8 @@ class RuntimeStateTree:
             if isinstance(turn, RuntimeRootState):
                 continue
             for message in turn.selected_messages:
+                if message["role"] == "developer":
+                    continue
                 result.extend(_clone(message["content"]))
         return result
 
@@ -183,7 +185,10 @@ class RuntimeStateTree:
         if todo_snapshot is not None:
             compact_items.append(_clone(todo_snapshot))
         compact_items.extend(kept)
-        data = [[source.user_message, message_payload("assistant", compact_items)]]
+        mode = next((message for message in reversed(source.selected_messages) if message["role"] == "developer"), None)
+        data = [
+            [source.user_message, *([mode] if mode is not None else []), message_payload("assistant", compact_items)]
+        ]
         result = RuntimeState.create(
             session_id=source.session_id,
             thread_id=source.thread_id,

@@ -103,7 +103,10 @@ def successful_items(items: Sequence[object]) -> list[Mapping[str, Any]]:
     return [item for item in items if isinstance(item, Mapping) and item.get("status") == "success"]
 
 
-def _assistant_items(items: Sequence[object]) -> list[Mapping[str, Any]]:
+def _assistant_items(
+    items: Sequence[object],
+    tool_calls: Mapping[str, Mapping[str, Any]] | None = None,
+) -> list[Mapping[str, Any]]:
     """Keep complete ordinary Items plus valid completed tool call/result pairs."""
 
     mapped = [item for item in items if isinstance(item, Mapping)]
@@ -116,7 +119,19 @@ def _assistant_items(items: Sequence[object]) -> list[Mapping[str, Any]]:
             tool_items.setdefault(call_id, []).append((index, item))
 
     valid_tool_indices: set[int] = set()
-    for entries in tool_items.values():
+    for call_id, entries in tool_items.items():
+        if len(entries) == 1 and tool_calls is not None:
+            index, result = entries[0]
+            call = tool_calls.get(call_id)
+            if (
+                result.get("type") == "tool_result"
+                and call is not None
+                and result.get("status") in {"success", "failed"}
+                and result.get("status") == call.get("status")
+                and result.get("tool", call.get("name")) == call.get("name")
+            ):
+                valid_tool_indices.add(index)
+            continue
         if len(entries) != 2:
             continue
         (call_index, call), (result_index, tool_result) = entries
@@ -142,8 +157,15 @@ def _chat_messages_from_nodes(nodes: Sequence[RuntimeTreeNode]) -> list[ChatMess
 
     result: list[ChatMessage] = []
     for node in nodes:
+        tool_calls = {
+            str(item.get("call_id") or ""): item
+            for message in node.selected_messages
+            if message["role"] == "assistant"
+            for item in message["content"]
+            if item.get("type") == "tool_call"
+        }
         for message in node.selected_messages:
-            if message.get("role") == "user":
+            if message.get("role") in {"user", "developer"}:
                 blocks = successful_items(message.get("content", []))
                 user_text = "".join(
                     str(item.get("text") or item.get("summary") or "")
@@ -165,7 +187,7 @@ def _chat_messages_from_nodes(nodes: Sequence[RuntimeTreeNode]) -> list[ChatMess
                     result.append(UserMessage(content=user_text))
                 continue
 
-            blocks = _assistant_items(message.get("content", []))
+            blocks = _assistant_items(message.get("content", []), tool_calls)
             summary = next((str(item.get("summary") or "") for item in blocks if item.get("type") == "compaction"), "")
             checkpoint_parts = [f"{CHECKPOINT_PREAMBLE}\n\n{summary}"] if summary else []
             for item in blocks:
@@ -201,6 +223,14 @@ def _chat_messages_from_nodes(nodes: Sequence[RuntimeTreeNode]) -> list[ChatMess
                     )
                 elif kind == "tool_result" and call_id:
                     tool = calls.get(call_id)
+                    if tool is None and call_id in tool_calls:
+                        call = tool_calls[call_id]
+                        tool = ToolMessage(
+                            name=str(call.get("name") or "unknown"),
+                            call_id=call_id,
+                            arguments=dict(call.get("arguments") or {}),
+                        )
+                        calls[call_id] = tool
                     if tool is None:
                         continue
                     content = item.get("content")

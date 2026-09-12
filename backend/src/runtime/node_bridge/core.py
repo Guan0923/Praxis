@@ -105,6 +105,8 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         self.closed = False
         self.runtime: Any = None
         self._runtime_config_lock = RLock()
+        self._pending_modes: list[str] = []
+        self._model_request_active = False
 
     def bind_runtime(self, runtime: Any) -> None:
         self.runtime = runtime
@@ -228,7 +230,8 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
                     self.protected_item_count = 1 + int(self.assistant_blocks[0].get("kept_item_count") or 0)
                 self._bind_existing_trace(source)
                 self.started = True
-                return source
+                self._initialize_collaboration_mode()
+                return self.assistant
             self.parent = source
             if self.thread_id == self.session_id:
                 self.thread_id = source.thread_id
@@ -264,7 +267,8 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         self.assistant_message_idx = 1
         self._bind_existing_trace(node)
         self.started = True
-        return node
+        self._initialize_collaboration_mode()
+        return self.assistant
 
     def _ensure_assistant_message(self) -> None:
         if self.assistant is None:
@@ -280,7 +284,7 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
             self.assistant = current
             self.last_node = current
             return
-        if messages[-1]["role"] == "user":
+        if messages[-1]["role"] != "assistant":
             current = self.writer.append_message(
                 current,
                 {"role": "assistant", "content": []},

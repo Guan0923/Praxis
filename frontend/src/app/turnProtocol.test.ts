@@ -35,6 +35,28 @@ function turn(overrides: Partial<RuntimeStateNode> = {}): RuntimeStateNode {
 }
 
 describe("Turn protocol projection", () => {
+  it("accepts developer snapshots and deltas without exposing instructions as chat text", () => {
+    const node = turn({ status: "running" });
+    const accumulator = runtimeNodeAccumulator();
+    applyRuntimeNodeFrame(accumulator, { type: "turn.snapshot", revision: 0, turn: node });
+    const mode = { role: "developer" as const, content: [{ type: "text" as const,
+      text: "<collaboration_mode>plan</collaboration_mode>", status: "success" as const }] };
+    const updated = applyRuntimeNodeFrame(accumulator, {
+      type: "turn.delta", session_id: node.session_id, turn_id: node.id, revision: 1,
+      operations: [
+        { op: "append_message", data_idx: 0, message_idx: 2, message: mode },
+        { op: "append_message", data_idx: 0, message_idx: 3, message: {
+          role: "assistant", content: [{ type: "text", text: " again", status: "success" }],
+        } },
+      ],
+    });
+    expect(normalizeRuntimeNode(updated).data[0][2]).toEqual(mode);
+    const messages = projectTurnPath(new Map([["session_1:turn_1", updated]]), updated.id);
+    expect(messages.map(({ role, content }) => ({ role, content }))).toEqual([
+      { role: "user", content: "hello" }, { role: "assistant", content: "world again" },
+    ]);
+  });
+
   it("preserves workspace references when projecting saved messages", () => {
     const reference = { source: "workspace", path: "workspace:generated/note.txt", display_path: "workspace:generated/note.txt" };
     const node = turn();

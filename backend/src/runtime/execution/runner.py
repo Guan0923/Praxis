@@ -134,6 +134,10 @@ class AgentRunner:
         history = runtime.state.messages
         turn_start_index = len(history)
         history.append(UserMessage(content=task))
+        from backend.domain.messages import DeveloperMessage
+        from backend.planning.prompts import collaboration_mode_prompt
+
+        history.append(DeveloperMessage(content=collaboration_mode_prompt(mode)))
         runtime.state.current_run = RunState(
             task=task,
             mode=mode,  # type: ignore[arg-type]

@@ -25,7 +25,7 @@ def apply_turn_delta(payload: dict[str, Any], frame: Mapping[str, Any]) -> None:
             kind = operation["op"]
             if kind == "append_message":
                 message = operation["message"]
-                if message_idx != len(messages) or message.get("role") not in {"user", "assistant"}:
+                if message_idx != len(messages) or message.get("role") not in {"user", "assistant", "developer"}:
                     raise ValueError("Invalid Message append")
                 messages.append(_clone(message))
                 continue

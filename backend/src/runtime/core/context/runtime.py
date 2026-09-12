@@ -16,6 +16,7 @@ from backend.domain import (
     UserMessage,
 )
 from backend.domain.execution_config import RuntimeConfigUpdate
+from backend.domain.messages import DeveloperMessage
 from backend.domain.runtime_state import RuntimeState as RuntimeTreeNode
 from backend.domain.state import utc_now
 
@@ -164,14 +165,15 @@ class AgentRuntime:
 
         nodes = self.model_nodes()
         if not nodes:
-            messages = list(self.state.messages)
+            messages = [
+                UserMessage(content=message.content) if isinstance(message, DeveloperMessage) else message
+                for message in self.state.messages
+            ]
         else:
-            messages = [*self.services.context_prefix_messages, *_chat_messages_from_nodes(nodes)]
-        if not current_turn_only or not nodes:
-            messages.extend(self.services.context_suffix_messages)
-            return messages
-        boundary = max((index for index, item in enumerate(messages) if isinstance(item, UserMessage)), default=0)
-        return [*messages[boundary:], *self.services.context_suffix_messages]
+            selected = nodes[-1:] if current_turn_only else nodes
+            messages = [*self.services.context_prefix_messages, *_chat_messages_from_nodes(selected)]
+        messages.extend(self.services.context_suffix_messages)
+        return messages
 
     def request_config(self) -> dict[str, Any]:
         """Return the immutable configuration captured for this model call."""
@@ -299,6 +301,10 @@ class AgentRuntime:
             self.state.permission_mode = str(permission_mode)
         running_mode = pending.running_mode
         if running_mode is not None:
+            if running_mode != self.state.running_mode and not callable(self.services.runtime_node_context):
+                from backend.planning.prompts import collaboration_mode_prompt
+
+                self.state.messages.append(DeveloperMessage(content=collaboration_mode_prompt(str(running_mode))))
             self.state.running_mode = str(running_mode)
             if self.state.current_run is not None:
                 self.state.current_run.mode = str(running_mode)  # type: ignore[assignment]

@@ -51,7 +51,7 @@ export interface RetryTurnItem extends TurnItem {
 }
 
 export interface TurnMessage {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "developer";
   content: TurnItem[];
   [key: string]: unknown;
 }
@@ -117,7 +117,7 @@ export interface TurnTraceItem {
   sequence: number;
   message_idx: number;
   item_idx: number;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "developer";
   item: TurnItem;
   completed_at: string;
 }

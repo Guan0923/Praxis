@@ -44,12 +44,13 @@ class _FinalizationMixin:
         code: str = "",
         error_report: object = None,
     ) -> RuntimeState | None:
-        try:
-            self.writer.flush()
-            return self._finish(status, final_answer, category=category, code=code, error_report=error_report)
-        except TracePersistenceError as exc:
-            self._mark_persistence_failure(exc)
-            return None
+        with self._runtime_config_lock:
+            try:
+                self.writer.flush()
+                return self._finish(status, final_answer, category=category, code=code, error_report=error_report)
+            except TracePersistenceError as exc:
+                self._mark_persistence_failure(exc)
+                return None
 
     def _finish(
         self,
@@ -71,10 +72,16 @@ class _FinalizationMixin:
         if (
             final_answer
             and status == "success"
-            and not any(item.get("type") == "text" for item in self.assistant_blocks)
+            and not any(
+                item.get("type") == "text"
+                for message in self.assistant.selected_messages[self._last_user_message_index() + 1 :]
+                if message["role"] == "assistant"
+                for item in message["content"]
+            )
         ):
             self._append_item({"type": "text", "text": final_answer, "status": "success"})
         self._settle_running_items("success" if status == "success" else "failed")
+        self._drain_collaboration_modes(item_finished=True)
         if final_answer and (status == "failed" or (status == "paused" and category != "user")):
             retryable = status == "paused"
             self.terminal_error = terminal_error_payload(

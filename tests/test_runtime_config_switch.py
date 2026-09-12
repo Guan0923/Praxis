@@ -63,7 +63,7 @@ def test_running_turn_redispatches_both_mode_directions_at_the_next_boundary(
     assert not worker.is_alive()
     assert result and runtime.run.status == "completed"
     assert runtime.run.mode == target
-    assert client.system_prompts == [compose_system_prompt(initial), compose_system_prompt(target)]
+    assert client.system_prompts == [compose_system_prompt(), compose_system_prompt()]
     assert ("request_plan_review" in client.allowed_tools[1]) is (target == "plan")
     stale = next(
         message for message in runtime.state.messages if isinstance(message, AssistantMessage) and message.tool_messages

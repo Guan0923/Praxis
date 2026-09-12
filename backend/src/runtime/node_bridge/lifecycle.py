@@ -62,7 +62,11 @@ class _LifecycleMixin:
         if self.runtime is not None:
             self.runtime.services.turn_trace_initialized = False
         self.closed = False
-        return child
+        self.assistant_message_idx = None
+        self._pending_modes.clear()
+        self._model_request_active = False
+        self._initialize_collaboration_mode()
+        return self.assistant
 
     def record_compaction_failure(self, message: str) -> RuntimeState:
         """Persist a safe failure on the successful Plan node without creating a child."""

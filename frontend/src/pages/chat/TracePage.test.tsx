@@ -54,7 +54,7 @@ function traceItem(
   sequence: number,
   messageIdx: number,
   itemIdx: number,
-  role: "user" | "assistant",
+  role: TurnTraceItem["role"],
   item: TurnTraceItem["item"],
 ): TurnTraceItem {
   return {
@@ -112,6 +112,18 @@ function clickTurnHeader(turnId: string): void {
 }
 
 describe("TracePage", () => {
+  it("labels collaboration instructions as Developer", async () => {
+    const latest = turn("turn-mode", "2026-09-12T00:00:00Z");
+    vi.mocked(getTurnTrace).mockResolvedValue(response(latest, 1, {
+      items: [traceItem(1, 2, 0, "developer", {
+        type: "text", text: "<collaboration_mode>plan instructions</collaboration_mode>", status: "success",
+      })],
+    }));
+    render(<AntApp><TracePage turns={[latest]} /></AntApp>);
+    expect(await screen.findByText("Developer")).toBeInTheDocument();
+    expect(screen.queryByText("Assistant Response")).not.toBeInTheDocument();
+  });
+
   it("downloads the entire thread independently of expanded turns and preview versions", async () => {
     const older = turn("turn-older", "2026-09-09T00:00:00Z");
     const latest = turn("turn-latest", "2026-09-10T00:00:00Z");

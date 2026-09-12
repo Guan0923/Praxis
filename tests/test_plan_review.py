@@ -69,7 +69,7 @@ def test_valid_plan_review_opens_existing_review_and_preserves_one_control_messa
     assert [request.kind for request in requests] == ["plan"]
     assert requests[0].data["plan"] == PLAN
     assert runtime.state.messages[0] == UserMessage(content="Plan the change")
-    saved = runtime.state.messages[1]
+    saved = next(message for message in runtime.state.messages if isinstance(message, AssistantMessage))
     assert isinstance(saved, AssistantMessage)
     assert saved.content is None
     assert len(saved.tool_messages) == 1
@@ -124,8 +124,9 @@ def test_blank_plan_is_retryable_then_valid_plan_opens_review(tmp_path: Path) ->
 
     assert result.status == "completed"
     assert requests == ["plan"]
-    first = runtime.state.messages[1].tool_messages[0]
-    second = runtime.state.messages[2].tool_messages[0]
+    assistants = [message for message in runtime.state.messages if isinstance(message, AssistantMessage)]
+    first = assistants[0].tool_messages[0]
+    second = assistants[1].tool_messages[0]
     assert first.status == "failed"
     assert first.retryable is True
     assert "must not be blank" in (first.content or "")
@@ -161,7 +162,7 @@ def test_plan_review_uses_serial_lane_alongside_execution_tools(tmp_path: Path) 
 
     assert result.status == "completed"
     assert result.final_answer == PLAN
-    mixed = runtime.state.messages[1]
+    mixed = next(message for message in runtime.state.messages if isinstance(message, AssistantMessage))
     assert isinstance(mixed, AssistantMessage)
     assert [request.kind for request in requests] == ["plan"]
     assert [tool.status for tool in mixed.tool_messages] == ["succeeded", "failed"]
@@ -213,7 +214,7 @@ def test_streamed_plan_with_tool_call_is_retained_and_final_plan_is_marked_strea
     result = runner.run(runtime)
 
     assert result.status == "completed"
-    assert runtime.state.messages[1].content == PLAN
+    assert next(message for message in runtime.state.messages if isinstance(message, AssistantMessage)).content == PLAN
     assert [event.kind for event in events].count("response_delta") == 1
     final = next(event for event in events if event.kind == "plan")
     assert final.message == PLAN

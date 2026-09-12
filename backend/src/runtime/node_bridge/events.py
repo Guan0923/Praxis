@@ -204,6 +204,19 @@ class _EventProjectionMixin:
         self._append_item(result)
 
     def handle(self, event: Any) -> None:
+        with self._runtime_config_lock:
+            self._handle_event(event)
+            self._drain_collaboration_modes(
+                item_finished=getattr(event, "kind", "")
+                in {
+                    "thinking_end",
+                    "response_end",
+                    "tool_result",
+                    "tool_failed",
+                }
+            )
+
+    def _handle_event(self, event: Any) -> None:
         if self.closed or not self.started:
             return
         kind = str(getattr(event, "kind", "") or "")
@@ -219,6 +232,7 @@ class _EventProjectionMixin:
         if isinstance(usage, Mapping):
             self._apply_usage(usage)
         if kind == "model_request":
+            self._model_request_active = True
             self._settle_running_retry()
         elif kind == "model_retry":
             self._model_retry(message, data)
@@ -237,6 +251,7 @@ class _EventProjectionMixin:
         elif kind == "response_end":
             self._finish_stream_item("text")
         elif kind == "assistant_message" and isinstance(data.get("message"), Mapping):
+            self._model_request_active = False
             self._start_assistant_after_report()
             raw = data["message"]
             items: list[dict[str, Any]] = []
@@ -282,7 +297,9 @@ class _EventProjectionMixin:
             call_id = str(data.get("call_id") or "call_unknown")
             self._set_tool_call_stage(call_id, str(data.get("execution_stage") or "running"))
             if not any(
-                item.get("type") == "tool_call" and item.get("call_id") == call_id for item in self.assistant_blocks
+                item.get("type") == "tool_call" and item.get("call_id") == call_id
+                for message in self.assistant.selected_messages
+                for item in message["content"]
             ):
                 name = str(data.get("tool") or data.get("name") or message or "unknown")
                 self._append_item(
@@ -322,6 +339,7 @@ class _EventProjectionMixin:
             self.abort_category = "tool"
             self._tool_result(message, data, status="failed")
         elif kind == "model_error":
+            self._model_request_active = False
             self.abort_category = self._error_category(data)
             self.abort_code = str(data.get("error_type") or "model_error")
         elif kind in {"approval_requested", "approval_granted"}:
@@ -432,7 +450,8 @@ class _EventProjectionMixin:
                 self.runtime.save()
                 if copied_todo and todo_store is not None:
                     todo_store.expire_turn(source.session_id, source.id)
-            return compacted
+            self._initialize_collaboration_mode()
+            return self.assistant
         except BaseException:
             if copied_todo and todo_store is not None:
                 try:

@@ -22,7 +22,7 @@ from backend.domain.runtime_state import (
 def _payload(value: RuntimeState | Mapping[str, Any]) -> Mapping[str, Any]:
     if isinstance(value, RuntimeState):
         raise RuntimeStateValidationError("A Turn contains a Message sequence; flatten it through _messages().")
-    if not isinstance(value, Mapping) or value.get("role") not in {"user", "assistant"}:
+    if not isinstance(value, Mapping) or value.get("role") not in {"user", "assistant", "developer"}:
         raise RuntimeStateValidationError("Provider adapters require a canonical Message object.")
     return value
 
@@ -77,7 +77,13 @@ def _messages(values: Iterable[RuntimeState | Mapping[str, Any]]) -> list[Mappin
                     rendered.append(block)
             if message.get("role") == "assistant" and not rendered:
                 continue
-            result.append({**message, "content": rendered})
+            result.append(
+                {
+                    **message,
+                    "role": "user" if message.get("role") == "developer" else message.get("role"),
+                    "content": rendered,
+                }
+            )
     return result
 
 
@@ -100,7 +106,7 @@ def model_parameters(value: RuntimeState | Mapping[str, Any]) -> dict[str, Any]:
 
 def _is_message(value: RuntimeState | Mapping[str, Any]) -> bool:
     return isinstance(value, RuntimeState) or (
-        isinstance(value, Mapping) and value.get("role") in {"user", "assistant"}
+        isinstance(value, Mapping) and value.get("role") in {"user", "assistant", "developer"}
     )
 
 
