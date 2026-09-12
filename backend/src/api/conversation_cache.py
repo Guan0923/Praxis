@@ -1,9 +1,13 @@
 """Keep running conversations and the five most recently visited idle ones."""
 
+import logging
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from backend.domain import QueueItemStateConflict
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -20,6 +24,7 @@ class ConversationCache:
         self.lock = state.message_queue.admission_lock
         self.entries: OrderedDict[str, ConversationCacheEntry] = OrderedDict()
         self._owners: dict[str, str] = {}
+        self._cleanup = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cache-cleanup")
 
     def owner(self, session_id: str, thread_id: str) -> str:
         with self.lock:
@@ -75,23 +80,19 @@ class ConversationCache:
             return self._owners.get(thread_id, thread_id) in self.entries
 
     def release(self, thread_id: str) -> None:
+        """Let the deletion worker observe cleanup completion and failures."""
         with self.lock:
             entry = self.entries.pop(thread_id, None)
             if entry is None:
-                self.state.terminal_manager.close_thread(thread_id)
-                return
-            retained = set().union(*(value.turns for value in self.entries.values())) if self.entries else set()
-            turns = entry.turns - retained
-            for thread in entry.threads:
-                self.state.runtime_event_stream.release_thread(thread, turns)
-                self.state.agent_thread_events.release_thread(entry.session_id, thread)
-                self.state.terminal_manager.close_thread(thread)
-                self.state.message_queue.release_thread_cache(thread, tuple(turns))
-                self._owners.pop(thread, None)
-            self.state.todo_store.release_turns(entry.session_id, turns)
+                terminal_ids = self.state.terminal_manager.capture_terminal_ids({thread_id})
+            else:
+                terminal_ids = self._release_entry(entry)
+            cleanup = self._cleanup.submit(self._close_terminals, terminal_ids)
+        cleanup.result()
 
     def trim(self) -> None:
         with self.lock:
+            terminal_ids: set[str] = set()
             idle = [
                 key
                 for key, entry in self.entries.items()
@@ -100,16 +101,37 @@ class ConversationCache:
             ]
             for key in idle[:-5]:
                 entry = self.entries.pop(key)
-                # Shared inherited Turns remain available to another cached branch.
-                retained = set().union(*(value.turns for value in self.entries.values())) if self.entries else set()
-                turns = entry.turns - retained
-                for thread in entry.threads:
-                    self.state.runtime_event_stream.release_thread(thread, turns)
-                    self.state.agent_thread_events.release_thread(entry.session_id, thread)
-                self.state.todo_store.release_turns(entry.session_id, turns)
-                for thread in entry.threads:
-                    self.state.terminal_manager.close_thread(thread)
-                for thread in entry.threads:
-                    self.state.message_queue.release_thread_cache(thread, tuple(turns))
-                for thread in entry.threads:
-                    self._owners.pop(thread, None)
+                terminal_ids.update(self._release_entry(entry))
+            if terminal_ids:
+                self._cleanup.submit(self._close_terminals, terminal_ids)
+
+    def _release_entry(self, entry: ConversationCacheEntry) -> set[str]:
+        # Shared inherited Turns remain available to another cached branch.
+        retained = set().union(*(value.turns for value in self.entries.values())) if self.entries else set()
+        turns = entry.turns - retained
+        terminal_ids = self.state.terminal_manager.capture_terminal_ids(entry.threads)
+        for thread in entry.threads:
+            self.state.runtime_event_stream.release_thread(thread, turns)
+            self.state.agent_thread_events.release_thread(entry.session_id, thread)
+            self.state.message_queue.release_thread_cache(thread, tuple(turns))
+            self._owners.pop(thread, None)
+        self.state.todo_store.release_turns(entry.session_id, turns)
+        return terminal_ids
+
+    def _close_terminals(self, terminal_ids: set[str]) -> None:
+        errors: list[Exception] = []
+        for terminal_id in terminal_ids:
+            try:
+                self.state.terminal_manager.close(terminal_id)
+            except Exception as exc:
+                logger.exception("Conversation terminal cleanup failed.")
+                errors.append(exc)
+        if errors:
+            raise ExceptionGroup("Conversation terminal cleanup failed.", errors)
+
+    def flush(self) -> None:
+        """Wait for previously submitted cleanup without retaining its futures."""
+        self._cleanup.submit(lambda: None).result()
+
+    def close(self) -> None:
+        self._cleanup.shutdown(wait=True)

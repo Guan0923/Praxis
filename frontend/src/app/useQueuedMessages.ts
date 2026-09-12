@@ -67,8 +67,14 @@ export function useQueuedMessages({
   return { queuedMessages, setQueuedMessages, updateQueuedMessages, refreshQueuedMessages };
 }
 
-function mergeLocalMessages(local: QueuedMessage[], stored: QueuedMessage[]): QueuedMessage[] {
-  const unsaved = local.filter((item) => item.saving || item.error);
-  const ids = new Set(unsaved.map((item) => item.id));
-  return [...stored.filter((item) => !ids.has(item.id)), ...unsaved];
+export function mergeLocalMessages(local: QueuedMessage[], stored: QueuedMessage[]): QueuedMessage[] {
+  const localById = new Map(local.map((item) => [item.id, item]));
+  const storedIds = new Set(stored.map((item) => item.id));
+  return [
+    ...stored.map((item) => {
+      const pending = localById.get(item.id);
+      return { ...item, saving: pending?.saving, error: item.state === "pending" ? pending?.error : undefined };
+    }),
+    ...local.filter((item) => item.unsaved && !storedIds.has(item.id)),
+  ];
 }

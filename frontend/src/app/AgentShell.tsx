@@ -1,7 +1,7 @@
 import { Button, Drawer, Grid, Layout, Splitter } from "antd";
 import { MenuOutlined } from "@ant-design/icons";
 import { useEffect, useRef, useState } from "react";
-import type { LocalProfile, RightPanelWindow } from "../types";
+import type { LocalProfile, RightPanelWindow, RuntimeStateNode } from "../types";
 import type { AgentConfig, ProviderConfig, SidebarThreadSort } from "../api";
 import type { ChatRunRequest } from "./types";
 import type { ChatMode, Conversation, DisplayMode, Page } from "../types";
@@ -83,7 +83,7 @@ export interface AgentShellProps {
   onReloadPanel: (id: string) => Promise<void>;
   onRefresh: () => Promise<void>;
   onRun: (request: ChatRunRequest) => Promise<void>;
-  onStopRun: (conversationId: string) => void;
+  onStopRun: (turn: RuntimeStateNode) => void;
   queuedMessages?: Map<string, QueuedMessage[]>;
   onQueuedMessagesChange?: (conversationId: string, updater: (items: QueuedMessage[]) => QueuedMessage[]) => void;
   onQueuedMessagesRefresh?: (conversationId: string) => Promise<void>;
@@ -231,7 +231,6 @@ export default function AgentShell(props: AgentShellProps) {
           onSelectSession={useSession}
           onReload={(id) => userBackendRequest(() => props.onReload(id))}
           onRefresh={() => userBackendRequest(() => props.onRefresh())}
-          running={Boolean(props.current?.messages.some((message) => message.running))}
           onRun={(request) => userBackendRequest(() => props.onRun(request))}
           onStopRun={(id) => userBackendRequest(() => props.onStopRun(id))}
           queuedMessages={props.queuedMessages?.get(props.current?.id ?? "") ?? []}
@@ -260,7 +259,6 @@ export default function AgentShell(props: AgentShellProps) {
           onSelectSession={useSession}
           onReload={(id) => userBackendRequest(() => props.onReloadPanel(id))}
           onRefresh={() => userBackendRequest(() => props.onHydratePanelConversation(window))}
-          running={Boolean(conversation?.messages.some((message) => message.running))}
           onRun={(request) => userBackendRequest(() => props.onRun(request))}
           onStopRun={(id) => userBackendRequest(() => props.onStopRun(id))}
           queuedMessages={props.queuedMessages?.get(window.id) ?? []}

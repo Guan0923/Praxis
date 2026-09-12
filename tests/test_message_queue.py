@@ -331,6 +331,10 @@ def test_memory_side_chat_runs_while_main_turn_is_running(
 
         def decide(self, runtime):
             executions.append(runtime.run.task)
+            if runtime.run.provenance.trigger == "resume":
+                unregister = runtime.services.register_operation_abort(lambda: None)
+                unregister()
+                assert runtime.services.operation_interrupted() is False
             if runtime.run.task == "main":
                 main_started.set()
                 if not release_main.wait(90):

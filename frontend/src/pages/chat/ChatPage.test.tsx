@@ -34,7 +34,12 @@ import ChatPage, { CHAT_COMPACT_WIDTH, composerAction } from "./ChatPage";
 import { clearViewStateCache } from "../../app/viewState";
 
 const viewFixtures = vi.hoisted(() => new Map<string, Record<string, unknown>>());
-beforeEach(() => { clearViewStateCache(); viewFixtures.clear(); vi.mocked(deleteQueuedMessage).mockClear(); });
+beforeEach(() => {
+  clearViewStateCache();
+  viewFixtures.clear();
+  vi.mocked(deleteQueuedMessage).mockClear();
+  vi.mocked(steerTurn).mockClear();
+});
 
 vi.mock("../../api/transport/request", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../api/transport/request")>();
@@ -182,7 +187,6 @@ function SubagentHarness({
       <ChatPage
         conversation={conversation}
         agentThreadNavigation
-        running
         onUpdate={(_id, updater) => setConversation((current) => updater(current))}
         onNew={async () => conversation.id}
         onNavigate={() => undefined}
@@ -252,7 +256,6 @@ function QueueHarness({
     <AntApp>
       <ChatPage
         conversation={conversation}
-        running={node.status === "running"}
         queuedMessages={queued}
         onStopRun={onStopRun}
         onQueuedMessagesChange={(_conversationId, updater) => setQueued((current) => updater(current))}
@@ -353,7 +356,6 @@ function ConfigHarness({
     <AntApp>
       <ChatPage
         conversation={conversation}
-        running={status === "running"}
         providerConfig={providerConfig}
         mode={mode}
         onModeChange={setMode}
@@ -430,12 +432,10 @@ function TodoHarness({
   status,
   running,
   activeTurnId = "turn-todo",
-  includePersistedTodoTurn = false,
 }: {
   status: TodoStatus;
   running: boolean;
   activeTurnId?: string;
-  includePersistedTodoTurn?: boolean;
 }) {
   const todoId = "todo_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   const todoCall: ToolEvent = {
@@ -469,9 +469,7 @@ function TodoHarness({
     threadId: "session-todo",
     activeTurnId,
     title: "todo",
-    runtimeNodes: includePersistedTodoTurn
-      ? [{ ...turn("turn-todo", "old Todo Turn"), session_id: "session-todo", thread_id: "session-todo" }]
-      : [],
+    runtimeNodes: [{ ...turn("turn-todo", "old Todo Turn"), session_id: "session-todo", thread_id: "session-todo", status: running ? "running" : "success" }],
     messagesLoaded: true,
     messages: [{
       id: "assistant-todo",
@@ -485,7 +483,6 @@ function TodoHarness({
     <AntApp>
       <ChatPage
         conversation={conversation}
-        running={running}
         onUpdate={() => undefined}
         onNew={async () => conversation.id}
         onNavigate={() => undefined}
@@ -664,7 +661,6 @@ describe("ChatPage Todo panel lifecycle", () => {
         status="in_progress"
         running
         activeTurnId="turn-next"
-        includePersistedTodoTurn
       />,
     );
 
@@ -1223,6 +1219,46 @@ describe("ChatPage queued message flushing", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "继续" })).toBeEnabled());
     expect(onRun).not.toHaveBeenCalled();
     expect(screen.getByTestId("queued-count")).toHaveTextContent("2");
+  });
+
+  it("uses the paused Turn state while the previous queue stream is still closing", async () => {
+    let finish!: () => void;
+    const runGate = new Promise<void>((resolve) => { finish = resolve; });
+    const onRun = vi.fn();
+    const view = render(<QueueHarness terminalStatus="success" onRun={onRun} runGate={runGate} />);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "结束当前 Turn" }));
+      await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
+      view.rerender(<QueueHarness terminalStatus="paused" onRun={onRun} runGate={runGate} />);
+      fireEvent.click(screen.getByRole("button", { name: "结束当前 Turn" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "继续" })).toBeEnabled());
+    } finally {
+      await act(async () => finish());
+    }
+  });
+
+  it("sends a queued entry as a new Turn when paused instead of ignoring the click", async () => {
+    const onRun = vi.fn();
+    render(<QueueHarness terminalStatus="paused" onRun={onRun} />);
+    fireEvent.click(screen.getByRole("button", { name: "结束当前 Turn" }));
+    await userEvent.click(screen.getByRole("button", { name: "发送第 1 条待发送消息" }));
+    await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
+    expect(onRun.mock.calls[0][0].queuedDelivery.messageIds).toEqual(["queued-1"]);
+  });
+
+  it("does not dispatch a queue entry while its deletion is in flight", async () => {
+    let finish!: () => void;
+    vi.mocked(deleteQueuedMessage).mockReturnValueOnce(new Promise<void>((resolve) => { finish = resolve; }));
+    const onRun = vi.fn();
+    render(<QueueHarness terminalStatus="success" onRun={onRun} />);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "删除第 1 条待发送消息" }));
+      fireEvent.click(screen.getByRole("button", { name: "结束当前 Turn" }));
+      await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
+      expect(onRun.mock.calls[0][0].queuedDelivery.messageIds).toEqual(["queued-2"]);
+    } finally {
+      await act(async () => finish());
+    }
   });
 
   it("sends one queued entry to the running Turn and waits for SSE acknowledgement", async () => {

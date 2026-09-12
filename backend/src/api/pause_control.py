@@ -32,7 +32,8 @@ class TurnPauseController:
             if self.is_requested():
                 raise ValueError("Turn is being paused.")
             dispatch()
-            self.request_steering()
+            aborters = self._accept_interrupt(self._steering)
+        self._abort(aborters or ())
 
     def take_steering(self, take: Callable[[], list]) -> list:
         with self._lock:
@@ -46,16 +47,32 @@ class TurnPauseController:
 
     def _interrupt(self, signal: Event) -> bool:
         with self._lock:
-            if self._requested.is_set() or signal.is_set():
-                return False
-            signal.set()
-            aborters = tuple(self._aborters)
+            aborters = self._accept_interrupt(signal)
+        if aborters is None:
+            return False
+        self._abort(aborters)
+        return True
+
+    def _accept_interrupt(self, signal: Event) -> tuple[Callable[[], None], ...] | None:
+        if self._requested.is_set() or signal.is_set():
+            return None
+        signal.set()
+        aborters = tuple(self._aborters)
+        # Each registration owns one abort. A concurrent pause must not wait
+        # for, or invoke again, an abort already claimed by steering.
+        self._aborters.clear()
+        return aborters
+
+    @staticmethod
+    def _abort(aborters: tuple[Callable[[], None], ...]) -> None:
+        errors: list[Exception] = []
         for abort in aborters:
             try:
                 abort()
-            except Exception:
-                continue
-        return True
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise ExceptionGroup("Turn operation interruption failed.", errors)
 
     def register_abort(self, abort: Callable[[], None]) -> Callable[[], None]:
         with self._lock:

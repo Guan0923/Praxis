@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { pauseTurn, SseExecutionError, streamAttachedTurn, streamChat, streamRewind } from "../api";
+import { pauseTurn, SseExecutionError, streamAttachedTurn, streamChat, streamResume, streamRewind } from "../api";
 import type { Conversation, RuntimeStateNode } from "../types";
 import { createRunController } from "./runController";
 import { TURN_PROTOCOL_VERSION } from "./runtime/runtimeNodeNormalization";
@@ -65,6 +65,223 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+function controllerCallbacks() {
+  return {
+    activeRuns: new Map(),
+    updateLastMessage: vi.fn(),
+    updateConversation: vi.fn(),
+    rebindRunSession: vi.fn().mockResolvedValue(undefined),
+    refreshSessions: vi.fn().mockResolvedValue(undefined),
+    refreshQueuedMessages: vi.fn().mockResolvedValue(undefined),
+    recoverConversation: vi.fn().mockResolvedValue(undefined),
+    onControlError: vi.fn(),
+  };
+}
+
+describe("run controller lifecycle", () => {
+  it.each([
+    { status: "paused", resume: true },
+    { status: "paused", resume: false },
+    { status: "success", resume: false },
+  ] as const)("replaces a $status subscription without EOF for an explicit run (resume=$resume)", async ({ status, resume }) => {
+    let oldSignal!: AbortSignal;
+    vi.mocked(streamChat).mockImplementationOnce(async (_prompt, onMessage, signal) => {
+      oldSignal = signal;
+      onMessage({ type: "turn.snapshot", revision: 0, turn: { ...turn(), status } });
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+      return "aborted";
+    });
+    if (resume) vi.mocked(streamResume).mockResolvedValueOnce("completed");
+    else vi.mocked(streamChat).mockResolvedValueOnce("completed");
+    const callbacks = controllerCallbacks();
+    const controller = createRunController(callbacks);
+    const first = controller.runConversation(request());
+    expect(oldSignal.aborted).toBe(false);
+    const second = controller.runConversation({ ...request(), resume, sourceNodeId: "turn_1", waitForActiveRun: true });
+    expect(oldSignal.aborted).toBe(true);
+    await Promise.all([first, second]);
+    expect(resume ? streamResume : streamChat).toHaveBeenCalledTimes(resume ? 1 : 2);
+    expect(pauseTurn).not.toHaveBeenCalled();
+    expect(callbacks.activeRuns.size).toBe(0);
+  });
+
+  it("releases an attached paused stream through the real SSE reader abort path without EOF", async () => {
+    const actual = await vi.importActual<typeof import("../api")>("../api");
+    vi.mocked(streamAttachedTurn).mockImplementationOnce(actual.streamAttachedTurn);
+    vi.mocked(streamChat).mockResolvedValueOnce("completed");
+    let signal!: AbortSignal;
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      signal = init!.signal!;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(reader) {
+          reader.enqueue(new TextEncoder().encode(
+            "data: " + JSON.stringify({ type: "turn.snapshot", revision: 0, turn: { ...turn(), status: "paused" } }) + "\n\n",
+          ));
+          signal.addEventListener("abort", () => reader.error(new DOMException("Aborted", "AbortError")), { once: true });
+        },
+      }), { status: 200 });
+    }));
+    const callbacks = controllerCallbacks();
+    const controller = createRunController(callbacks);
+    const first = controller.runConversation({ ...request(), attach: true });
+    await vi.waitFor(() => expect(callbacks.updateConversation).toHaveBeenCalledTimes(1));
+    expect(signal.aborted).toBe(false);
+    const second = controller.runConversation({ ...request(), waitForActiveRun: true });
+    await Promise.all([first, second]);
+    expect(signal.aborted).toBe(true);
+    expect(streamChat).toHaveBeenCalledTimes(1);
+    expect(callbacks.recoverConversation).not.toHaveBeenCalled();
+    expect(pauseTurn).not.toHaveBeenCalled();
+    expect(callbacks.onControlError).not.toHaveBeenCalled();
+  });
+
+  it("does not replace a subscription after a running continuation supersedes its terminal Turn", async () => {
+    const stream = deferred();
+    let signal!: AbortSignal;
+    vi.mocked(streamChat).mockImplementationOnce(async (_prompt, onMessage, abortSignal) => {
+      signal = abortSignal;
+      onMessage({ type: "turn.snapshot", revision: 0, turn: { ...turn(), status: "success" } });
+      onMessage({ type: "turn.snapshot", revision: 0, turn: { ...turn(), id: "turn_2", parent_id: "turn_1" } });
+      await stream.promise;
+      return "completed";
+    }).mockResolvedValueOnce("completed");
+    const controller = createRunController(controllerCallbacks());
+    const first = controller.runConversation(request());
+    const second = controller.runConversation({ ...request(), waitForActiveRun: true });
+    await Promise.resolve();
+    expect(signal.aborted).toBe(false);
+    expect(streamChat).toHaveBeenCalledTimes(1);
+    stream.resolve();
+    await Promise.all([first, second]);
+    expect(streamChat).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["refreshSessions", "refreshQueuedMessages"] as const)("releases queued runs without waiting for %s", async (refresh) => {
+    const stream = deferred();
+    const refreshGate = deferred();
+    const callbacks = controllerCallbacks();
+    callbacks[refresh].mockReturnValueOnce(refreshGate.promise);
+    vi.mocked(streamChat).mockImplementationOnce(async () => {
+      await stream.promise;
+      return "completed";
+    }).mockResolvedValueOnce("completed");
+    const controller = createRunController(callbacks);
+    const first = controller.runConversation(request());
+    const settled = callbacks.activeRuns.get("conversation_1").settled;
+    const second = controller.runConversation({ ...request(), waitForActiveRun: true });
+    stream.resolve();
+    await Promise.all([first, settled, second]);
+    expect(streamChat).toHaveBeenCalledTimes(2);
+    expect(callbacks.activeRuns.size).toBe(0);
+    refreshGate.resolve();
+  });
+
+  it("reports refresh failures after releasing the run", async () => {
+    const callbacks = controllerCallbacks();
+    callbacks.refreshSessions.mockRejectedValueOnce(new Error("sessions unavailable"));
+    callbacks.refreshQueuedMessages.mockRejectedValueOnce(new Error("queue unavailable"));
+    vi.mocked(streamChat).mockResolvedValueOnce("completed");
+    await createRunController(callbacks).runConversation(request());
+    await vi.waitFor(() => expect(callbacks.onControlError).toHaveBeenCalledTimes(2));
+    expect(callbacks.onControlError).toHaveBeenCalledWith("sessions unavailable");
+    expect(callbacks.onControlError).toHaveBeenCalledWith("queue unavailable");
+    expect(callbacks.activeRuns.size).toBe(0);
+  });
+
+  it("pauses the canonical Turn without a local stream, deduplicates pending requests and permits retry", async () => {
+    const pause = deferred();
+    vi.mocked(pauseTurn).mockReturnValueOnce(pause.promise);
+    const callbacks = controllerCallbacks();
+    const controller = createRunController(callbacks);
+    controller.stopConversation(turn());
+    controller.stopConversation(turn());
+    expect(pauseTurn).toHaveBeenCalledTimes(1);
+    expect(pauseTurn).toHaveBeenCalledWith("turn_1", "session_1");
+    pause.reject(new Error("offline"));
+    await vi.waitFor(() => expect(callbacks.onControlError).toHaveBeenCalledWith(expect.stringContaining("offline")));
+    controller.stopConversation(turn());
+    expect(pauseTurn).toHaveBeenCalledTimes(2);
+    controller.stopConversation({ ...turn(), status: "success" });
+    expect(pauseTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the current canonical Turn instead of a stale active stream identity", async () => {
+    const stream = deferred();
+    vi.mocked(streamAttachedTurn).mockImplementationOnce(async () => {
+      await stream.promise;
+      return "completed";
+    });
+    const callbacks = controllerCallbacks();
+    const controller = createRunController(callbacks);
+    const running = controller.runConversation({ ...request(), attach: true });
+    controller.stopConversation({ ...turn(), id: "turn_2" });
+    expect(pauseTurn).toHaveBeenCalledWith("turn_2", "session_1");
+    expect(pauseTurn).toHaveBeenCalledTimes(1);
+    stream.resolve();
+    await running;
+  });
+
+
+
+  it.each(["success", "paused", "failed"] as const)("flushes a %s snapshot before transport completion", async (status) => {
+    const stream = deferred();
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    vi.mocked(streamChat).mockImplementationOnce(async (_prompt, onMessage) => {
+      onMessage({ type: "turn.snapshot", revision: 0, turn: { ...turn(), status } });
+      await stream.promise;
+      return "completed";
+    });
+    const callbacks = controllerCallbacks();
+    const running = createRunController(callbacks).runConversation(request());
+    expect(callbacks.updateConversation).toHaveBeenCalledTimes(1);
+    const updater = callbacks.updateConversation.mock.calls[0][1];
+    const conversation = updater({ id: "conversation_1", messages: [], runtimeNodes: [] });
+    expect(conversation.runtimeNodes[0].status).toBe(status);
+    expect(callbacks.activeRuns.has("conversation_1")).toBe(true);
+    stream.resolve();
+    await running;
+  });
+
+  it("projects terminal state immediately while preserving continuation frames until transport ends", async () => {
+    const stream = deferred();
+    let emit!: Parameters<typeof streamChat>[1];
+    let signal!: AbortSignal;
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    vi.mocked(streamChat).mockImplementationOnce(async (_prompt, onMessage, abortSignal) => {
+      emit = onMessage;
+      signal = abortSignal;
+      await stream.promise;
+      return "completed";
+    });
+    const callbacks = controllerCallbacks();
+    const controller = createRunController(callbacks);
+    const running = controller.runConversation(request());
+    emit({ type: "turn.snapshot", revision: 0, turn: turn() });
+    expect(callbacks.updateConversation).not.toHaveBeenCalled();
+    emit({ type: "turn.delta", session_id: "session_1", turn_id: "turn_1", revision: 1, patch: { status: "success" } });
+    expect(callbacks.updateConversation).toHaveBeenCalledTimes(1);
+    expect(signal.aborted).toBe(false);
+    expect(callbacks.activeRuns.has("conversation_1")).toBe(true);
+    const continuation = { ...turn(), id: "turn_2", parent_id: "turn_1" };
+    emit({ type: "turn.snapshot", revision: 0, turn: continuation });
+    expect(callbacks.activeRuns.get("conversation_1").turnId).toBe("turn_2");
+    emit({ type: "turn.delta", session_id: "session_1", turn_id: "turn_2", revision: 1, patch: { status: "success" } });
+    expect(callbacks.updateConversation).toHaveBeenCalledTimes(2);
+    stream.resolve();
+    await running;
+    expect(callbacks.activeRuns.size).toBe(0);
+  });
+});
+
 describe("run controller incremental batching", () => {
   it("stops displaying running after persistence failure without withdrawing visible text", async () => {
     vi.mocked(streamChat).mockImplementationOnce(async (_prompt, onMessage) => {
@@ -101,35 +318,6 @@ describe("run controller incremental batching", () => {
     expect(onAdmissionRejected).toHaveBeenCalledTimes(1);
     expect(onControlError).toHaveBeenCalledWith("rewind rejected");
     expect(updateLastMessage).not.toHaveBeenCalled();
-  });
-
-  it("defers an early pause until the Turn exists and allows retry after a failed pause", async () => {
-    let finish!: () => void;
-    let snapshot!: () => void;
-    vi.mocked(streamChat).mockImplementation(async (_prompt, onMessage) => {
-      snapshot = () => onMessage({ type: "turn.snapshot", revision: 0, turn: turn() });
-      await new Promise<void>((resolve) => { finish = resolve; });
-      return "completed";
-    });
-    vi.mocked(pauseTurn).mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined);
-    const updateLastMessage = vi.fn();
-    const controller = createRunController({
-      activeRuns: new Map(), updateLastMessage,
-      rebindRunSession: vi.fn().mockResolvedValue(undefined),
-      refreshSessions: vi.fn().mockResolvedValue(undefined),
-      updateConversation: vi.fn(), recoverConversation: vi.fn().mockResolvedValue(undefined),
-    });
-    const running = controller.runConversation(request());
-    controller.stopConversation("conversation_1");
-    expect(pauseTurn).not.toHaveBeenCalled();
-    snapshot();
-    await vi.waitFor(() => expect(pauseTurn).toHaveBeenCalledTimes(1));
-    const errorUpdate = updateLastMessage.mock.calls.find((call) => call[1]({}).error?.includes("offline"));
-    expect(errorUpdate).toBeDefined();
-    controller.stopConversation("conversation_1");
-    await vi.waitFor(() => expect(pauseTurn).toHaveBeenCalledTimes(2));
-    finish();
-    await running;
   });
 
   it("silently settles an empty pre-baseline failure and reloads the conversation", async () => {
