@@ -104,26 +104,20 @@ def export_thread_trace(
 @router.get("/{turn_id}/trace")
 def get_turn_trace(
     turn_id: str,
+    session_id: str,
+    thread_id: str,
     data_idx: int,
     request: Request,
     after_sequence: int | None = Query(default=None, ge=0),
 ) -> dict[str, object]:
-    store = session_store(request.app.state.web)
-    turn = _turn(store, turn_id)
-    if data_idx < 0 or data_idx >= len(turn.data):
-        raise HTTPException(status_code=422, detail="data_idx 超出 Turn 版本范围。")
-    try:
-        trace = store.load_turn_trace(
-            turn.session_id,
-            turn.id,
-            data_idx,
-            after_sequence=after_sequence,
-        )
-    except ValueError as exc:
-        return error_response(exc, status_code=422, detail=str(exc))
+    trace = request.app.state.web.session_store.load_thread_trace(
+        session_id,
+        thread_id,
+        turn_id,
+        data_idx,
+        after_sequence=after_sequence,
+    )
     return {
-        "turn": project_turn(store, turn),
-        "data_idx": data_idx,
         "context": trace.context.to_dict() if trace is not None and after_sequence is None else None,
         "items": [item.to_dict() for item in trace.items] if trace is not None else [],
         "last_sequence": trace.last_sequence if trace is not None else 0,

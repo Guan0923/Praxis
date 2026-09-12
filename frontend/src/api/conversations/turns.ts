@@ -31,17 +31,36 @@ export function threadTraceDownloadUrl(sessionId: string, threadId: string): str
 }
 
 export async function getTurnTrace(
+  sessionId: string,
+  threadId: string,
   turnId: string,
   dataIdx: number,
   signal?: AbortSignal,
   afterSequence?: number,
 ): Promise<TurnTraceResponse> {
-  const query = new URLSearchParams({ data_idx: String(dataIdx) });
+  const query = new URLSearchParams({
+    session_id: sessionId,
+    thread_id: threadId,
+    data_idx: String(dataIdx),
+  });
   if (afterSequence !== undefined) query.set("after_sequence", String(afterSequence));
-  return requestJson(
-    `/api/turns/${encodeURIComponent(turnId)}/trace?${query.toString()}`,
-    { signal },
-  );
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, { once: true });
+  const timeout = globalThis.setTimeout(() => controller.abort(), 10_000);
+  try {
+    return await requestJson(
+      `/api/turns/${encodeURIComponent(turnId)}/trace?${query.toString()}`,
+      { signal: controller.signal },
+    );
+  } catch (error) {
+    if (controller.signal.aborted && !signal?.aborted) throw new Error("Trace 请求超时。");
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
+  }
 }
 
 export interface VersionSelection {

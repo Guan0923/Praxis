@@ -1,5 +1,5 @@
 import { ErrorDisplay } from "../../components/ErrorDisplay";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Alert, Button, Collapse, Empty, Spin, Tag, type CollapseProps } from "antd";
 import { DownloadOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
 import { getTurnTrace, threadTraceDownloadUrl } from "../../api";
@@ -157,7 +157,7 @@ function traceItemPanels(items: TurnTraceItem[]): NonNullable<CollapseProps["ite
 }
 
 function mergeTrace(current: TurnTraceResponse | null, incoming: TurnTraceResponse): TurnTraceResponse {
-  if (!current || current.turn.id !== incoming.turn.id || current.data_idx !== incoming.data_idx) return incoming;
+  if (!current) return incoming;
   const sequences = new Set(current.items.map((item) => item.sequence));
   return {
     ...incoming,
@@ -175,6 +175,9 @@ function TurnTraceContent({ turn, dataIdx, active }: {
   const [trace, setTrace] = useState<TurnTraceResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | string | null>(null);
+  const runningRef = useRef(turn.status === "running");
+  const previousStatusRef = useRef({ turnId: turn.id, dataIdx, status: turn.status });
+  const finalRefreshRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!active) {
@@ -188,18 +191,26 @@ function TurnTraceContent({ turn, dataIdx, active }: {
     let timer: number | undefined;
     let cursor = 0;
     let hasContext = false;
-    let running = turn.status === "running";
+    let inFlight = false;
+    let queuedRefresh = false;
     setTrace(null);
     setError(null);
 
     const schedule = () => {
-      if (!stopped && running) timer = window.setTimeout(() => void load(false), 2_000);
+      if (!stopped && runningRef.current) timer = window.setTimeout(() => void load(false), 2_000);
     };
     const load = async (showLoading: boolean) => {
+      if (inFlight) {
+        queuedRefresh = true;
+        return;
+      }
+      inFlight = true;
       if (showLoading) setLoading(true);
       activeController = new AbortController();
       try {
         const value = await getTurnTrace(
+          turn.session_id,
+          turn.thread_id,
           turn.id,
           dataIdx,
           activeController.signal,
@@ -208,38 +219,62 @@ function TurnTraceContent({ turn, dataIdx, active }: {
         if (stopped) return;
         hasContext ||= value.context !== null;
         cursor = Math.max(cursor, value.last_sequence);
-        running = value.turn.status === "running";
         setTrace((current) => mergeTrace(current, value));
         setError(null);
-        schedule();
       } catch (reason) {
         if (!stopped && !activeController.signal.aborted) {
           setError(reason instanceof Error ? reason : String(reason));
-          schedule();
         }
       } finally {
+        inFlight = false;
         if (!stopped && showLoading) setLoading(false);
+        if (!stopped && queuedRefresh) {
+          queuedRefresh = false;
+          void load(false);
+        } else {
+          schedule();
+        }
       }
     };
+    const finalRefresh = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = undefined;
+      if (inFlight) queuedRefresh = true;
+      else void load(false);
+    };
+    finalRefreshRef.current = finalRefresh;
     void load(true);
     return () => {
       stopped = true;
+      if (finalRefreshRef.current === finalRefresh) finalRefreshRef.current = null;
       activeController?.abort();
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [active, turn.id, dataIdx]);
+  }, [active, turn.session_id, turn.thread_id, turn.id, dataIdx]);
 
-  const response = trace?.turn.id === turn.id && trace.data_idx === dataIdx ? trace : null;
+  useEffect(() => {
+    const previous = previousStatusRef.current;
+    runningRef.current = turn.status === "running";
+    previousStatusRef.current = { turnId: turn.id, dataIdx, status: turn.status };
+    if (
+      active
+      && previous.turnId === turn.id
+      && previous.dataIdx === dataIdx
+      && previous.status === "running"
+      && turn.status !== "running"
+    ) finalRefreshRef.current?.();
+  }, [active, turn.id, dataIdx, turn.status]);
+
   const innerItems = [
-    ...contextPanels(response?.context ?? null),
-    ...traceItemPanels(response?.items ?? []),
+    ...contextPanels(trace?.context ?? null),
+    ...traceItemPanels(trace?.items ?? []),
   ];
 
   return (
     <div className="trace-turn-content">
       {error ? <Alert type="error" showIcon title={<ErrorDisplay error={error} />} /> : null}
-      {loading && !response ? <div className="trace-loading"><Spin /></div> : null}
-      {response && innerItems.length > 0
+      {loading && !trace ? <div className="trace-loading"><Spin /></div> : null}
+      {trace && innerItems.length > 0
         ? <Collapse
             className="trace-inner-collapse"
             classNames={{ title: "trace-collapse-title" }}

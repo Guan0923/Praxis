@@ -656,7 +656,7 @@ def test_trace_versions_are_isolated(tmp_path: Path) -> None:
     assert trace.items[0].item["text"] == "version two"
 
 
-def test_turn_trace_api_returns_baseline_and_sequence_delta(tmp_path: Path) -> None:
+def test_turn_trace_api_returns_baseline_and_sequence_delta(tmp_path: Path, monkeypatch) -> None:
     state = WebAppState(tmp_path / "web")
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
@@ -680,11 +680,33 @@ def test_turn_trace_api_returns_baseline_and_sequence_delta(tmp_path: Path) -> N
         )
         initialize_trace(runtime)
 
-        baseline = client.get(f"/api/turns/{turn.id}/trace", params={"data_idx": 0})
+        def unexpected_lookup(*_args, **_kwargs):
+            raise AssertionError("Trace API must not load or search Turn records")
+
+        def trace_request(params: dict[str, object]):
+            with monkeypatch.context() as guard:
+                guard.setattr(state, "access_session", unexpected_lookup)
+                guard.setattr(state.session_store, "find_node", unexpected_lookup)
+                guard.setattr(state.session_store, "list_sessions", unexpected_lookup)
+                guard.setattr(state.session_store, "load_nodes", unexpected_lookup)
+                guard.setattr(state.session_store, "_json_object", unexpected_lookup)
+                return client.get(f"/api/turns/{turn.id}/trace", params=params)
+
+        params = {
+            "session_id": turn.session_id,
+            "thread_id": turn.thread_id,
+            "data_idx": 0,
+        }
+        baseline = trace_request(params)
         assert baseline.status_code == 200
+        assert set(baseline.json()) == {"context", "items", "last_sequence"}
         assert baseline.json()["context"]["system_message"].startswith("base")
         assert [item["sequence"] for item in baseline.json()["items"]] == [1]
         assert baseline.json()["last_sequence"] == 1
+        wrong_thread = trace_request({**params, "thread_id": "another-thread"})
+        assert wrong_thread.status_code == 200
+        assert wrong_thread.json() == {"context": None, "items": [], "last_sequence": 0}
+        assert trace_request({"data_idx": 0}).status_code == 422
 
         writer = NodeWriter(store)
         current = store.get_node(turn.session_id, turn.id)
@@ -706,19 +728,12 @@ def test_turn_trace_api_returns_baseline_and_sequence_delta(tmp_path: Path) -> N
         )
         assert stored is not None
 
-        delta = client.get(
-            f"/api/turns/{turn.id}/trace",
-            params={"data_idx": 0, "after_sequence": 1},
-        )
+        delta = trace_request({**params, "after_sequence": 1})
         assert delta.status_code == 200
         assert delta.json()["context"] is None
         assert [item["sequence"] for item in delta.json()["items"]] == [2]
         assert delta.json()["last_sequence"] == 2
-        assert (
-            client.get(f"/api/turns/{turn.id}/trace", params={"data_idx": 0, "after_sequence": -1}).status_code == 422
-        )
-        assert client.get(f"/api/turns/{turn.id}/trace", params={"data_idx": 9}).status_code == 422
-        assert client.get("/api/turns/missing/trace", params={"data_idx": 0}).status_code == 404
+        assert trace_request({**params, "after_sequence": -1}).status_code == 422
 
 
 def test_trace_api_returns_empty_shape_before_initialization(tmp_path: Path) -> None:
@@ -734,8 +749,17 @@ def test_trace_api_returns_empty_shape_before_initialization(tmp_path: Path) -> 
             user_content="hello",
         )
         store.create_node(turn)
-        response = client.get(f"/api/turns/{turn.id}/trace", params={"data_idx": 0})
-        assert response.status_code == 200
-        assert response.json()["context"] is None
-        assert response.json()["items"] == []
-        assert response.json()["last_sequence"] == 0
+        requests = (
+            (turn.session_id, turn.thread_id, turn.id, 0),
+            (turn.session_id, turn.thread_id, "missing", 0),
+            (turn.session_id, turn.thread_id, turn.id, 99),
+            (turn.session_id, "another-thread", turn.id, 0),
+            ("session_missing", "thread_missing", "turn_missing", 0),
+        )
+        for session_id, thread_id, turn_id, data_idx in requests:
+            response = client.get(
+                f"/api/turns/{turn_id}/trace",
+                params={"session_id": session_id, "thread_id": thread_id, "data_idx": data_idx},
+            )
+            assert response.status_code == 200
+            assert response.json() == {"context": None, "items": [], "last_sequence": 0}

@@ -123,8 +123,6 @@ export interface TurnTraceItem {
 }
 
 export interface TurnTraceResponse {
-  turn: RuntimeStateNode;
-  data_idx: number;
   context: TurnTraceContext | null;
   items: TurnTraceItem[];
   last_sequence: number;
