@@ -16,6 +16,7 @@ from backend.domain.execution_config import RuntimeModelRequest, TurnExecutionCo
 from backend.domain.input_message import FileReference, InputMessage
 from backend.domain.message_queue import DeliveryConflict, MessageEnvelope, QueuedMessage, TurnStart
 from backend.planning import RuleBasedPlanner
+from backend.providers import ModelConfig
 from backend.runtime import AgentRunner
 from backend.runtime.conversation.service import ConversationService
 from backend.runtime.conversation.steering import apply_steering, collect_steering
@@ -58,13 +59,17 @@ def test_startup_config_and_message_pass_through_worker_without_revalidation(tmp
     import backend.api.turn_message_worker as worker_module
 
     state = WebAppState(tmp_path / "data")
+    state.model_config = lambda provider_name=None: ModelConfig(
+        api_key="local-test-only",
+        base_url="http://127.0.0.1:1",
+        model="local-test",
+    )
     state.turn_message_worker.close()
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
         response = client.post(
             "/api/turns",
             json={
-                "id": "typed-turn",
                 "session_id": sidebar["session_id"],
                 "thread_id": sidebar["thread_id"],
                 "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]},
@@ -79,7 +84,9 @@ def test_startup_config_and_message_pass_through_worker_without_revalidation(tmp
             },
         )
         assert response.status_code == 202
+        created_id = response.json()["id"]
         claimed = state.message_queue.claim_turn_start("test")
+        assert claimed.envelope.target_id == created_id
         observed = {}
         monkeypatch.setattr(worker_module, "_stream_turn", lambda *args, **kwargs: observed.update(kwargs))
 

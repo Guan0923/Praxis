@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
@@ -14,10 +15,17 @@ from backend.domain import (
     QueueItemConflict,
     QueueItemNotFound,
     QueueItemStateConflict,
+    error_report,
+    safe_error_message,
 )
-from backend.domain.execution_config import TurnExecutionConfig
+from backend.domain.execution_config import RuntimeModelRequest, TurnExecutionConfig
 from backend.domain.input_message import InputMessage
-from backend.domain.runtime_state import RuntimeRootState, RuntimeState
+from backend.domain.runtime_state import (
+    NodeWriter,
+    RuntimeRootState,
+    RuntimeState,
+    terminal_error_payload,
+)
 
 from ..chat import routes as chat_routes
 from ..chat.routes import _model_config_snapshot, _stream
@@ -72,6 +80,77 @@ def _queue_http_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail="message_queue_error")
 
 
+def create_initial_turn(
+    state: WebAppState,
+    store,
+    *,
+    session_id: str,
+    thread_id: str,
+    parent_id: str,
+    message: InputMessage,
+    config: TurnExecutionConfig,
+    turn_id: str,
+    delivery_id: str,
+) -> tuple[RuntimeState, TurnExecutionConfig]:
+    parent = store.get_node(session_id, parent_id) if parent_id else store.ensure_root_node(session_id)
+    if parent is None:
+        raise ValueError("Unknown parent Turn.")
+    state.paths.ensure_session(session_id)
+    workspace = state.paths.session_workspace(session_id)
+    bound_project = state.projects.session_project(session_id, include_removed=False)
+    if bound_project is not None and not bound_project.available:
+        raise RuntimeError("项目 cwd 不可访问，请恢复文件夹后重试。")
+    project_cwd = Path(bound_project.cwd).resolve() if bound_project is not None else None
+    selected = _model_config_snapshot(state, provider_name=config.provider_name)
+    model = config.model or RuntimeModelRequest(
+        reasoning_effort="medium",
+        current_model=selected.model,
+        context_length=selected.context_size,
+        output_length=selected.max_tokens,
+        thinking="enable",
+        temperature=selected.temperature,
+    )
+    resolved_config = TurnExecutionConfig.model_construct(
+        provider_name=config.provider_name or selected.provider_name,
+        model=model,
+        permission_mode=config.permission_mode,
+        running_mode=config.running_mode,
+        full_access_acknowledged=config.full_access_acknowledged,
+    )
+    turn = RuntimeState.create(
+        session_id=session_id,
+        thread_id=thread_id,
+        id=turn_id,
+        parent=parent,
+        user_content=[message.to_item()],
+        provider_name=resolved_config.provider_name or selected.provider_name,
+        model=model.model_dump(),
+        permission_mode=resolved_config.permission_mode,
+        running_mode=resolved_config.running_mode,
+        cwd=str(workspace),
+        project_cwd=str(project_cwd) if project_cwd is not None else "",
+    )
+    turn.data[0][0]["delivery_id"] = delivery_id
+    turn.__post_init__()
+    return NodeWriter(store).create(turn), resolved_config
+
+
+def fail_initial_turn(store, turn: RuntimeState, exc: Exception) -> RuntimeState:
+    writer = NodeWriter(store)
+    current = writer.current(turn.session_id, turn.id)
+    current = writer.append_item(
+        current,
+        terminal_error_payload(
+            "server",
+            safe_error_message(exc),
+            retryable=False,
+            code=type(exc).__name__,
+            error_report=error_report(exc),
+        ),
+    )
+    return writer.finalize(current, "failed")
+
+
 def _stream_turn(
     state: WebAppState,
     *,
@@ -82,6 +161,7 @@ def _stream_turn(
     source_id: str | None,
     config: TurnExecutionConfig,
     adopt_existing: bool = False,
+    precreated: bool = False,
     operation=None,
     initial_delivery=None,
     stream_response: bool = True,
@@ -95,6 +175,7 @@ def _stream_turn(
         turn_id=turn_id,
         source_node_id=source_id,
         adopt_existing=adopt_existing,
+        precreated=precreated,
         config=config,
         user_preferences=state.agent_preferences(),
         model_config=_model_config_snapshot(state),
@@ -107,4 +188,12 @@ def _stream_turn(
     return StreamingResponse(stream, media_type="text/event-stream")
 
 
-__all__ = ["_queue_http_error", "_references", "_stream_turn", "_turn", "_user_item"]
+__all__ = [
+    "_queue_http_error",
+    "_references",
+    "_stream_turn",
+    "_turn",
+    "_user_item",
+    "create_initial_turn",
+    "fail_initial_turn",
+]

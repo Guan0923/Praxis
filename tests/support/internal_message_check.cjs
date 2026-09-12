@@ -7,10 +7,11 @@ const path = require('node:path');
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   try {
-    await page.goto(url);
+    const chatUrl = url + '/chat/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(sessionId);
+    await page.goto(chatUrl);
     await page.getByText('Flow browser test', { exact: true }).first().waitFor();
     const peer = await browser.newPage();
-    await peer.goto(url);
+    await peer.goto(chatUrl);
     for (const [index, text] of ['local desktop message', 'local mobile message'].entries()) {
       if (index) await page.setViewportSize({ width: 390, height: 844 });
       const editor = page.locator('[contenteditable="true"]').first();
@@ -25,7 +26,7 @@ const path = require('node:path');
       let finished = false;
       for (let attempts = 0; attempts < 100; attempts++) {
         const turns = await (await page.request.get(url + '/api/turns?session_id=' + sessionId)).json();
-        const turn = turns.find(node => node.id === receipt.turn_id);
+        const turn = turns.find(node => node.id === receipt.id);
         if (turn && turn.status === 'failed') throw new Error(JSON.stringify(turn));
         if (turn && turn.status === 'success') { finished = true; break; }
         await page.waitForTimeout(100);

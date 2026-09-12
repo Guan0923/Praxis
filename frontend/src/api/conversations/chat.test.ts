@@ -53,8 +53,8 @@ function response(lines: string[]): Response {
   });
 }
 
-function accepted(): Response {
-  return new Response(JSON.stringify({ turn_id: "turn_1", delivery_id: "delivery_1", status: "accepted" }), {
+function accepted(value = turn()): Response {
+  return new Response(JSON.stringify(value), {
     status: 202,
     headers: { "Content-Type": "application/json" },
   });
@@ -76,15 +76,11 @@ describe("Turn SSE contract", () => {
     await expect(streamChat("hello", (frame) => frames.push(frame), new AbortController().signal, {
       sessionId: "session_1",
       threadId: "session_1",
-      turnId: "turn_1",
-      deliveryId: "delivery-direct",
       onAccepted,
     })).resolves.toBe("completed");
     expect(frames.map((frame) => frame.type)).toEqual(["turn.snapshot", "turn.delta"]);
-    expect(onAccepted).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
-      delivery_id: "delivery-direct",
-    });
+    expect(onAccepted).toHaveBeenCalledWith(turn());
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).not.toHaveProperty("id");
   });
 
   it("treats a failed terminal after the Turn baseline as stream completion", async () => {
@@ -95,7 +91,6 @@ describe("Turn SSE contract", () => {
 
     await expect(streamChat("hello", () => undefined, new AbortController().signal, {
       sessionId: "session_1",
-      turnId: "turn_1",
     })).resolves.toBe("completed");
   });
 
@@ -105,7 +100,7 @@ describe("Turn SSE contract", () => {
       '<SSE id="turn_1" type="failed">Item persistence failed</SSE>',
     ])));
     await expect(streamChat("hello", () => undefined, new AbortController().signal, {
-      sessionId: "session_1", turnId: "turn_1",
+      sessionId: "session_1",
     })).rejects.toMatchObject({ name: "SseExecutionError", message: "Item persistence failed" });
   });
 
@@ -134,7 +129,6 @@ describe("Turn SSE contract", () => {
 
     await expect(streamChat("hello", (frame) => frames.push(frame), new AbortController().signal, {
       sessionId: "session_1",
-      turnId: "turn_1",
     })).resolves.toBe("completed");
 
     expect(frames.map((frame) => frame.type)).toEqual(["turn.snapshot", "turn.snapshot"]);
@@ -153,13 +147,12 @@ describe("Turn SSE contract", () => {
     await streamChat("", () => undefined, new AbortController().signal, {
       sessionId: "session_1",
       threadId: "session_1",
-      turnId: "turn_1",
-      queuedDelivery: { deliveryId: "delivery_1", messageIds: ["message_1", "message_2"] },
+      queuedDelivery: { messageIds: ["message_1", "message_2"] },
     });
 
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
     expect(body).toMatchObject({
-      queued_delivery: { delivery_id: "delivery_1", message_ids: ["message_1", "message_2"] },
+      queued_delivery: { message_ids: ["message_1", "message_2"] },
     });
     expect(body).not.toHaveProperty("message");
   });
@@ -176,6 +169,7 @@ describe("Turn SSE contract", () => {
       "turn_1",
       () => undefined,
       new AbortController().signal,
+      "session_1",
     )).resolves.toBe("completed");
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/turns/turn_1/stream"),
@@ -191,11 +185,10 @@ describe("Turn SSE contract", () => {
 
     await expect(streamChat("hello", () => undefined, new AbortController().signal, {
       sessionId: "session_1",
-      turnId: "turn_1",
     })).rejects.toThrow("unexpectedly ended");
   });
 
-  it("requires network terminals to carry the original frontend Turn id", async () => {
+  it("requires network terminals to carry the backend Turn id", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(accepted()).mockResolvedValueOnce(response([
       JSON.stringify({ type: "turn.snapshot", revision: 0, turn: turn() }),
       '<SSE id="network" type="network"></SSE>',
@@ -203,7 +196,6 @@ describe("Turn SSE contract", () => {
 
     await expect(streamChat("hello", () => undefined, new AbortController().signal, {
       sessionId: "session_1",
-      turnId: "turn_1",
     })).rejects.toThrow("terminal id does not match");
   });
 
@@ -215,18 +207,16 @@ describe("Turn SSE contract", () => {
       ])));
     await expect(streamChat("hello", () => undefined, new AbortController().signal, {
       sessionId: "session_1",
-      turnId: "turn_1",
     })).rejects.toThrow("without a Turn baseline");
 
     vi.stubGlobal("fetch", vi.fn()
-      .mockResolvedValueOnce(accepted())
+      .mockResolvedValueOnce(accepted({ ...turn(), id: "turn_2", compactionId: "turn_2" }))
       .mockResolvedValueOnce(response([
       JSON.stringify({ type: "turn.snapshot", revision: 0, turn: turn() }),
       '<SSE id="turn_2" type="success"></SSE>',
       ])));
     await expect(streamChat("hello", () => undefined, new AbortController().signal, {
       sessionId: "session_1",
-      turnId: "turn_2",
     })).rejects.toThrow("baseline id does not match");
   });
 
@@ -237,7 +227,6 @@ describe("Turn SSE contract", () => {
 
     await expect(streamChat("hello", () => undefined, new AbortController().signal, {
       sessionId: "session_1",
-      turnId: "turn_1",
     })).rejects.toThrow("Windows Sandbox Broker 未安装或当前不可用。");
   });
 
@@ -248,7 +237,6 @@ describe("Turn SSE contract", () => {
 
     await expect(streamChat("hello", () => undefined, new AbortController().signal, {
       sessionId: "session_1",
-      turnId: "turn_1",
     })).resolves.toBe("silent_failed");
   });
 
@@ -259,7 +247,6 @@ describe("Turn SSE contract", () => {
 
     await expect(streamChat("hello", () => undefined, new AbortController().signal, {
       sessionId: "session_1",
-      turnId: "turn_1",
     })).rejects.toThrow("terminal id does not match");
   });
 });

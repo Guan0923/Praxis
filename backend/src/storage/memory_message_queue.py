@@ -208,6 +208,20 @@ class MemoryMessageQueue:
                     return
         raise QueueItemNotFound("queued_message_not_found")
 
+    def pending_message(self, thread_id: str, message_ids: Sequence[str]) -> InputMessage:
+        with self._lock:
+            self.ping()
+            self.require_thread_open(thread_id)
+            requested = set(message_ids)
+            if len(requested) != len(message_ids):
+                raise QueueItemConflict("duplicate_queued_message_id")
+            selected = [item for item in self._queues.get(thread_id, []) if item.id in requested]
+            if len(selected) != len(message_ids):
+                raise QueueItemNotFound("queued_message_not_found")
+            if any(item.state != "pending" for item in selected):
+                raise QueueItemStateConflict("queued_message_dispatched")
+            return _merge(selected)
+
     def dispatch(
         self,
         *,

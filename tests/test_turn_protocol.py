@@ -844,8 +844,9 @@ def test_active_turn_stream_unsubscribe_does_not_close_other_subscribers() -> No
 def test_turn_stream_endpoint_returns_terminal_snapshot_and_rejects_missing_turn(tmp_path: Path) -> None:
     state = WebAppState(tmp_path / "web")
     with TestClient(create_app(state)) as client:
-        assert client.get("/api/turns/anything/stream").status_code == 404
         sidebar = client.post("/api/sidebar-threads", json={}).json()
+        stream_params = {"session_id": sidebar["session_id"]}
+        assert client.get("/api/turns/anything/stream", params=stream_params).status_code == 404
         store = session_store(state)
         writer = NodeWriter(store)
         turn = writer.create(
@@ -859,11 +860,11 @@ def test_turn_stream_endpoint_returns_terminal_snapshot_and_rejects_missing_turn
         )
         writer.finalize(turn, "success")
 
-        response = client.get("/api/turns/turn_completed_stream/stream")
+        response = client.get("/api/turns/turn_completed_stream/stream", params=stream_params)
         payloads = [line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: ")]
         assert json.loads(payloads[0])["turn"]["status"] == "success"
         assert payloads[1] == '<SSE id="turn_completed_stream" type="success"></SSE>'
-        assert client.get("/api/turns/missing/stream").status_code == 404
+        assert client.get("/api/turns/missing/stream", params=stream_params).status_code == 404
 
 
 def test_root_turn_is_listed_but_rejects_every_turn_operation(tmp_path: Path) -> None:
@@ -876,7 +877,7 @@ def test_root_turn_is_listed_but_rejects_every_turn_operation(tmp_path: Path) ->
         assert store.ensure_root_node(sidebar["session_id"], id="turn_ignored") == root
 
         requests = [
-            ("get", f"/api/turns/{root.id}/stream", None),
+            ("get", f"/api/turns/{root.id}/stream?session_id={root.session_id}", None),
             (
                 "post",
                 f"/api/turns/{root.id}/rewind",
@@ -1442,7 +1443,7 @@ def test_fork_sidebar_title_always_appends_branch_suffix(tmp_path: Path) -> None
 
         nested_response = client.post(
             f"/api/turns/{inherited_payload['turn']['id']}/fork",
-            json={"title": "这个旧字段必须被忽略"},
+            json={},
         )
         assert nested_response.status_code == 201
         nested = nested_response.json()["sidebar_thread"]
@@ -1807,11 +1808,9 @@ def test_http_sse_surfaces_sandbox_failure_before_turn_baseline(tmp_path: Path, 
 
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
-        turn_id = "turn_sandbox_startup_failure"
         accepted = client.post(
             "/api/turns",
             json={
-                "id": turn_id,
                 "session_id": sidebar["session_id"],
                 "thread_id": sidebar["thread_id"],
                 "parent_id": "",
@@ -1821,6 +1820,7 @@ def test_http_sse_surfaces_sandbox_failure_before_turn_baseline(tmp_path: Path, 
             },
         )
         assert accepted.status_code == 202
+        turn_id = accepted.json()["id"]
         response = client.get(
             f"/api/turns/{turn_id}/stream",
             params={"session_id": sidebar["session_id"]},
@@ -1828,10 +1828,11 @@ def test_http_sse_surfaces_sandbox_failure_before_turn_baseline(tmp_path: Path, 
 
     assert response.status_code == 200
     payloads = [line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: ")]
-    assert payloads[1:] == [
-        f'<SSE id="{turn_id}" type="failed">Windows Sandbox Broker 已安装，但健康检查未通过。</SSE>'
-    ]
-    diagnostic = json.loads(payloads[0])
+    snapshot = json.loads(payloads[0])
+    assert snapshot["type"] == "turn.snapshot"
+    assert snapshot["turn"]["id"] == turn_id
+    assert payloads[-1] == f'<SSE id="{turn_id}" type="failed">Windows Sandbox Broker 已安装，但健康检查未通过。</SSE>'
+    diagnostic = json.loads(payloads[-2])
     assert diagnostic["type"] == "turn.error"
     assert diagnostic["error_report"]["type"] == "SandboxInitializationError"
     assert "test_turn_protocol.py" in diagnostic["error_report"]["traceback"]
@@ -2020,9 +2021,10 @@ def test_real_sqlite_http_sse_round_trip_reconstructs_the_persisted_turn_from_de
         store: SQLiteSessionStore,
         thread_id: str,
         *,
+        session_id: str | None = None,
         timestamp: str | None = None,
     ):
-        updated = original_touch_activity(store, thread_id, timestamp=timestamp)
+        updated = original_touch_activity(store, thread_id, session_id=session_id, timestamp=timestamp)
         activity_updates.append((thread_id, updated.last_activity_at))
         return updated
 
@@ -2044,11 +2046,9 @@ def test_real_sqlite_http_sse_round_trip_reconstructs_the_persisted_turn_from_de
         sidebar = client.post("/api/sidebar-threads", json={}).json()
         initial_activity_at = sidebar["last_activity_at"]
         assert client.get("/api/turns", params={"session_id": sidebar["session_id"]}).json() == []
-        turn_id = "turn_http_sse"
         accepted = client.post(
             "/api/turns",
             json={
-                "id": turn_id,
                 "session_id": sidebar["session_id"],
                 "thread_id": sidebar["thread_id"],
                 "parent_id": "",
@@ -2062,11 +2062,12 @@ def test_real_sqlite_http_sse_round_trip_reconstructs_the_persisted_turn_from_de
         )
 
         assert accepted.status_code == 202
-        assert accepted.json() == {
-            "turn_id": turn_id,
-            "delivery_id": f"turn-start:{turn_id}",
-            "status": "accepted",
-        }
+        created = accepted.json()
+        turn_id = created["id"]
+        assert created["session_id"] == sidebar["session_id"]
+        assert created["thread_id"] == sidebar["thread_id"]
+        assert created["status"] == "running"
+        assert created["data"][0][0]["delivery_id"] == f"turn-start:{turn_id}"
         stream_response = client.get(
             f"/api/turns/{turn_id}/stream",
             params={"session_id": sidebar["session_id"]},
@@ -2201,7 +2202,6 @@ def test_real_http_sse_progressively_loads_user_skill_through_read_file(
         accepted = client.post(
             "/api/turns",
             json={
-                "id": "turn_progressive_skill",
                 "session_id": sidebar["session_id"],
                 "thread_id": sidebar["thread_id"],
                 "parent_id": "",
@@ -2215,12 +2215,13 @@ def test_real_http_sse_progressively_loads_user_skill_through_read_file(
         )
 
         assert accepted.status_code == 202
+        turn_id = accepted.json()["id"]
         response = client.get(
-            "/api/turns/turn_progressive_skill/stream",
+            f"/api/turns/{turn_id}/stream",
             params={"session_id": sidebar["session_id"]},
         )
         assert response.status_code == 200
-        assert '<SSE id="turn_progressive_skill" type="success"></SSE>' in response.text
+        assert f'<SSE id="{turn_id}" type="success"></SSE>' in response.text
         assert len(model.decision_requests) == 2
         first_system = model.decision_requests[0][0].content or ""
         assert "Use for progressive loading tests." in first_system
@@ -2294,7 +2295,6 @@ def test_real_http_sse_generates_title_with_isolated_model_request(
         accepted = client.post(
             "/api/turns",
             json={
-                "id": "turn_model_title",
                 "session_id": sidebar["session_id"],
                 "thread_id": sidebar["thread_id"],
                 "parent_id": "",
@@ -2308,13 +2308,14 @@ def test_real_http_sse_generates_title_with_isolated_model_request(
         )
 
         assert accepted.status_code == 202
+        turn_id = accepted.json()["id"]
         response = client.get(
-            "/api/turns/turn_model_title/stream",
+            f"/api/turns/{turn_id}/stream",
             params={"session_id": sidebar["session_id"]},
         )
         assert response.status_code == 200
         payloads = [line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: ")]
-        assert payloads[-1] == '<SSE id="turn_model_title" type="success"></SSE>'
+        assert payloads[-1] == f'<SSE id="{turn_id}" type="success"></SSE>'
         refreshed = next(
             item for item in client.get("/api/sidebar-threads").json() if item["thread_id"] == sidebar["thread_id"]
         )

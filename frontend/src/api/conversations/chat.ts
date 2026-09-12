@@ -1,13 +1,12 @@
 import { readErrorReport, type ErrorReport } from "../errorReport";
 import { apiErrorFrom } from "../transport/request";
-import type { ChatMode, FileReference, PermissionMode, ReasoningEffort, RuntimeConfigModel, StreamMessage } from "../../types";
+import type { ChatMode, FileReference, PermissionMode, ReasoningEffort, RuntimeConfigModel, RuntimeStateNode, StreamMessage } from "../../types";
 import { apiUrl } from "../transport/base";
 import { ApiError, jsonBody, requestJson } from "../transport/request";
 
 export interface StreamOptions {
   sessionId: string;
   threadId?: string;
-  turnId?: string;
   sourceNodeId?: string;
   mode?: ChatMode;
   permissionMode?: PermissionMode;
@@ -16,9 +15,8 @@ export interface StreamOptions {
   providerName?: string;
   model?: RuntimeConfigModel;
   references?: FileReference[];
-  queuedDelivery?: { deliveryId: string; messageIds: string[] };
-  deliveryId?: string;
-  onAccepted?: () => void;
+  queuedDelivery?: { messageIds: string[] };
+  onAccepted?: (turn: RuntimeStateNode) => void;
 }
 
 const terminalPattern = /^<SSE id="([^"]+)" type="(success|network|failed)">([\s\S]*)<\/SSE>$/;
@@ -197,36 +195,32 @@ export async function streamChat(
   signal: AbortSignal,
   options: StreamOptions,
 ): Promise<StreamResult> {
-  const turnId = options.turnId ?? crypto.randomUUID();
   const body = {
-      id: turnId,
       session_id: options.sessionId,
       thread_id: options.threadId ?? options.sessionId,
       parent_id: options.sourceNodeId ?? "",
       ...(options.queuedDelivery
-        ? { queued_delivery: { delivery_id: options.queuedDelivery.deliveryId, message_ids: options.queuedDelivery.messageIds } }
+        ? { queued_delivery: { message_ids: options.queuedDelivery.messageIds } }
         : {
-          delivery_id: options.deliveryId,
           message: { role: "user", content: [{ type: "text", text: prompt, ...(options.references?.length ? { references: options.references } : {}) }] },
         }),
       ...executionConfig(options),
     };
-  let acceptedDeliveryId: string;
+  let turn: RuntimeStateNode;
   try {
-    const receipt = await requestJson<{ turn_id: string; delivery_id: string; status: "accepted" }>(
+    turn = await requestJson<RuntimeStateNode>(
       "/api/turns",
       { ...jsonBody(body), signal },
     );
-    acceptedDeliveryId = receipt.delivery_id;
-    options.onAccepted?.();
+    options.onAccepted?.(turn);
   } catch (error) {
     if ((error as Error).name === "AbortError" || signal.aborted) return "aborted";
     throw error;
   }
   return streamEndpoint(
-    `/api/turns/${encodeURIComponent(turnId)}/stream?session_id=${encodeURIComponent(options.sessionId)}&thread_id=${encodeURIComponent(options.threadId ?? options.sessionId)}&delivery_id=${encodeURIComponent(acceptedDeliveryId)}`,
+    `/api/turns/${encodeURIComponent(turn.id)}/stream?session_id=${encodeURIComponent(options.sessionId)}&thread_id=${encodeURIComponent(options.threadId ?? options.sessionId)}`,
     undefined,
-    turnId,
+    turn.id,
     onMessage,
     signal,
   );
@@ -291,10 +285,10 @@ export async function streamAttachedTurn(
   turnId: string,
   onMessage: (message: StreamMessage) => void,
   signal: AbortSignal,
-  sessionId?: string,
+  sessionId: string,
 ): Promise<StreamResult> {
   return streamEndpoint(
-    `/api/turns/${encodeURIComponent(turnId)}/stream${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`,
+    `/api/turns/${encodeURIComponent(turnId)}/stream?session_id=${encodeURIComponent(sessionId)}`,
     undefined,
     turnId,
     onMessage,

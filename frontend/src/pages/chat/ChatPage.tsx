@@ -353,7 +353,7 @@ export default function ChatPage({
     onQueuedMessagesChange,
     onQueuedMessagesRefresh,
     onSetLast: setLast,
-    onDispatch: ({ conversationId, sessionId, sourceNodeId, deliveryId, messageIds, onBaseline }) => dispatchRun(
+    onDispatch: ({ conversationId, sessionId, sourceNodeId, messageIds, onBaseline }) => dispatchRun(
       conversationId,
       sessionId,
       null,
@@ -363,7 +363,7 @@ export default function ChatPage({
       undefined,
       true,
       onBaseline,
-      { deliveryId, messageIds },
+      { messageIds },
     ),
     onStop: stop,
     onWarning: (content) => void message.warning(content),
@@ -416,11 +416,10 @@ export default function ChatPage({
     rewindTurnId?: string,
     waitForActiveRun = false,
     onBaseline?: (turn: RuntimeStateNode) => void,
-    queuedDelivery?: { deliveryId: string; messageIds: string[] },
-    deliveryId?: string,
-    onAccepted?: () => void,
+    queuedDelivery?: { messageIds: string[] },
+    onAccepted?: (turn: RuntimeStateNode) => void,
     onAdmissionRejected?: () => void,
-    turnId: string = crypto.randomUUID(),
+    turnId?: string,
   ) {
     if (sandboxBlocked) throw new Error("沙箱 Broker 尚未确认健康。");
     if (!onRun) throw new Error("ChatPage requires the Turn run controller.");
@@ -442,7 +441,6 @@ export default function ChatPage({
       waitForActiveRun,
       onBaseline,
       queuedDelivery,
-      deliveryId,
       onAccepted,
       onAdmissionRejected,
     });
@@ -455,8 +453,41 @@ export default function ChatPage({
     onAccepted?: () => void,
     retryMessage?: ChatMessage,
   ) {
-    const deliveryId = retryMessage?.deliveryId ?? crypto.randomUUID();
-    const userMessage: ChatMessage = { id: retryMessage?.id ?? crypto.randomUUID(), role: "user", content: prompt, events: [], references, deliveryId, pending: true, sourceNodeId: retryMessage ? retryMessage.sourceNodeId : defaultSourceNodeId() };
+    const sourceNodeId = target ? target.sourceNodeId ?? null : retryMessage?.sourceNodeId ?? defaultSourceNodeId() ?? null;
+    if (!target?.rewindTurnId) {
+      const { conversationId, sessionId } = target ?? await ensureSession();
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        onAccepted?.();
+      };
+      try {
+        await dispatchRun(
+          conversationId,
+          sessionId,
+          prompt,
+          false,
+          sourceNodeId,
+          references,
+          undefined,
+          Boolean(retryMessage || (activeRuntimeNode && activeRuntimeNode.status !== "running")),
+          undefined,
+          undefined,
+          (turn) => {
+            release();
+            return turn;
+          },
+          release,
+        );
+      } catch (error) {
+        release();
+        throw error;
+      }
+      return;
+    }
+
+    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", content: prompt, events: [], references, pending: true, sourceNodeId: sourceNodeId ?? undefined };
     const localKey = target?.conversationId ?? conversation?.id ?? "";
     setUnboundMessages((current) => ({ ...current, [localKey]: userMessage }));
     let resolved: { conversationId: string; sessionId: string };
@@ -516,22 +547,21 @@ export default function ChatPage({
         sessionId,
         prompt,
         false,
-        target ? target.sourceNodeId ?? null : userMessage.sourceNodeId ?? null,
+        sourceNodeId,
         references,
         target?.rewindTurnId,
         Boolean(retryMessage || (activeRuntimeNode && activeRuntimeNode.status !== "running")),
         undefined,
         undefined,
-        target ? undefined : deliveryId,
-        () => {
+        (turn) => {
           onUpdate(conversationId, (current) => ({
             ...current,
             messages: current.messages.map((item) => item.id === userMessage.id ? { ...item, pending: false } : item),
           }));
           onAccepted?.();
+          return turn;
         },
         reject,
-        userMessage.id,
       );
     } catch (error) {
       reject();

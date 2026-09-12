@@ -13,13 +13,14 @@ const path = require('node:path');
     page.on('response', response => {
       if (response.url().includes('/api/turns/history')) pages.push(response.url());
     });
-    await page.goto(url);
+    const chatUrl = url + '/chat/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(sessionId);
+    await page.goto(chatUrl);
     await page.locator('.message.user').nth(4).waitFor();
     if (await page.locator('.message.user').count() !== 5) throw new Error('Initial page is not five Turns');
     if (!(await page.locator('.chat-messages').innerText()).includes('HISTORY_11')) throw new Error('Newest Turn missing');
     if ((await page.locator('.chat-messages').innerText()).includes('HISTORY_00')) throw new Error('Full history loaded initially');
     const second = await browser.newPage();
-    await second.goto(url);
+    await second.goto(chatUrl);
     await second.locator('.message.user').nth(4).waitFor();
     const scroll = page.locator('[data-conversation-scroll]').first();
     await scroll.evaluate(element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')); });

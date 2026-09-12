@@ -38,6 +38,7 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         thread_id: str | None = None,
         source_node_id: str | None = None,
         adopt_existing: bool = False,
+        emit_adopted_snapshot: bool = True,
         user: str = "",
         provider: str = "unknown",
         provider_name: str | None = None,
@@ -63,6 +64,7 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         self.prompt = message.text if message is not None else ""
         self.source_node_id = source_node_id
         self.adopt_existing = adopt_existing
+        self.emit_adopted_snapshot = emit_adopted_snapshot
         self.user = user
         self.provider = provider or "unknown"
         self.provider_name = provider_name or self.provider
@@ -207,7 +209,11 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
                     source = resume(source.id)
                 elif source.status != "running":
                     raise ValueError("Only a paused or running Turn can resume in place.")
-                source = self.writer.snapshot(source)
+                source = (
+                    self.writer.adopt(source)
+                    if self.adopt_existing and not self.emit_adopted_snapshot
+                    else self.writer.snapshot(source)
+                )
                 self.assistant = source
                 self.last_node = source
                 self.thread_id = source.thread_id

@@ -102,6 +102,7 @@ export function createRunController(callbacks: RunControllerCallbacks) {
 
     const onMessage = (message: StreamMessage) => {
       if (callbacks.activeRuns.get(request.conversationId)?.controller !== controller) return;
+      admissionAccepted = true;
       let turn: RuntimeStateNode;
       try {
         if (message.type === "turn.snapshot") {
@@ -135,7 +136,6 @@ export function createRunController(callbacks: RunControllerCallbacks) {
     const options = {
       sessionId: request.sessionId,
       threadId: request.threadId ?? request.sessionId,
-      turnId: request.turnId,
       sourceNodeId: request.sourceNodeId,
       mode: request.mode,
       permissionMode: request.permissionMode,
@@ -145,10 +145,15 @@ export function createRunController(callbacks: RunControllerCallbacks) {
       model: request.model,
       references: request.references,
       queuedDelivery: request.queuedDelivery,
-      deliveryId: request.deliveryId,
-      onAccepted: () => {
+      onAccepted: (turn: RuntimeStateNode) => {
         admissionAccepted = true;
-        request.onAccepted?.();
+        active.turnId = turn.id;
+        finalTurn = turn;
+        callbacks.updateConversation?.(
+          request.conversationId,
+          (conversation) => integrateRuntimeNodeUpdates(conversation, [turn], turn.id, true),
+        );
+        request.onAccepted?.(turn);
       },
     } as const;
 
@@ -214,6 +219,9 @@ export function createRunController(callbacks: RunControllerCallbacks) {
       if (!admissionAccepted) request.onAdmissionRejected?.();
       if (!finalTurn && !request.attach && !controller.signal.aborted) {
         await callbacks.checkSandboxHealth?.().catch(() => undefined);
+      }
+      if (!admissionAccepted && !request.attach && !request.resume && !request.rewindTurnId) {
+        throw error;
       }
       const protocolError = error instanceof SseProtocolError;
       if (error instanceof SseExecutionError) {

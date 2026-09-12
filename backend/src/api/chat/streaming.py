@@ -20,7 +20,7 @@ from backend.domain import (
 )
 from backend.domain.execution_config import TurnExecutionConfig
 from backend.domain.input_message import InputMessage
-from backend.domain.runtime_state import NodeFrame
+from backend.domain.runtime_state import NodeFrame, NodeWriter, RuntimeState, terminal_error_payload
 from backend.jobs import AdmissionPolicy, JobLane, JobScopeKind, ThreadJob
 from backend.providers import ModelConfig, ModelConfigurationError
 from backend.runtime.node_bridge import RuntimeEventNodeBridge
@@ -101,6 +101,7 @@ def _stream(
     turn_id: str,
     thread_id: str,
     adopt_existing: bool = False,
+    precreated: bool = False,
     source_node_id: str | None = None,
     config: TurnExecutionConfig,
     user_preferences: str = "",
@@ -191,7 +192,7 @@ def _stream(
 
     def record_sidebar_activity(active_thread_id: str) -> None:
         try:
-            stream_store.touch_sidebar_thread_activity(active_thread_id)
+            stream_store.touch_sidebar_thread_activity(active_thread_id, session_id=session_id)
         except KeyError:
             # Right-panel side chats are Threads but do not have sidebar rows.
             return
@@ -330,6 +331,30 @@ def _stream(
         nonlocal terminal_report
         app = None
         conversation = None
+
+        def fail_precreated(exc: Exception, *, category: str, code: str) -> None:
+            if not precreated:
+                return
+            try:
+                store = _store(state)
+                node = store.get_node(session_id, turn_id)
+                if not isinstance(node, RuntimeState) or node.status != "running":
+                    return
+                writer = NodeWriter(store)
+                node = writer.append_item(
+                    node,
+                    terminal_error_payload(
+                        category,
+                        safe_error_message(exc),
+                        retryable=False,
+                        code=code,
+                        error_report=error_report(exc),
+                    ),
+                )
+                writer.finalize(node, "failed")
+            except Exception:
+                logger.exception("Failed to persist the precreated Turn startup error")
+
         try:
             outer_job = job_holder["job"]
             job_parent_id = outer_job.info().id if outer_job is not None else None
@@ -385,6 +410,7 @@ def _stream(
                         thread_id=thread_id or active_session.session_id,
                         source_node_id=source_node_id,
                         adopt_existing=adopt_existing,
+                        emit_adopted_snapshot=not precreated,
                         user="",
                         provider=getattr(selected_model_config, "provider", "unknown")
                         if selected_model_config
@@ -532,6 +558,7 @@ def _stream(
                 terminal_id = final_node.id if final_node is not None else turn_id or "unknown"
                 enqueue_terminal("failed", terminal_id, error_message)
             else:
+                fail_precreated(exc, category="server", code="message_queue_unavailable")
                 enqueue_terminal("failed", turn_id or "unknown", error_message)
         except (SecretDecryptionError, ModelConfigurationError) as exc:
             terminal_report = error_report(exc)
@@ -547,6 +574,7 @@ def _stream(
                 rendered_error = terminal_error_text(bridge_ref["bridge"].terminal_error or {})
                 enqueue_terminal("failed", turn_id or bridge_ref["bridge"].turn_id or "unknown", rendered_error)
             else:
+                fail_precreated(exc, category="agent", code="model_configuration_error")
                 enqueue_terminal("failed", turn_id or "unknown", safe_error_message(exc))
         except Exception as exc:
             terminal_report = error_report(exc)
@@ -568,6 +596,7 @@ def _stream(
                         terminal_error_text(bridge.terminal_error or {}) or rendered_error or safe_error_message(exc),
                     )
             else:
+                fail_precreated(exc, category="server", code=type(exc).__name__)
                 enqueue_terminal("failed", turn_id or "unknown", _startup_failure_message(exc))
         finally:
             persistence = persistence_ref["worker"]

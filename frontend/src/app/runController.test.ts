@@ -191,7 +191,7 @@ describe("run controller incremental batching", () => {
       checkSandboxHealth,
     });
 
-    await controller.runConversation(request());
+    await expect(controller.runConversation(request())).rejects.toThrow("Windows Sandbox Broker unavailable");
 
     expect(checkSandboxHealth).toHaveBeenCalledTimes(1);
   });
@@ -230,7 +230,8 @@ describe("run controller incremental batching", () => {
       recoverConversation: vi.fn().mockResolvedValue(undefined),
     });
 
-    await controller.runConversation({ ...request(), onAccepted, onAdmissionRejected });
+    await expect(controller.runConversation({ ...request(), onAccepted, onAdmissionRejected }))
+      .rejects.toThrow("message_queue_unavailable");
 
     expect(onAccepted).not.toHaveBeenCalled();
     expect(onAdmissionRejected).toHaveBeenCalledTimes(1);

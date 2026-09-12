@@ -25,6 +25,14 @@ from backend.storage.message_queue import MemoryMessageQueue
 from backend.tools import ToolRegistry
 
 
+def configure_local_model(state: WebAppState) -> None:
+    state.model_config = lambda provider_name=None: ModelConfig(
+        api_key="local-test-only",
+        base_url="http://127.0.0.1:1",
+        model="local-test",
+    )
+
+
 def test_queued_message_api_is_ordered_idempotent_and_restricts_dispatched_mutations(tmp_path: Path) -> None:
     state = WebAppState(tmp_path / "web")
     with TestClient(create_app(state)) as client:
@@ -85,6 +93,7 @@ def test_queued_message_api_is_ordered_idempotent_and_restricts_dispatched_mutat
 
 def test_create_turn_accepts_exactly_one_message_source_and_enqueues_queued_delivery(tmp_path: Path) -> None:
     state = WebAppState(tmp_path / "web")
+    configure_local_model(state)
     state.turn_message_worker.close()
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
@@ -97,7 +106,6 @@ def test_create_turn_accepts_exactly_one_message_source_and_enqueues_queued_deli
             == 201
         )
         base = {
-            "id": "turn-queued",
             "session_id": sidebar["session_id"],
             "thread_id": sidebar["thread_id"],
         }
@@ -108,7 +116,7 @@ def test_create_turn_accepts_exactly_one_message_source_and_enqueues_queued_deli
                 json={
                     **base,
                     "message": {"role": "user", "content": [{"type": "text", "text": "duplicate"}]},
-                    "queued_delivery": {"delivery_id": "delivery-create", "message_ids": [message_id]},
+                    "queued_delivery": {"message_ids": [message_id]},
                 },
             ).status_code
             == 422
@@ -117,24 +125,25 @@ def test_create_turn_accepts_exactly_one_message_source_and_enqueues_queued_deli
             "/api/turns",
             json={
                 **base,
-                "queued_delivery": {"delivery_id": "delivery-create", "message_ids": [message_id]},
+                "queued_delivery": {"message_ids": [message_id]},
             },
         )
         assert response.status_code == 202
-        assert response.json() == {
-            "turn_id": "turn-queued",
-            "delivery_id": "delivery-create",
-            "status": "accepted",
-        }
+        created = response.json()
+        assert created["id"].startswith("turn_")
+        assert created["status"] == "running"
+        assert created["data"][0][0]["content"][0]["text"] == "queued turn"
         initial = state.message_queue.claim_turn_start("test")
         assert initial is not None
+        assert initial.envelope.target_id == created["id"]
         assert initial.envelope.message.text == "queued turn"
         assert tuple(initial.envelope.message.reference_dicts()) == ()
-    assert initial.envelope.delivery_id == "delivery-create"
+    assert initial.envelope.delivery_id == f"turn-start:{created['id']}"
 
 
 def test_create_turn_validates_and_normalizes_absolute_file_references(tmp_path: Path) -> None:
     state = WebAppState(tmp_path / "web")
+    configure_local_model(state)
     state.turn_message_worker.close()
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
@@ -151,7 +160,6 @@ def test_create_turn_validates_and_normalizes_absolute_file_references(tmp_path:
             "/api/turns",
             json={
                 **base,
-                "id": "turn-reference-valid",
                 "message": {
                     "role": "user",
                     "content": [
@@ -185,7 +193,6 @@ def test_create_turn_validates_and_normalizes_absolute_file_references(tmp_path:
             "/api/turns",
             json={
                 **base,
-                "id": "turn-reference-relative",
                 "message": {
                     "role": "user",
                     "content": [
@@ -213,6 +220,7 @@ def test_create_turn_keeps_accepted_delivery_pending_until_worker_admission(tmp_
 
     queue = MemoryMessageQueue()
     state = WebAppState(tmp_path / "web", message_queue=queue)
+    configure_local_model(state)
     state.turn_message_worker.close()
     with TestClient(create_app(state), raise_server_exceptions=False) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
@@ -221,20 +229,19 @@ def test_create_turn_keeps_accepted_delivery_pending_until_worker_admission(tmp_
         response = client.post(
             "/api/turns",
             json={
-                "id": "turn-stream-failure",
                 "session_id": sidebar["session_id"],
                 "thread_id": sidebar["thread_id"],
                 "queued_delivery": {
-                    "delivery_id": "delivery-stream-failure",
                     "message_ids": [message_id],
                 },
             },
         )
 
         assert response.status_code == 202
+        created_id = response.json()["id"]
         assert [(item.id, item.state) for item in queue.list(sidebar["thread_id"])] == [(message_id, "dispatched")]
         claimed = queue.claim_turn_start("replacement")
-        assert claimed is not None and claimed.envelope.delivery_id == "delivery-stream-failure"
+        assert claimed is not None and claimed.envelope.delivery_id == f"turn-start:{created_id}"
     assert queue.list(sidebar["thread_id"]) == []
 
 
@@ -285,12 +292,12 @@ def test_create_turn_fails_closed_when_message_queue_is_unavailable(tmp_path: Pa
             raise MessageQueueUnavailable("message_queue_unavailable")
 
     state = WebAppState(tmp_path / "web", message_queue=UnavailableQueue())
+    configure_local_model(state)
     with TestClient(create_app(state)) as client:
         sidebar = client.post("/api/sidebar-threads", json={}).json()
         response = client.post(
             "/api/turns",
             json={
-                "id": "turn-unavailable",
                 "session_id": sidebar["session_id"],
                 "thread_id": sidebar["thread_id"],
                 "parent_id": "",
@@ -337,9 +344,7 @@ def test_memory_side_chat_runs_while_main_turn_is_running(
             return AssistantMessage(content=f"done: {runtime.run.task}")
 
     state = WebAppState(tmp_path / "web", message_queue=memory_queue)
-    state.model_config = lambda provider_name=None: ModelConfig(
-        api_key="local-test-only", base_url="http://127.0.0.1:1", model="local-test"
-    )
+    configure_local_model(state)
 
     class LocalApplication(AgentApplication):
         def close(self):
@@ -369,11 +374,10 @@ def test_memory_side_chat_runs_while_main_turn_is_running(
 
     monkeypatch.setattr(chat_streaming, "publish_runtime_terminal", observe_terminal)
 
-    def send(client, sidebar, turn_id, prompt, parent_id="", thread_id=None):
+    def send(client, sidebar, prompt, parent_id="", thread_id=None):
         response = client.post(
             "/api/turns",
             json={
-                "id": turn_id,
                 "session_id": sidebar["session_id"],
                 "thread_id": thread_id or sidebar["thread_id"],
                 "parent_id": parent_id,
@@ -381,6 +385,7 @@ def test_memory_side_chat_runs_while_main_turn_is_running(
             },
         )
         assert response.status_code == 202, response.text
+        return response.json()["id"]
 
     def finished(store, turn_id, status="success", *, after=0):
         deadline = monotonic() + 10
@@ -396,61 +401,58 @@ def test_memory_side_chat_runs_while_main_turn_is_running(
         try:
             sidebar = client.post("/api/sidebar-threads", json={}).json()
             store = session_store(state)
-            send(client, sidebar, "turn_seed", "seed")
-            finished(store, "turn_seed")
-            send(client, sidebar, "turn_main", "main", "turn_seed")
+            turn_seed = send(client, sidebar, "seed")
+            finished(store, turn_seed)
+            turn_main = send(client, sidebar, "main", turn_seed)
             assert main_started.wait(10)
             response = client.post(
                 f"/api/right-panel/{sidebar['session_id']}/side-chats",
-                json={"source_turn_id": "turn_main"},
+                json={"source_turn_id": turn_main},
             )
             assert response.status_code == 201, response.text
             window = response.json()["window"]
-            send(client, sidebar, "turn_side", "side", window["anchor_turn_id"], window["thread_id"])
-            finished(store, "turn_side")
-            assert store.find_node("turn_main").status == "running"
-            send(client, sidebar, "turn_side_next", "side next", "turn_side", window["thread_id"])
-            finished(store, "turn_side_next")
-
-            # Replay the same delivery without executing another turn.
-            send(client, sidebar, "turn_side_next", "side next", "turn_side", window["thread_id"])
-            assert executions.count("side next") == 1
+            turn_side = send(client, sidebar, "side", window["anchor_turn_id"], window["thread_id"])
+            finished(store, turn_side)
+            assert store.get_node(sidebar["session_id"], turn_main).status == "running"
+            turn_side_next = send(client, sidebar, "side next", turn_side, window["thread_id"])
+            finished(store, turn_side_next)
 
             before = len(completions)
             rewound = client.post(
-                "/api/turns/turn_side_next/rewind",
+                f"/api/turns/{turn_side_next}/rewind",
                 json={
                     "message": {"role": "user", "content": [{"type": "text", "text": "edited side"}]},
                 },
             )
             assert rewound.status_code == 202, rewound.text
-            assert len(finished(store, "turn_side_next", after=before).data) == 2
+            assert len(finished(store, turn_side_next, after=before).data) == 2
 
-            send(client, sidebar, "turn_side_pause", "pause side", "turn_side_next", window["thread_id"])
+            turn_side_pause = send(client, sidebar, "pause side", turn_side_next, window["thread_id"])
             assert side_started.wait(10)
-            assert client.post("/api/turns/turn_side_pause/pause").status_code == 200
-            finished(store, "turn_side_pause", "paused")
+            assert client.post(f"/api/turns/{turn_side_pause}/pause").status_code == 200
+            finished(store, turn_side_pause, "paused")
             before = len(completions)
-            resumed = client.post("/api/turns/turn_side_pause/resume", json={})
+            resumed = client.post(f"/api/turns/{turn_side_pause}/resume", json={})
             assert resumed.status_code == 202, resumed.text
-            finished(store, "turn_side_pause", after=before)
+            finished(store, turn_side_pause, after=before)
 
-            send(client, sidebar, "turn_side_fail", "fail side", "turn_side_pause", window["thread_id"])
-            finished(store, "turn_side_fail", "failed")
+            turn_side_fail = send(client, sidebar, "fail side", turn_side_pause, window["thread_id"])
+            finished(store, turn_side_fail, "failed")
             assert store.load_runtime(sidebar["session_id"]).status == "running"
             assert store.load_runtime(sidebar["session_id"], thread_id=window["thread_id"]).status == "idle"
 
-            forked = client.post("/api/turns/turn_seed/fork", json={"id": "turn_fork_anchor"})
+            forked = client.post(f"/api/turns/{turn_seed}/fork", json={})
             assert forked.status_code == 201, forked.text
+            fork_anchor = forked.json()["turn"]["id"]
             branch = forked.json()["sidebar_thread"]
-            send(client, sidebar, "turn_fork_next", "fork next", "turn_fork_anchor", branch["thread_id"])
-            finished(store, "turn_fork_next")
+            turn_fork_next = send(client, sidebar, "fork next", fork_anchor, branch["thread_id"])
+            finished(store, turn_fork_next)
             assert store.load_runtime(sidebar["session_id"]).current_run.task == "main"
         finally:
             release_main.set()
-        finished(store, "turn_main")
-        send(client, sidebar, "turn_main_next", "main next", "turn_main")
-        finished(store, "turn_main_next")
+        finished(store, turn_main)
+        turn_main_next = send(client, sidebar, "main next", turn_main)
+        finished(store, turn_main_next)
         assert all(all(observation) for observation in terminal_observations), terminal_observations
 
 

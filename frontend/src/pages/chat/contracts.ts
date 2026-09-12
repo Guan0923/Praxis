@@ -80,9 +80,8 @@ export interface ChatRunRequest {
   references?: FileReference[];
   waitForActiveRun?: boolean;
   onBaseline?: (turn: RuntimeStateNode) => void;
-  queuedDelivery?: { deliveryId: string; messageIds: string[] };
-  deliveryId?: string;
-  onAccepted?: () => void;
+  queuedDelivery?: { messageIds: string[] };
+  onAccepted?: (turn: RuntimeStateNode) => void;
   onAdmissionRejected?: () => void;
 }
 

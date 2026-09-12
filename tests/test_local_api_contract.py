@@ -69,7 +69,6 @@ def test_readiness_only_checks_database_and_closed_queue_rejects_mutations(tmp_p
         create_turn = client.post(
             "/api/turns",
             json={
-                "id": "turn-closed-queue",
                 "session_id": sidebar["session_id"],
                 "thread_id": sidebar["thread_id"],
                 "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]},

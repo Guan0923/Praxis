@@ -12,9 +12,6 @@ const path = require('node:path');
   const [url, output] = process.argv.slice(2);
   const timings = {};
   let lastRequest;
-  page.on('request', request => {
-    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/turns') lastRequest = request.postDataJSON();
-  });
   await page.addInitScript(() => {
     window.chatTiming = {};
     document.addEventListener('click', event => {
@@ -26,20 +23,42 @@ const path = require('node:path');
       if (document.body?.textContent.includes('LOCAL')) window.chatTiming.visible ??= Date.now();
     }).observe(document, { childList: true, subtree: true, characterData: true });
   });
-  const settled = async (status) => {
+  const captureAccepted = async (response) => {
+    const submitted = response.request().postDataJSON();
+    const turn = await response.json();
+    if (!turn.id) throw new Error('Turn creation response did not contain an id');
+    lastRequest = { ...submitted, id: turn.id };
+    return lastRequest;
+  };
+  const settled = async (status, request = lastRequest) => {
     const deadline = Date.now() + 15000;
     while (true) {
-      const nodes = await page.request.get(`${url}/api/turns?session_id=${lastRequest.session_id}`).then(response => response.json());
-      if (nodes.find(node => node.id === lastRequest.id)?.status === status) break;
-      if (Date.now() > deadline) throw new Error(`Turn ${lastRequest.id} did not reach ${status}`);
+      const nodes = await page.request.get(`${url}/api/turns?session_id=${request.session_id}`).then(response => response.json());
+      if (nodes.find(node => node.id === request.id)?.status === status) break;
+      if (Date.now() > deadline) throw new Error(`Turn ${request.id} did not reach ${status}`);
       await page.waitForTimeout(30);
     }
     await page.getByRole('button', { name: '暂停', exact: true }).waitFor({ state: 'hidden' });
   };
+  const persistedTurnForPrompt = async (sessionId, prompt) => {
+    const deadline = Date.now() + 15000;
+    while (true) {
+      const nodes = await page.request.get(`${url}/api/turns?session_id=${sessionId}`).then(response => response.json());
+      const turn = nodes.find(node => node.data?.some(version => version.some(message =>
+        message.role === 'user' && message.content?.some(item => item.text === prompt),
+      )));
+      if (turn?.status === 'failed') throw new Error(JSON.stringify(turn));
+      if (turn?.status === 'success') return turn;
+      if (Date.now() > deadline) throw new Error(`Turn for ${prompt} did not reach success`);
+      await page.waitForTimeout(30);
+    }
+  };
   const send = async (label = '发送') => {
-    const sent = page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === '/api/turns');
+    const accepted = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/turns');
     await page.getByRole('button', { name: label, exact: true }).click();
-    lastRequest = (await sent).postDataJSON();
+    const response = await accepted;
+    if (response.status() !== 202) throw new Error('Turn creation failed: ' + await response.text());
+    return captureAccepted(response);
   };
   try {
     await page.goto(url);
@@ -47,7 +66,7 @@ const path = require('node:path');
     const editor = page.locator('[contenteditable="true"]').first();
     await editor.fill('hold first request');
     const start = performance.now();
-    await page.getByRole('button', { name: '发送', exact: true }).click();
+    await send();
     await page.waitForFunction(() => document.querySelector('[contenteditable="true"]')?.textContent === '');
     timings.composer_clear_ms = performance.now() - start;
     await editor.fill('later draft');
@@ -90,14 +109,15 @@ const path = require('node:path');
       } else await route.continue();
     });
     await editor.fill('retry lost receipt');
-    await send();
-    await page.getByRole('button', { name: '重试发送', exact: true }).waitFor();
-    const failedId = lastRequest.id;
-    await editor.fill('draft survives retry');
-    await send('重试发送');
-    await settled('success');
-    if (lastRequest.id !== failedId || await editor.textContent() !== 'draft survives retry') throw new Error('retry changed message identity or draft');
+    const lostRequestPromise = page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === '/api/turns');
+    await page.getByRole('button', { name: '发送', exact: true }).click();
+    const lostRequest = (await lostRequestPromise).postDataJSON();
+    await page.getByRole('button', { name: '发送', exact: true }).waitFor();
+    if (await page.locator('.message.user').filter({ hasText: 'retry lost receipt' }).count()) throw new Error('lost receipt left a temporary message');
+    await persistedTurnForPrompt(lostRequest.session_id, 'retry lost receipt');
     await page.unroute('**/api/turns');
+    await page.reload();
+    await page.getByText('retry lost receipt', { exact: true }).waitFor();
     await page.screenshot({ path: path.join(output, 'chat-desktop.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: path.join(output, 'chat-mobile.png'), fullPage: true });
@@ -110,15 +130,18 @@ const path = require('node:path');
       await route.fulfill({ response });
     });
     await editor.fill('delayed old session');
-    await send();
+    const delayedResponse = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/turns');
+    const delayedRequest = page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === '/api/turns');
+    await page.getByRole('button', { name: '发送', exact: true }).click();
+    await delayedRequest;
     while (!releaseOld) await page.waitForTimeout(20);
-    const oldRequest = lastRequest;
     await page.getByRole('button', { name: '新建对话', exact: true }).click();
     await page.locator('.welcome').waitFor();
     await page.waitForFunction(() => document.querySelector('[contenteditable="true"]')?.textContent === '');
     await editor.fill('other session draft');
     releaseOld();
-    await settled('success');
+    const oldRequest = await captureAccepted(await delayedResponse);
+    await settled('success', oldRequest);
     if (await editor.textContent() !== 'other session draft') throw new Error('old session receipt changed the current draft');
     await page.unroute('**/api/turns');
     const preserved = await page.request.get(`${url}/api/turns?session_id=${oldRequest.session_id}`).then(response => response.json());

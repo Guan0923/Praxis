@@ -113,12 +113,12 @@ def test_sidebar_summary_follows_each_thread_head_and_excludes_sibling_branches(
 
         fork_response = client.post(
             f"/api/turns/{first.id}/fork",
-            json={"id": "fork-copy", "thread_id": "thread-fork"},
+            json={"thread_id": "thread-fork"},
         )
         assert fork_response.status_code == 201
         fork_payload = fork_response.json()
         assert fork_payload["sidebar_thread"]["message_count"] == 2
-        forked = store.get_node(sidebar["session_id"], "fork-copy")
+        forked = store.get_node(sidebar["session_id"], fork_payload["turn"]["id"])
         assert isinstance(forked, RuntimeState)
 
         _turn(

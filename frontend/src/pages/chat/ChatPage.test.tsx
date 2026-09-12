@@ -274,12 +274,13 @@ function QueueHarness({
           onRun(request);
           const accepted = turn("turn-queued", request.prompt ?? "");
           if (request.queuedDelivery) {
-            accepted.data[0][0].delivery_id = request.queuedDelivery.deliveryId;
+            accepted.data[0][0].delivery_id = "turn-start:" + accepted.id;
             const submitted = new Set(request.queuedDelivery.messageIds);
             setQueued((current) => current.filter((item) => !submitted.has(item.id)));
           }
           accepted.status = "running";
           setNode(accepted);
+          request.onAccepted?.(accepted);
           request.onBaseline?.(accepted);
           if (runGate) {
             await runGate;
@@ -701,7 +702,7 @@ describe("ChatPage rewind projection", () => {
       await user.click(screen.getByRole("button", { name: "发送" }));
       expect(onRun).toHaveBeenCalledTimes(1);
 
-      await act(async () => onRun.mock.calls[0][0].onAccepted());
+      await act(async () => onRun.mock.calls[0][0].onAccepted(turn("turn-first", "first message")));
       await user.type(screen.getByLabelText("聊天输入"), "second message");
       await user.click(screen.getByRole("button", { name: "发送" }));
       await waitFor(() => expect(onRun).toHaveBeenCalledTimes(2));
@@ -714,9 +715,10 @@ describe("ChatPage rewind projection", () => {
     }
   });
 
-  it("keeps a failed message for retry without restoring the old draft", async () => {
-    const onRun = vi.fn((request: { onAdmissionRejected?: () => void }) => {
+  it("does not keep a temporary message when Turn creation fails", async () => {
+    const onRun = vi.fn(async (request: { onAdmissionRejected?: () => void }) => {
       request.onAdmissionRejected?.();
+      throw new Error("queue unavailable");
     });
     render(<Harness onRun={onRun} onRewind={vi.fn()} />);
 
@@ -726,13 +728,14 @@ describe("ChatPage rewind projection", () => {
 
     await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
     expect(composer.textContent).toBe("");
-    expect(screen.getByText("queue unavailable draft")).toBeVisible();
-    expect(screen.getByRole("button", { name: "重试发送" })).toBeVisible();
+    expect(screen.queryByText("queue unavailable draft", { selector: ".message *" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试发送" })).not.toBeInTheDocument();
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({
-      deliveryId: expect.any(String),
       onAccepted: expect.any(Function),
       onAdmissionRejected: expect.any(Function),
     }));
+    expect(onRun.mock.calls[0][0]).not.toHaveProperty("turnId", expect.any(String));
+    expect(onRun.mock.calls[0][0]).not.toHaveProperty("deliveryId");
   });
 
   it("clears immediately and never erases text entered before a delayed receipt", async () => {
@@ -745,37 +748,36 @@ describe("ChatPage rewind projection", () => {
       await userEvent.type(editor, "first prompt");
       await userEvent.click(screen.getByRole("button", { name: "发送" }));
       expect(editor.textContent).toBe("");
-      expect(screen.getByText("first prompt")).toBeVisible();
+      expect(screen.queryByText("first prompt", { selector: ".message *" })).not.toBeInTheDocument();
       await userEvent.type(editor, "next draft");
-      await act(async () => onRun.mock.calls[0][0].onAccepted());
+      await act(async () => onRun.mock.calls[0][0].onAccepted(turn("turn-backend", "first prompt")));
       expect(editor).toHaveTextContent("next draft");
     } finally {
       await act(async () => resolve());
     }
   });
 
-  it("retains the submitted message when creating its session fails", async () => {
+  it("does not retain a temporary message when creating its session fails", async () => {
     render(<AntApp><ChatPage conversation={null} onUpdate={vi.fn()} onNew={vi.fn().mockRejectedValue(new Error("session unavailable"))} onNavigate={vi.fn()} onRun={vi.fn()} /></AntApp>);
     const editor = screen.getByLabelText("聊天输入");
     await userEvent.type(editor, "unsaved first message");
     await userEvent.click(screen.getByRole("button", { name: "发送" }));
-    await screen.findByRole("button", { name: "重试发送" });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "重试发送" })).not.toBeInTheDocument());
     expect(editor.textContent).toBe("");
-    expect(screen.getByText("unsaved first message")).toBeVisible();
+    expect(screen.queryByText("unsaved first message", { selector: ".message *" })).not.toBeInTheDocument();
     await userEvent.type(editor, "later draft");
     expect(editor).toHaveTextContent("later draft");
   });
 
-  it("reuses the original delivery and Turn identifiers on retry", async () => {
-    const onRun = vi.fn((request) => { request.onAdmissionRejected?.(); });
+  it("does not send a frontend Turn or delivery identifier", async () => {
+    const onRun = vi.fn((request) => { request.onAccepted?.(turn("turn-backend", "created by backend")); });
     render(<Harness onRun={onRun} onRewind={vi.fn()} />);
-    await userEvent.type(screen.getByLabelText("聊天输入"), "retry me");
+    await userEvent.type(screen.getByLabelText("聊天输入"), "created by backend");
     await userEvent.click(screen.getByRole("button", { name: "发送" }));
-    const original = onRun.mock.calls[0][0];
-    await userEvent.click(screen.getByRole("button", { name: "重试发送" }));
-    expect(onRun).toHaveBeenCalledTimes(2);
-    expect(onRun.mock.calls[1][0]).toMatchObject({ deliveryId: original.deliveryId, turnId: original.turnId });
-    expect(screen.getAllByText("retry me")).toHaveLength(1);
+    expect(onRun).toHaveBeenCalledTimes(1);
+    expect(onRun.mock.calls[0][0].turnId).toBeUndefined();
+    expect(onRun.mock.calls[0][0]).not.toHaveProperty("deliveryId");
+    expect(screen.queryByText("created by backend", { selector: ".message *" })).not.toBeInTheDocument();
   });
 
   it("prunes descendants only when the edited message is submitted for rewind", async () => {
@@ -1144,7 +1146,6 @@ describe("ChatPage queued message flushing", () => {
         sourceNodeId: "turn-running",
         waitForActiveRun: true,
         queuedDelivery: {
-          deliveryId: expect.any(String),
           messageIds: ["queued-1", "queued-2"],
         },
       }));

@@ -140,8 +140,14 @@ class SQLiteSidebarThreadMixin:
             )
         return next_item
 
-    def touch_sidebar_thread_activity(self, thread_id: str, *, timestamp: str | None = None) -> SidebarThread:
-        item = self.get_sidebar_thread(thread_id)
+    def touch_sidebar_thread_activity(
+        self,
+        thread_id: str,
+        *,
+        session_id: str | None = None,
+        timestamp: str | None = None,
+    ) -> SidebarThread:
+        item = self.get_sidebar_thread(thread_id, session_id=session_id)
         if item is None:
             raise KeyError(thread_id)
         activity_at = timestamp or utc_now()

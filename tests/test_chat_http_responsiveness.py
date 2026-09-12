@@ -281,10 +281,8 @@ def verify_control_races(url, state, metrics):
         sidebar = requests.post(f"{url}/api/sidebar-threads", json={}, timeout=5).json()
         session_id = sidebar["session_id"]
         thread_id = sidebar["thread_id"]
-        turn_id = f"control-{uuid4().hex}"
-        prompt = f"hold {turn_id}"
+        prompt = f"hold control-{uuid4().hex}"
         body = {
-            "id": turn_id,
             "session_id": session_id,
             "thread_id": thread_id,
             "parent_id": "",
@@ -292,7 +290,9 @@ def verify_control_races(url, state, metrics):
             "permission_mode": "read_only",
             "running_mode": "agent",
         }
-        assert requests.post(f"{url}/api/turns", json=body, timeout=5).status_code == 202
+        response = requests.post(f"{url}/api/turns", json=body, timeout=5)
+        assert response.status_code == 202
+        turn_id = response.json()["id"]
         deadline = perf_counter() + 8
         while (
             not any(item.get("prompt") == prompt and "first_output" in item for item in metrics)

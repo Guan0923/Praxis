@@ -161,6 +161,20 @@ class NodeWriter:
             self._emit_snapshot(value, persist=True)
             return value.clone()
 
+    def adopt(self, node: RuntimeState) -> RuntimeState:
+        """Use an already-persisted Turn as the baseline without emitting it again."""
+
+        with self._lock:
+            self.flush()
+            sequence = getattr(self.store, "runtime_event_sequence", None)
+            if callable(sequence):
+                self._sequences[node.key] = sequence(node.session_id, node.id)
+            value = RuntimeState.from_dict(node.to_dict())
+            self._dynamic[value.key] = value.clone()
+            if self._emits_frames:
+                self._revisions[value.key] = 0
+            return value.clone()
+
     def current(self, session_id: str, node_id: str) -> RuntimeState:
         with self._lock:
             value = self._dynamic.get((session_id, node_id)) or self.store.get_node(session_id, node_id)

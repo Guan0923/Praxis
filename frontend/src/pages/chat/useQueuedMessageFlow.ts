@@ -9,7 +9,6 @@ interface QueuedRunRequest {
   conversationId: string;
   sessionId: string;
   sourceNodeId: string | null;
-  deliveryId: string;
   messageIds: string[];
   onBaseline: () => void;
 }
@@ -231,7 +230,6 @@ export function useQueuedMessageFlow({
         conversationId: conversation.id,
         sessionId: conversation.sessionId,
         sourceNodeId: activeRuntimeNode?.id ?? null,
-        deliveryId: crypto.randomUUID(),
         messageIds: pendingItems.map((item) => item.id),
         onBaseline: () => {
           if (acknowledged) return;

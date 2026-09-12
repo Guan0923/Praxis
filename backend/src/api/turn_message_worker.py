@@ -5,10 +5,11 @@ from __future__ import annotations
 import os
 import threading
 
+from backend.domain import error_report, safe_error_message
 from backend.domain.runtime_state import RuntimeState
 from backend.storage.sqlite import SQLiteSessionStore
 
-from .routes.turn_support import _stream_turn
+from .routes.turn_support import _stream_turn, fail_initial_turn
 
 
 class TurnMessageWorker:
@@ -38,11 +39,13 @@ class TurnMessageWorker:
                 if claimed is None:
                     return
                 self._start(claimed)
-            except Exception:
+            except Exception as exc:
                 if claimed is not None:
-                    self.state.message_queue.retry(claimed)
-                if self._stop.wait(0.1):
-                    return
+                    start = claimed.envelope.start
+                    if start is not None and start.operation == "create":
+                        self._fail(claimed, exc)
+                    else:
+                        self.state.message_queue.retry(claimed)
 
     def _start(self, claimed) -> None:
         envelope = claimed.envelope
@@ -52,17 +55,9 @@ class TurnMessageWorker:
         if operation not in {"create", "rewind"}:
             self._reject_permanently(claimed)
             return
-        existing = store.find_node(envelope.target_id)
-        if isinstance(existing, RuntimeState) and any(
-            message.get("delivery_id") == envelope.delivery_id for version in existing.data for message in version
-        ):
-            self.state.message_queue.ack(claimed)
-            return
-        if operation == "create" and isinstance(existing, RuntimeState):
-            self._reject_permanently(claimed)
-            return
         config = start.config
         if operation == "rewind":
+            existing = store.get_node(envelope.session_id, envelope.target_id)
             if (
                 not isinstance(existing, RuntimeState)
                 or existing.session_id != envelope.session_id
@@ -89,11 +84,36 @@ class TurnMessageWorker:
             thread_id=envelope.thread_id,
             turn_id=envelope.target_id,
             message=envelope.message,
-            source_id=start.parent_id,
+            source_id=envelope.target_id,
             config=config,
+            adopt_existing=True,
+            precreated=True,
             initial_delivery=claimed,
             stream_response=False,
         )
+
+    def _fail(self, claimed, exc: Exception) -> None:
+        from .runtime_event_transport import publish_terminal
+
+        envelope = claimed.envelope
+        try:
+            store = SQLiteSessionStore(self.state.paths, getattr(self.state, "agent_thread_index", None))
+            node = store.get_node(envelope.session_id, envelope.target_id)
+            if isinstance(node, RuntimeState) and node.status == "running":
+                fail_initial_turn(store, node, exc)
+        finally:
+            try:
+                publish_terminal(
+                    self.state,
+                    session_id=envelope.session_id,
+                    thread_id=envelope.thread_id,
+                    turn_id=envelope.target_id,
+                    terminal_type="failed",
+                    message=safe_error_message(exc),
+                    error_report=error_report(exc),
+                )
+            finally:
+                self.state.message_queue.ack(claimed)
 
     def _reject_permanently(self, claimed) -> None:
         from .runtime_event_transport import publish_terminal

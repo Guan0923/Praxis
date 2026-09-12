@@ -1860,7 +1860,6 @@ def test_real_http_sse_queue_subagents_auto_report_and_restart_idle_child(
             accepted = http.post(
                 "/api/turns",
                 json={
-                    "id": "turn_agent_root",
                     "session_id": sidebar["session_id"],
                     "thread_id": sidebar["thread_id"],
                     "parent_id": "",
@@ -1873,12 +1872,13 @@ def test_real_http_sse_queue_subagents_auto_report_and_restart_idle_child(
                 },
             )
             assert accepted.status_code == 202, accepted.text
+            turn_id = accepted.json()["id"]
             response = http.get(
-                "/api/turns/turn_agent_root/stream",
+                f"/api/turns/{turn_id}/stream",
                 params={"session_id": sidebar["session_id"], "thread_id": sidebar["thread_id"]},
             )
             assert response.status_code == 200, response.text
-            assert response.text.rstrip().endswith('<SSE id="turn_agent_root" type="success"></SSE>')
+            assert response.text.rstrip().endswith(f'<SSE id="{turn_id}" type="success"></SSE>')
 
             store = SQLiteSessionStore(state.paths, state.agent_thread_index)
             children = store.list_child_thread_nodes(sidebar["session_id"], sidebar["thread_id"])
@@ -1899,7 +1899,7 @@ def test_real_http_sse_queue_subagents_auto_report_and_restart_idle_child(
                 sleep(0.01)
             else:
                 pytest.fail("delegated Agent reports were not delivered")
-            root_turn = store.get_node(sidebar["session_id"], "turn_agent_root")
+            root_turn = store.get_node(sidebar["session_id"], turn_id)
             assert isinstance(root_turn, RuntimeState) and root_turn.status == "success"
             assert "subagent_initial_result" not in json.dumps(root_turn.to_dict())
             report_items = [
@@ -1986,7 +1986,6 @@ def test_real_http_sse_queue_subagents_persist_model_trace(
             accepted = http.post(
                 "/api/turns",
                 json={
-                    "id": "turn_agent_trace_root",
                     "session_id": sidebar["session_id"],
                     "thread_id": sidebar["thread_id"],
                     "parent_id": "",
@@ -1999,12 +1998,13 @@ def test_real_http_sse_queue_subagents_persist_model_trace(
                 },
             )
             assert accepted.status_code == 202, accepted.text
+            turn_id = accepted.json()["id"]
             response = http.get(
-                "/api/turns/turn_agent_trace_root/stream",
+                f"/api/turns/{turn_id}/stream",
                 params={"session_id": sidebar["session_id"], "thread_id": sidebar["thread_id"]},
             )
             assert response.status_code == 200, response.text
-            assert response.text.rstrip().endswith('<SSE id="turn_agent_trace_root" type="success"></SSE>')
+            assert response.text.rstrip().endswith(f'<SSE id="{turn_id}" type="success"></SSE>')
 
             store = SQLiteSessionStore(state.paths, state.agent_thread_index)
             children = store.list_child_thread_nodes(sidebar["session_id"], sidebar["thread_id"])

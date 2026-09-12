@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from backend.api.error_handlers import error_response
-from backend.domain import MessageEnvelope, PlanningError
+from backend.domain import MessageEnvelope, MessageQueueError, PlanningError
 from backend.domain.execution_config import RuntimeConfigUpdate
 from backend.domain.input_message import InputMessage
 from backend.domain.message_queue import TurnStart
@@ -43,7 +43,15 @@ from .turn_models import (
     TurnConfigPatch,
     TurnExecutionConfig,
 )
-from .turn_support import _queue_http_error, _references, _stream_turn, _turn, _user_item
+from .turn_support import (
+    _queue_http_error,
+    _references,
+    _stream_turn,
+    _turn,
+    _user_item,
+    create_initial_turn,
+    fail_initial_turn,
+)
 
 router = APIRouter(prefix="/api/turns", tags=["turns"])
 
@@ -134,29 +142,23 @@ def get_turn_trace(
 def stream_running_turn(
     turn_id: str,
     request: Request,
-    session_id: str | None = None,
+    session_id: str,
     thread_id: str | None = None,
     delivery_id: str | None = None,
 ) -> StreamingResponse:
     state: WebAppState = request.app.state.web
     store = session_store(state)
-    found = store.find_node(turn_id)
+    require_active_session(store, session_id)
+    found = store.get_node(session_id, turn_id)
     if found is None:
-        if not session_id:
-            raise HTTPException(status_code=404, detail="未知 Turn。")
-        require_active_session(store, session_id)
-        resolved_session_id = session_id
-        resolved_thread_id = thread_id or session_id
-    elif isinstance(found, RuntimeState):
-        resolved_session_id = found.session_id
-        resolved_thread_id = found.thread_id
-    else:
+        raise HTTPException(status_code=404, detail="未知 Turn。")
+    if not isinstance(found, RuntimeState):
         raise HTTPException(status_code=409, detail="根 Turn 仅作为消息树锚点，不能执行 Turn 操作。")
     return StreamingResponse(
         turn_sse(
             state,
-            resolved_session_id,
-            resolved_thread_id,
+            session_id,
+            found.thread_id,
             turn_id,
             request.headers.get("last-event-id"),
             delivery_id,
@@ -172,68 +174,75 @@ def create_turn(body: CreateTurnRequest, request: Request) -> dict[str, object]:
     store = session_store(state)
     require_active_session(store, body.session_id)
     files = session_file_store(state, body.session_id)
-    sidebar = store.get_sidebar_thread(body.thread_id)
+    sidebar = store.get_sidebar_thread(body.thread_id, session_id=body.session_id)
     panel_window = store.active_right_panel_window_for_thread(body.session_id, body.thread_id)
     if (sidebar is None or sidebar.session_id != body.session_id or sidebar.state != "active") and panel_window is None:
         raise HTTPException(status_code=409, detail="Thread 不可用。")
-    delivery_id = (
-        body.queued_delivery.delivery_id
-        if body.queued_delivery is not None
-        else body.delivery_id or f"turn-start:{body.id}"
-    )
-    existing = store.find_node(body.id)
-    if isinstance(existing, RuntimeState):
-        if any(message.get("delivery_id") == delivery_id for version in existing.data for message in version):
-            return {"turn_id": body.id, "delivery_id": delivery_id, "status": "accepted"}
-        raise HTTPException(status_code=409, detail="Turn id 已存在。")
-    parent = _turn(store, body.parent_id) if body.parent_id else None
-    if parent is not None:
-        if parent.session_id != body.session_id or parent.thread_id != body.thread_id:
-            raise HTTPException(status_code=409, detail="parent Turn 不属于当前 Thread。")
-        if parent.status == "running":
-            raise HTTPException(status_code=409, detail="不能在 running Turn 后创建孩子。")
-    elif any(
-        isinstance(node, RuntimeState) and node.thread_id == body.thread_id
-        for node in store.load_nodes(body.session_id)
-    ):
-        raise HTTPException(status_code=409, detail="非首个 Turn 必须提供 parent_id。")
-    try:
-        state.message_queue.ping()
-    except Exception as exc:
-        return error_response(exc, status_code=_queue_http_error(exc).status_code)
-    start = TurnStart("create", body.execution_config(), body.parent_id or None)
-    if body.queued_delivery is not None:
+    direct_message = None
+    if body.message is not None:
+        item = _user_item(body.message)
+        direct_message = InputMessage.from_input(str(item["text"]).strip(), _references(item, files))
+    config = body.execution_config()
+    turn_id = new_node_id()
+    delivery_id = f"turn-start:{turn_id}"
+    turn = None
+    with state.message_queue.admission_lock:
         try:
-            state.message_queue.dispatch(
-                delivery_id=body.queued_delivery.delivery_id,
-                message_ids=body.queued_delivery.message_ids,
+            state.message_queue.ping()
+            message = (
+                state.message_queue.pending_message(body.thread_id, body.queued_delivery.message_ids)
+                if body.queued_delivery is not None
+                else direct_message
+            )
+            if message is None:
+                raise ValueError("Turn message is missing.")
+            turn, config = create_initial_turn(
+                state,
+                store,
                 session_id=body.session_id,
                 thread_id=body.thread_id,
-                turn_id=body.id,
-                start=start,
+                parent_id=body.parent_id,
+                message=message,
+                config=config,
+                turn_id=turn_id,
+                delivery_id=delivery_id,
             )
-        except Exception as exc:
+            if sidebar is not None:
+                store.touch_sidebar_thread_activity(body.thread_id, session_id=body.session_id)
+            start = TurnStart("create", config, body.parent_id or None)
+            if body.queued_delivery is not None:
+                state.message_queue.dispatch(
+                    delivery_id=delivery_id,
+                    message_ids=body.queued_delivery.message_ids,
+                    session_id=body.session_id,
+                    thread_id=body.thread_id,
+                    turn_id=turn_id,
+                    start=start,
+                )
+            else:
+                state.message_queue.dispatch_turn_start(
+                    MessageEnvelope(
+                        delivery_id=delivery_id,
+                        sender_kind="user",
+                        source_thread_id=body.thread_id,
+                        target_kind="turn_start",
+                        target_id=turn_id,
+                        session_id=body.session_id,
+                        thread_id=body.thread_id,
+                        message=message,
+                        start=start,
+                        source_message_ids=(delivery_id,),
+                    )
+                )
+        except MessageQueueError as exc:
+            if turn is not None:
+                fail_initial_turn(store, turn, exc)
             return error_response(exc, status_code=_queue_http_error(exc).status_code)
-    else:
-        assert body.message is not None
-        item = _user_item(body.message)
-        envelope = MessageEnvelope(
-            delivery_id=delivery_id,
-            sender_kind="user",
-            source_thread_id=body.thread_id,
-            target_kind="turn_start",
-            target_id=body.id,
-            session_id=body.session_id,
-            thread_id=body.thread_id,
-            message=InputMessage.from_input(str(item["text"]).strip(), _references(item, files)),
-            start=start,
-            source_message_ids=(delivery_id,),
-        )
-        try:
-            state.message_queue.dispatch_turn_start(envelope)
         except Exception as exc:
-            return error_response(exc, status_code=_queue_http_error(exc).status_code)
-    return {"turn_id": body.id, "delivery_id": delivery_id, "status": "accepted"}
+            if turn is not None:
+                fail_initial_turn(store, turn, exc)
+            raise
+    return project_turn(store, turn)
 
 
 @router.post("/{turn_id}/rewind", status_code=202)
@@ -381,7 +390,7 @@ def fork_turn(turn_id: str, body: ForkTurnRequest, request: Request) -> dict[str
         raise HTTPException(status_code=409, detail="源 SidebarThread 不可用。")
     thread_id = body.thread_id or new_thread_id()
     try:
-        forked = store.fork_turn_node(turn_id, new_turn_id=body.id, thread_id=thread_id)
+        forked = store.fork_turn_node(turn_id, new_turn_id=new_node_id(), thread_id=thread_id)
         sidebar = store.create_sidebar_thread(
             session_id=source.session_id,
             thread_id=thread_id,
