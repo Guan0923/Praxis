@@ -466,9 +466,16 @@ class WindowsBrokerClient:
             return self._transport(payload)
         if not self._is_windows:
             raise SandboxInitializationError("Windows Broker is unavailable")
-        with open(self.pipe_name, "r+b", buffering=0) as pipe:
-            pipe.write(payload)
-            return pipe.read(1024 * 1024)
+        import win32file
+
+        from .pipe_connection import connect_pipe
+
+        pipe = connect_pipe(self.pipe_name, deadline=time.monotonic() + 1.0)
+        try:
+            win32file.WriteFile(pipe, payload)
+            return bytes(win32file.ReadFile(pipe, 1024 * 1024)[1])
+        finally:
+            pipe.Close()
 
     def _sign(self, payload: bytes) -> str:
         if self._key is None:

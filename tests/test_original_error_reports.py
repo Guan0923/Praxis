@@ -102,11 +102,13 @@ def test_trace_does_not_include_source_or_locals():
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows named pipes")
 def test_real_isolated_named_pipe_failure_is_not_wrapped():
+    import pywintypes
+
     client = WindowsBrokerClient(pipe_name=rf"\\.\pipe\praxis-error-test-{uuid.uuid4().hex}")
-    with pytest.raises(OSError) as failure:
+    with pytest.raises(pywintypes.error) as failure:
         client._send(b"test")
     report = error_report(failure.value)
-    assert report["type"] in {"FileNotFoundError", "OSError"}
+    assert report["winerror"] == 2
     assert failure.value.__cause__ is None
 
 

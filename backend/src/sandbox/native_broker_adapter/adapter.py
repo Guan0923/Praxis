@@ -559,7 +559,7 @@ def _required_absolute_paths(values: Mapping[str, Any], name: str) -> tuple[Path
 def _timeout(value: object) -> float | None:
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0 or value > 300:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 600:
         raise SandboxInitializationError("Broker process timeout is invalid")
     return float(value)
 

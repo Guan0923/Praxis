@@ -2,23 +2,16 @@
 
 import time
 
+from .pipe_connection import connect_pipe
+
 
 def status_request(pipe_name: str, payload: bytes, timeout: float = 1.0) -> bytes:
     import pywintypes
-    import win32con
     import win32event
     import win32file
 
     deadline = time.monotonic() + timeout
-    pipe = win32file.CreateFile(
-        pipe_name,
-        win32con.GENERIC_READ | win32con.GENERIC_WRITE,
-        0,
-        None,
-        win32con.OPEN_EXISTING,
-        win32con.FILE_FLAG_OVERLAPPED,
-        None,
-    )
+    pipe = connect_pipe(pipe_name, deadline=deadline, overlapped=True)
     try:
 
         def transfer(data: bytes | int, reading: bool) -> bytes:

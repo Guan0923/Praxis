@@ -23,11 +23,23 @@ from backend.sandbox import (
 )
 from backend.sandbox.broker_service import BrokerCredentialPackage
 from backend.sandbox.native_broker_adapter import WindowsNativeBrokerAdapter
+from backend.sandbox.native_broker_adapter.adapter import _timeout
 from backend.sandbox.native_broker_adapter.process import _process_creation_flags, _windows_command_line
 from backend.sandbox.native_windows import AclLeaseEntry, WindowsAclManager, random_capability_sid
 from backend.sandbox.native_windows.desktop import _station_participant_rights
 from backend.sandbox.native_windows.wfp import build_static_filter_specs
 from backend.sandbox.runtime.proxy import ProxyCredential, RunCommandProxy
+
+
+@pytest.mark.parametrize("value", [0, 300, 600, 600.0, None])
+def test_broker_wait_accepts_configured_command_timeout(value) -> None:
+    assert _timeout(value) == value
+
+
+@pytest.mark.parametrize("value", [-1, 601, True, "600", float("nan"), float("inf")])
+def test_broker_wait_rejects_invalid_timeout(value) -> None:
+    with pytest.raises(SandboxInitializationError, match="timeout is invalid"):
+        _timeout(value)
 
 
 class _Process:

@@ -234,14 +234,13 @@ class SubprocessJob(Job):
                     outcome = ("succeeded", 0, None)
                 else:
                     outcome = ("failed", exit_code, CommandError(f"Command exited with code {exit_code}."))
-        except OSError as exc:
-            outcome = ("failed", self._group.poll(), exc)
         except JobStateError:
             # A concurrent cancel/close already sealed the terminal state.
             return
         except Exception as exc:
             self._mark_sandbox_failure(getattr(exc, "code", "init_failed"))
-            outcome = ("failed", self._group.poll(), exc)
+            # A failed Broker request cannot supply a reliable exit code.
+            outcome = ("failed", None, exc)
         finally:
             cleanup_errors: list[Exception] = []
             if self.resource_monitor is not None:
@@ -302,7 +301,12 @@ class SubprocessJob(Job):
                 self.buffer.append(decoder.decode(b"", final=True).encode("utf-8"), source)
             except Exception as exc:
                 errors.append(exc)
-                self._group.terminate()
+                try:
+                    self._group.terminate()
+                except Exception as cleanup:
+                    exc.add_note(
+                        "Stopping command after output failure also failed:\n" + error_report(cleanup)["traceback"]
+                    )
 
         readers = [threading.Thread(target=drain, args=(source,), daemon=True) for source in ("stdout", "stderr")]
         for reader in readers:

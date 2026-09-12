@@ -21,6 +21,7 @@ from backend.jobs import (
     format_command_output,
 )
 from backend.jobs.base import JobKind, JobState
+from backend.sandbox.errors import SandboxInitializationError
 
 IS_WINDOWS = os.name == "nt"
 
@@ -172,6 +173,35 @@ def test_exit_zero_is_not_published_as_success_when_sandbox_cleanup_fails(tmp_pa
     assert info.sandbox is not None
     assert info.sandbox["failure_code"] == "sandbox_cleanup_failed"
     assert info.sandbox["cleanup_pending"] is True
+
+
+@pytest.mark.parametrize("failure_type", [OSError, SandboxInitializationError])
+def test_monitor_failure_finishes_without_querying_broken_process(tmp_path, monkeypatch, failure_type) -> None:
+    failure = failure_type("original wait failure")
+    cleaned = []
+
+    class Launcher:
+        def cleanup(self, process) -> bool:
+            cleaned.append(process)
+            return True
+
+    job = make_job(tmp_path, sandbox_launcher=Launcher())
+
+    def communicate():
+        raise failure
+
+    def poll():
+        pytest.fail("Failure handling must not query the broken process")
+
+    monkeypatch.setattr(job._group, "start", lambda: 123)
+    monkeypatch.setattr(job, "_communicate", communicate)
+    monkeypatch.setattr(job._group, "poll", poll)
+    job.start()
+    job._monitor_thread.join(5)
+
+    assert job.wait(0) and job.info().state is JobState.FAILED
+    assert job.failure_exception is failure
+    assert cleaned == [None]
 
 
 def test_nonzero_exit_fails_with_exit_code_and_compatible_message(tmp_path) -> None:
