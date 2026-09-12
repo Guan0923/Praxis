@@ -18,7 +18,7 @@ export interface ChatRunRequest {
   waitForActiveRun?: boolean;
   onBaseline?: (turn: RuntimeStateNode) => void;
   queuedDelivery?: { messageIds: string[] };
-  onAccepted?: (turn: RuntimeStateNode) => void;
+  onAccepted?: (turn?: RuntimeStateNode) => void;
   onAdmissionRejected?: () => void;
 }
 

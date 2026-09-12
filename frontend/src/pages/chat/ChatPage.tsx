@@ -274,7 +274,7 @@ export default function ChatPage({
   } = runtimeControls;
   const messageEditing = useMessageEditing({
     conversation,
-    interactionBusy,
+    interactionBusy: interactionBusy || sessionReadOnly,
     activeRuntimeNode,
     onRewind: agentThreadView.isSubagent ? undefined : onRewind,
     onFork: agentThreadView.isSubagent ? undefined : onFork,
@@ -403,7 +403,7 @@ export default function ChatPage({
     waitForActiveRun = false,
     onBaseline?: (turn: RuntimeStateNode) => void,
     queuedDelivery?: { messageIds: string[] },
-    onAccepted?: (turn: RuntimeStateNode) => void,
+    onAccepted?: (turn?: RuntimeStateNode) => void,
     onAdmissionRejected?: () => void,
     turnId?: string,
   ) {
@@ -493,7 +493,7 @@ export default function ChatPage({
       return next;
     });
     const assistantMessage: ChatMessage = { id: `${userMessage.id}:response`, role: "assistant", content: "", events: [], running: true };
-    onUpdate(conversationId, (current) => {
+    const showSubmittedMessages = () => onUpdate(conversationId, (current) => {
       let visibleMessages = current.messages.filter((item) => item.id !== userMessage.id && item.id !== assistantMessage.id);
       let runtimeNodes = current.runtimeNodes;
       if (target?.rewindTurnId) {
@@ -518,8 +518,10 @@ export default function ChatPage({
         lastNodeId: target?.rewindTurnId ?? current.lastNodeId,
       };
     });
+    if (!target?.rewindTurnId) showSubmittedMessages();
     const reject = () => {
       onAccepted?.();
+      if (target?.rewindTurnId) return;
       onUpdate(conversationId, (current) => ({
         ...current,
         messages: current.messages.map((item) => item.id === userMessage.id
@@ -540,6 +542,7 @@ export default function ChatPage({
         undefined,
         undefined,
         (turn) => {
+          if (target?.rewindTurnId) showSubmittedMessages();
           onUpdate(conversationId, (current) => ({
             ...current,
             messages: current.messages.map((item) => item.id === userMessage.id ? { ...item, pending: false } : item),
@@ -556,7 +559,7 @@ export default function ChatPage({
   }
 
   async function retryFailedMessage(item: ChatMessage) {
-    if (sendPendingRef.current || interactionBusy || sessionReadOnly) return;
+    if (sendPendingRef.current || interactionBusy || sessionReadOnly || rewindPending) return;
     const attempt = {};
     sendPendingRef.current = attempt;
     setSendPending(true);
@@ -580,7 +583,7 @@ export default function ChatPage({
   }
 
   async function send() {
-    if (compactionPending || sandboxBlocked || sessionReadOnly || sendPendingRef.current) return;
+    if (compactionPending || sandboxBlocked || sessionReadOnly || sendPendingRef.current || rewindPending) return;
     const attempt = {};
     sendPendingRef.current = attempt;
     setSendPending(true);
@@ -723,7 +726,7 @@ export default function ChatPage({
           messages={messages}
           sessionId={conversation?.sessionId}
           display={display}
-          interactionBusy={interactionBusy}
+          interactionBusy={interactionBusy || sessionReadOnly || rewindPending}
           compactionPending={compactionPending}
           chatScrollRef={chatScrollRef}
           onScroll={handleHistoryScroll}
@@ -796,8 +799,8 @@ export default function ChatPage({
         onStop={queuedMessageFlow.pauseOrSteer}
         onSend={() => void send()}
         actionMode={actionMode}
-        submitDisabled={queuedMessageFlow.takingOutMessage || sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || composerActionState.disabled || (sendPending && actionMode === "send")}
-        disabled={queuedMessageFlow.takingOutMessage || sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly}
+        submitDisabled={queuedMessageFlow.takingOutMessage || sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || rewindPending || composerActionState.disabled || (sendPending && actionMode === "send")}
+        disabled={queuedMessageFlow.takingOutMessage || sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || rewindPending}
         disabledReason={sandboxBlocked
           ? sandboxHealth.phase === "checking" ? "正在检查沙箱 Broker" : "沙箱 Broker 不可用"
           : sessionReadOnly ? ownership === "unknown" ? "正在确认窗口操作权" : "当前 session 正在另一个窗口对话"

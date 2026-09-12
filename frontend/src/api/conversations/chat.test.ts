@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { streamAttachedTurn, streamChat } from "./chat";
+import { streamAttachedTurn, streamChat, streamRewind } from "./chat";
 import { TURN_PROTOCOL_VERSION } from "../../app/runtime/runtimeNodeNormalization";
 import type { RuntimeStateNode, StreamMessage } from "../../types";
 
@@ -63,6 +63,19 @@ function accepted(value = turn()): Response {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Turn SSE contract", () => {
+  it("notifies rewind admission before receiving the new Turn baseline", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(accepted()).mockResolvedValueOnce(response([
+      JSON.stringify({ type: "turn.snapshot", revision: 0, turn: turn("success") }),
+      '<SSE id="turn_1" type="success"></SSE>',
+    ])));
+    const events: string[] = [];
+    await streamRewind("turn_1", "edited", () => { events.push("snapshot"); }, new AbortController().signal, {
+      sessionId: "session_1",
+      onAccepted: () => { events.push("accepted"); },
+    });
+    expect(events).toEqual(["accepted", "snapshot"]);
+  });
+
   it("accepts one Turn baseline followed by consecutive deltas and the matching terminal", async () => {
     const frames: StreamMessage[] = [];
     const fetchMock = vi.fn().mockResolvedValueOnce(accepted()).mockResolvedValueOnce(response([

@@ -14,7 +14,7 @@ from .model import CheckerVerdict
 
 
 def upload_upstream(container: TaskContainer, relative: str, destination: str) -> None:
-    """Use Git object bytes, independent of Windows checkout newline conversion."""
+    """Export pinned files with LF, independent of host Git newline settings."""
     terminal = container.spec["kind"] == "terminal_bench"
     root = container.cache / ("terminal-bench-2" if terminal else "swe-bench-pro")
     revision = TB_REV if terminal else SWE_REV
@@ -22,7 +22,18 @@ def upload_upstream(container: TaskContainer, relative: str, destination: str) -
     if relative:
         base += "/" + relative
     archive = subprocess.run(
-        ["git", "-C", str(root), "archive", "--format=tar", revision + ":" + base],
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "core.eol=lf",
+            "archive",
+            "--format=tar",
+            revision + ":" + base,
+        ],
         capture_output=True,
         timeout=60,
         check=True,

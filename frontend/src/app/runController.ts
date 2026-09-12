@@ -145,8 +145,12 @@ export function createRunController(callbacks: RunControllerCallbacks) {
       model: request.model,
       references: request.references,
       queuedDelivery: request.queuedDelivery,
-      onAccepted: (turn: RuntimeStateNode) => {
+      onAccepted: (turn?: RuntimeStateNode) => {
         admissionAccepted = true;
+        if (!turn) {
+          request.onAccepted?.();
+          return;
+        }
         active.turnId = turn.id;
         finalTurn = turn;
         callbacks.updateConversation?.(
@@ -217,6 +221,12 @@ export function createRunController(callbacks: RunControllerCallbacks) {
     } catch (error) {
       flushPendingFrames();
       if (!admissionAccepted) request.onAdmissionRejected?.();
+      if (request.rewindTurnId && !admissionAccepted && !finalTurn) {
+        if (!controller.signal.aborted) {
+          callbacks.onControlError?.(String((error as Error).message ?? error));
+        }
+        return;
+      }
       if (!finalTurn && !request.attach && !controller.signal.aborted) {
         await callbacks.checkSandboxHealth?.().catch(() => undefined);
       }

@@ -16,7 +16,7 @@ export interface StreamOptions {
   model?: RuntimeConfigModel;
   references?: FileReference[];
   queuedDelivery?: { messageIds: string[] };
-  onAccepted?: (turn: RuntimeStateNode) => void;
+  onAccepted?: (turn?: RuntimeStateNode) => void;
 }
 
 const terminalPattern = /^<SSE id="([^"]+)" type="(success|network|failed)">([\s\S]*)<\/SSE>$/;
@@ -240,6 +240,7 @@ export async function streamRewind(
       ...executionConfig(options),
     }), signal, operation: { sessionId: options.sessionId } },
   );
+  options.onAccepted?.();
   return streamEndpoint(
     `/api/turns/${encodeURIComponent(turnId)}/stream?session_id=${encodeURIComponent(options.sessionId)}&delivery_id=${encodeURIComponent(receipt.delivery_id)}`,
     undefined,

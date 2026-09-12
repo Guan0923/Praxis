@@ -16,6 +16,7 @@ interface MessageEditingOptions {
     prompt: string,
     target?: { conversationId: string; sessionId: string; sourceNodeId?: string; rewindTurnId?: string },
     references?: FileReference[],
+    onAccepted?: () => void,
   ) => Promise<void>;
   onError: (error: unknown) => void;
 }
@@ -92,6 +93,7 @@ export function useMessageEditing({
           rewindTurnId: typeof result === "string" ? message.nodeId : result.rewindTurnId ?? message.nodeId,
         },
         message.references,
+        () => setRewindPending(false),
       );
     } finally {
       setRewindPending(false);

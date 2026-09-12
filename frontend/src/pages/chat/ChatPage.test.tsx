@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectTurnPath } from "../../app/runtime/runtimeDetailProjection";
+import * as sessionOwnershipHook from "../../app/useSessionOwnership";
 import { TURN_PROTOCOL_VERSION } from "../../app/runtime/runtimeNodeNormalization";
 import type { QueuedMessage } from "../../app/types";
 import {
@@ -783,7 +784,7 @@ describe("ChatPage rewind projection", () => {
     expect(screen.queryByText("created by backend", { selector: ".message *" })).not.toBeInTheDocument();
   });
 
-  it("prunes descendants only when the edited message is submitted for rewind", async () => {
+  it("prunes descendants only after the rewind request is accepted", async () => {
     const nativeGetComputedStyle = window.getComputedStyle.bind(window);
     vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudoElement) => {
       const style = nativeGetComputedStyle(element, pseudoElement);
@@ -829,10 +830,68 @@ describe("ChatPage rewind projection", () => {
       sourceNodeId: undefined,
       prompt: "target",
     }));
+    expect(screen.getByTestId("runtime-node-ids")).toHaveTextContent("turn-root,turn-target,turn-descendant");
+    await act(async () => onRun.mock.calls[0][0].onAccepted());
     expect(screen.getByTestId("runtime-node-ids")).toHaveTextContent("turn-root,turn-target");
     expect(screen.getByTestId("active-turn-id")).toHaveTextContent("turn-target");
     expect(screen.getByTestId("visible-message-text")).toHaveTextContent("root|root-answer|target");
     expect(screen.getByTestId("visible-message-text")).not.toHaveTextContent("descendant");
+  });
+
+  it("keeps the original branch when rewind admission is rejected", async () => {
+    const onRun = vi.fn((request) => { request.onAdmissionRejected?.(); });
+    const onRewind = vi.fn().mockResolvedValue({ sessionId: "session-rewind", rewindTurnId: "turn-target" });
+    render(<Harness onRun={onRun} onRewind={onRewind} />);
+    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[1]);
+    fireEvent.click(screen.getByRole("button", { name: "保存并重新生成" }));
+    await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId("runtime-node-ids")).toHaveTextContent("turn-root,turn-target,turn-descendant");
+    expect(screen.getByTestId("active-turn-id")).toHaveTextContent("turn-descendant");
+    expect(screen.getByTestId("visible-message-text")).toHaveTextContent("root|root-answer|target|target-answer|descendant|descendant-answer");
+    expect(screen.queryByRole("button", { name: "重试发送" })).not.toBeInTheDocument();
+  });
+
+  it("blocks another send until the pending rewind has been accepted", async () => {
+    let finish!: () => void;
+    const onRun = vi.fn().mockReturnValue(new Promise<void>((resolve) => { finish = resolve; }));
+    const onRewind = vi.fn().mockResolvedValue({ sessionId: "session-rewind", rewindTurnId: "turn-target" });
+    render(<Harness onRun={onRun} onRewind={onRewind} />);
+    try {
+      await userEvent.type(screen.getByLabelText("聊天输入"), "next draft");
+      fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[1]);
+      fireEvent.click(screen.getByRole("button", { name: "保存并重新生成" }));
+      await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
+      expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+      fireEvent.keyDown(screen.getByLabelText("聊天输入"), { key: "Enter" });
+      expect(onRun).toHaveBeenCalledTimes(1);
+      await act(async () => onRun.mock.calls[0][0].onAccepted());
+      expect(screen.getByLabelText("聊天输入")).toHaveAttribute("contenteditable", "true");
+    } finally {
+      await act(async () => finish());
+    }
+  });
+
+  it("blocks message editing when another window owns the session", () => {
+    vi.spyOn(sessionOwnershipHook, "useSessionOwnership").mockReturnValue("readonly");
+    const onRewind = vi.fn();
+    const { container } = render(<Harness onRun={vi.fn()} onRewind={onRewind} />);
+    expect(screen.getAllByRole("button", { name: "编辑" }).every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+    fireEvent.click(container.querySelectorAll<HTMLElement>(".user-bubble")[1]);
+    expect(screen.queryByRole("textbox", { name: "编辑用户消息" })).not.toBeInTheDocument();
+    expect(onRewind).not.toHaveBeenCalled();
+  });
+
+  it("blocks an open edit when session ownership is lost", () => {
+    const ownership = vi.spyOn(sessionOwnershipHook, "useSessionOwnership").mockReturnValue("writable");
+    const onRewind = vi.fn();
+    const onRun = vi.fn();
+    const { rerender } = render(<Harness onRun={onRun} onRewind={onRewind} />);
+    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[1]);
+    ownership.mockReturnValue("readonly");
+    rerender(<Harness onRun={onRun} onRewind={onRewind} />);
+    expect(screen.getByRole("button", { name: "保存并重新生成" })).toBeDisabled();
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "编辑用户消息" }), { key: "Enter", ctrlKey: true });
+    expect(onRewind).not.toHaveBeenCalled();
   });
 
   it("shows an accessible shimmer while Compact is pending and reloads on success", async () => {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { pauseTurn, SseExecutionError, streamAttachedTurn, streamChat } from "../api";
+import { pauseTurn, SseExecutionError, streamAttachedTurn, streamChat, streamRewind } from "../api";
 import type { Conversation, RuntimeStateNode } from "../types";
 import { createRunController } from "./runController";
 import { TURN_PROTOCOL_VERSION } from "./runtime/runtimeNodeNormalization";
@@ -84,6 +84,23 @@ describe("run controller incremental batching", () => {
       content: "already visible", status: "failed", running: false, error: "Item persistence failed",
       items: [{ text: "already visible", status: "failed" }],
     });
+  });
+
+  it("reports rejected rewind without replacing an existing assistant message", async () => {
+    vi.mocked(streamRewind).mockRejectedValueOnce(new Error("rewind rejected"));
+    const updateLastMessage = vi.fn();
+    const onControlError = vi.fn();
+    const onAdmissionRejected = vi.fn();
+    const controller = createRunController({
+      activeRuns: new Map(), updateLastMessage, onControlError,
+      rebindRunSession: vi.fn().mockResolvedValue(undefined),
+      refreshSessions: vi.fn().mockResolvedValue(undefined),
+      recoverConversation: vi.fn().mockResolvedValue(undefined),
+    });
+    await controller.runConversation({ ...request(), rewindTurnId: "turn_1", onAdmissionRejected });
+    expect(onAdmissionRejected).toHaveBeenCalledTimes(1);
+    expect(onControlError).toHaveBeenCalledWith("rewind rejected");
+    expect(updateLastMessage).not.toHaveBeenCalled();
   });
 
   it("defers an early pause until the Turn exists and allows retry after a failed pause", async () => {
