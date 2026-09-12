@@ -10,7 +10,6 @@ import { App as AntApp } from "antd";
 import {
   createSession,
   getSettings,
-  getSessionNodes,
   getTurnPage,
   listQueuedMessages,
   listSessions,
@@ -36,7 +35,7 @@ import { createRunController } from "./runController";
 import { effectiveDisplayMode } from "./displayMode";
 import { useInitialSettings } from "./AppearanceProvider";
 import { isRuntimeTurnNode } from "./runtime/runtimeNodeNormalization";
-import { withLoadedTurns, withRefreshedTurns, withTurnPage } from "./conversationProjection";
+import { withTurnPage } from "./conversationProjection";
 import { createConversationActions } from "./conversationActions";
 import { createProjectActions } from "./projectActions";
 import { useSandboxHealth } from "./useSandboxHealth";
@@ -162,7 +161,8 @@ function AgentApp() {
         && (!sessions || sessions.has(item.sessionId)) && !activeRunsRef.current.has(item.id)).map(async (item) => {
         const page = await getTurnPage(item.sessionId!, item.threadId);
         if (!disposed) updateConversation(item.id, (current) => current.messagesLoaded
-          ? withRefreshedTurns(current, page.turns) : current);
+          && current.activeTurnId === item.activeTurnId && !activeRunsRef.current.has(item.id)
+          ? withTurnPage(current, page) : current);
       }));
     };
     const refreshCatalog = async () => {
@@ -332,21 +332,21 @@ function AgentApp() {
   }
 
   async function recoverConversation(conversationId: string, sessionId: string, turnId?: string): Promise<void> {
-    let nodes: RuntimeTreeNode[] = [];
+    let page: import("../api/conversations/turns").TurnPage;
     for (let attempt = 0; attempt < 40; attempt += 1) {
       const owner = conversations.find((item) => item.id === conversationId) ?? panelConversations[conversationId];
-      nodes = await getSessionNodes(sessionId, owner?.threadId);
-      const target = turnId ? nodes.find((node) => node.id === turnId) : undefined;
+      page = await getTurnPage(sessionId, owner?.threadId);
+      const target = turnId ? page.turns.find((node) => node.id === turnId) : undefined;
       if (!target || !isRuntimeTurnNode(target) || target.status !== "running") break;
       await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 50));
     }
-    updateConversation(conversationId, (conversation) => withRefreshedTurns(conversation, nodes));
+    updateConversation(conversationId, (conversation) => withTurnPage(conversation, page));
   }
 
   const hydratePanelConversation = useCallback(async (window: RightPanelWindow): Promise<void> => {
     if (window.kind !== "side_chat" || !window.thread_id || !window.anchor_turn_id) return;
     visitedConversationsRef.current.set(window.id, ++visitCounterRef.current);
-    const nodes = await getSessionNodes(window.session_id, window.thread_id ?? undefined);
+    const page = await getTurnPage(window.session_id, window.thread_id ?? undefined);
     setPanelConversations((previous) => {
       const existing = previous[window.id];
       const base: Conversation = existing ?? {
@@ -360,11 +360,11 @@ function AgentApp() {
       };
       return {
         ...previous,
-        [window.id]: withLoadedTurns({
+        [window.id]: withTurnPage({
           ...base,
           title: window.title,
           hiddenBeforeTurnId: window.anchor_turn_id!,
-        }, nodes),
+        }, page),
       };
     });
     const items = await listQueuedMessages(window.thread_id).catch(() => []);
@@ -400,11 +400,11 @@ function AgentApp() {
     };
   }
 
-  async function reloadPanelConversation(id: string, preferredActiveTurnId?: string): Promise<void> {
+  async function reloadPanelConversation(id: string): Promise<void> {
     const source = panelConversations[id];
     if (!source?.sessionId) throw new Error("侧聊不存在");
-    const nodes = await getSessionNodes(source.sessionId, source.threadId);
-    updateConversation(id, (conversation) => withLoadedTurns(conversation, nodes, preferredActiveTurnId));
+    const page = await getTurnPage(source.sessionId, source.threadId);
+    updateConversation(id, (conversation) => withTurnPage(conversation, page));
   }
 
   const { runConversation, stopConversation } = createRunController({
@@ -446,8 +446,8 @@ function AgentApp() {
     if (!conversation) throw new Error("会话不存在");
     if (conversation.sessionId) {
       if (!conversation.messagesLoaded) {
-        const nodes = await getSessionNodes(conversation.sessionId, conversation.threadId);
-        updateConversation(id, (currentConversation) => withLoadedTurns(currentConversation, nodes));
+        const page = await getTurnPage(conversation.sessionId, conversation.threadId);
+        updateConversation(id, (currentConversation) => withTurnPage(currentConversation, page));
       }
       return conversation.sessionId;
     }

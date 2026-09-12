@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from typing import Any
 
@@ -133,6 +134,35 @@ class SQLiteTurnTraceMixin:
         if payload is None:
             return None
         trace = TurnTrace.from_dict(payload)
+        if after_sequence is None:
+            return trace
+        return replace(trace, items=[item for item in trace.items if item.sequence > after_sequence])
+
+    def load_thread_trace(
+        self,
+        session_id: str,
+        thread_id: str,
+        turn_id: str,
+        data_idx: int,
+        *,
+        after_sequence: int | None = None,
+    ) -> TurnTrace | None:
+        """Read one Trace directly without loading or validating its Turn."""
+
+        path = self.paths.session_db(session_id)
+        if not path.is_file():
+            return None
+        object_id = f"{turn_id}:{data_idx}"
+        with self._connection(session_id) as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM json_objects "
+                "WHERE session_id=? AND namespace=? AND object_id=? "
+                "AND json_extract(payload_json,'$.thread_id')=?",
+                (session_id, self._TRACE_NAMESPACE, object_id, thread_id),
+            ).fetchone()
+        if row is None:
+            return None
+        trace = TurnTrace.from_dict(json.loads(str(row[0])))
         if after_sequence is None:
             return trace
         return replace(trace, items=[item for item in trace.items if item.sequence > after_sequence])

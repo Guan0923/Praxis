@@ -54,6 +54,28 @@ function renderSidebar(archivedCount = 0, conversations: Conversation[] = [conve
 }
 
 describe("AppSidebar utility navigation", () => {
+  it("keeps sidebar content and its animation class across page navigation", () => {
+    const props = {
+      profile: { display_name: "Local", agent_preferences: "" },
+      conversations: [conversation], archivedCount: 0, currentId: conversation.id,
+      onNew: vi.fn(), onSelect: vi.fn(), onNavigate: vi.fn(),
+      onRename: vi.fn(), onArchive: vi.fn(), onDelete: vi.fn(),
+    };
+    const { rerender, container } = render(<AppSidebar {...props} page="chat" />);
+    const shell = container.querySelector(".sidebar-reveal-shell");
+    const children = Array.from(shell!.querySelectorAll(".sidebar-primary-actions button, .sidebar-reveal-item, .project-history-list"));
+    expect(shell).toHaveClass("sidebar-reveal-active");
+    const animationEnd = new Event("animationend", { bubbles: true });
+    Object.defineProperty(animationEnd, "animationName", { value: "chat-sidebar-reveal" });
+    fireEvent(shell!.querySelector('[data-reveal-index="5"]')!, animationEnd);
+    for (const page of ["benchmark", "chat", "trash", "chat"] as const) {
+      rerender(<AppSidebar {...props} page={page} />);
+      expect(container.querySelector(".sidebar-reveal-shell")).toBe(shell);
+      expect(shell).not.toHaveClass("sidebar-reveal-active");
+      expect(children.filter((child) => !shell!.contains(child)).map((child) => child.outerHTML)).toEqual([]);
+    }
+  });
+
   it("renders the project title and collapse control in the sidebar header", async () => {
     const user = userEvent.setup();
     const onToggleCollapse = vi.fn();
@@ -72,7 +94,6 @@ describe("AppSidebar utility navigation", () => {
         onDelete={vi.fn()}
         collapsed={false}
         onToggleCollapse={onToggleCollapse}
-        revealKey={4}
       />,
     );
 

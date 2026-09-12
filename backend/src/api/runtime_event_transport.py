@@ -53,13 +53,15 @@ def _runtime_snapshot(state, store, session_id: str, turn_id: str):
 
 
 async def _current_thread_snapshots(state, store, session_id: str, thread_id: str):
-    for candidate in (await asyncio.to_thread(store.load_turn_page, session_id, thread_id))[0]:
+    page = await asyncio.to_thread(store.load_turn_page, session_id, thread_id)
+    for candidate in page.turns:
         if not isinstance(candidate, RuntimeState) or candidate.thread_id != thread_id:
             continue
         current, sequence = await asyncio.to_thread(_runtime_snapshot, state, store, session_id, candidate.id)
         current = current or candidate
         payload = await asyncio.to_thread(project_frame, store, NodeFrame.snapshot(current), current)
         payload["revision"] = 0
+        payload["current_turn_id"] = page.current_turn_id
         yield current.id, sequence, payload
 
 
@@ -184,7 +186,7 @@ def _matching_terminal(
 def _turn_continuation(store: SQLiteSessionStore, session_id: str, thread_id: str, turn_id: str) -> list[RuntimeState]:
     turns = [
         node
-        for node in store.load_turn_page(session_id, thread_id)[0]
+        for node in store.load_turn_page(session_id, thread_id).turns
         if isinstance(node, RuntimeState) and node.thread_id == thread_id
     ]
     by_id = {node.id: node for node in turns}
@@ -355,11 +357,8 @@ async def thread_sse(state, session_id: str, thread_id: str, last_event_id: str 
     cursor = _resume_cursor(state, last_event_id, await asyncio.to_thread(stream.latest_thread_id, thread_id))
     yield f"id: {_cursor_id(state, cursor)}\ndata: {json.dumps({'type': 'thread.ready', 'session_id': session_id, 'thread_id': thread_id}, separators=(',', ':'))}\n\n"
     store = _store(state)
-    canonical_turns = [
-        node
-        for node in (await asyncio.to_thread(store.load_turn_page, session_id, thread_id))[0]
-        if isinstance(node, RuntimeState) and node.thread_id == thread_id
-    ]
+    page = await asyncio.to_thread(store.load_turn_page, session_id, thread_id)
+    canonical_turns = [node for node in page.turns if isinstance(node, RuntimeState) and node.thread_id == thread_id]
     baseline_sequences: dict[str, int] = {}
     refreshed_turns: list[RuntimeState] = []
     for candidate in canonical_turns:
@@ -369,6 +368,7 @@ async def thread_sse(state, session_id: str, thread_id: str, last_event_id: str 
         baseline_sequences[node.id] = baseline_sequence
         snapshot = await asyncio.to_thread(project_frame, store, NodeFrame.snapshot(node), node)
         snapshot["revision"] = 0
+        snapshot["current_turn_id"] = page.current_turn_id
         yield f"id: {_cursor_id(state, cursor)}\ndata: {json.dumps(snapshot, ensure_ascii=False, separators=(',', ':'))}\n\n"
     heartbeat_at = monotonic() + 15.0
     revisions: dict[str, int] = {node.id: 0 for node in refreshed_turns}
@@ -390,6 +390,9 @@ async def thread_sse(state, session_id: str, thread_id: str, last_event_id: str 
                 heartbeat_at = monotonic() + 15.0
                 yield ": heartbeat\n\n"
             continue
+        runtime_thread = await asyncio.to_thread(store.get_runtime_thread, session_id, thread_id)
+        if runtime_thread is None:
+            return
         for entry in entries:
             cursor = entry.stream_id
             payload = dict(entry.payload)
@@ -419,6 +422,7 @@ async def thread_sse(state, session_id: str, thread_id: str, last_event_id: str 
                 payload["revision"] = revisions[turn_id]
             else:
                 continue
+            payload["current_turn_id"] = runtime_thread.current_turn_id
             yield f"id: {_cursor_id(state, cursor)}\ndata: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
 
 

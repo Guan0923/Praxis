@@ -224,11 +224,3 @@ export function applyRuntimeNodeFrame(
 export function nodeFrame(message: RuntimeNodeFrame & { type: NodeFrameType }): RuntimeNodeFrame {
   return message;
 }
-
-export function leafNodes(nodes: Iterable<RuntimeTreeNode>, sessionId?: string): RuntimeStateNode[] {
-  const all = [...nodes].filter(isRuntimeTurnNode).filter(
-    (node) => !sessionId || node.session_id === sessionId,
-  );
-  const parentKeys = new Set(all.map((node) => `${node.parent_session_id}:${node.parent_id}`));
-  return all.filter((node) => !parentKeys.has(`${node.session_id}:${node.id}`));
-}

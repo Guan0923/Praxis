@@ -12,7 +12,7 @@ function fixture(id: string): Conversation {
       { role: "user", content: [{ type: "text", text: `question ${version}`, status: "success" }] },
       { role: "assistant", content: [{ type: "text", text: `answer ${version}`, status: "success" }] },
     ]) } as RuntimeStateNode;
-  return withLoadedTurns({ id, sessionId: id, threadId: id, title: id, messages: [] }, [node]);
+  return withLoadedTurns({ id, sessionId: id, threadId: id, title: id, messages: [] }, [node], id);
 }
 
 describe("version selection", () => {

@@ -79,8 +79,8 @@ export interface AgentShellProps {
   onRewind: (conversationId: string, messageId: string) => Promise<{ content: string; sessionId: string; sourceNodeId?: string; rewindTurnId?: string } | undefined>;
   onRewindPanel: (conversationId: string, messageId: string) => Promise<{ content: string; sessionId: string; sourceNodeId?: string; rewindTurnId?: string } | undefined>;
   onSelectSession: (sessionId: string) => Promise<string>;
-  onReload: (id: string, preferredActiveTurnId?: string) => Promise<void>;
-  onReloadPanel: (id: string, preferredActiveTurnId?: string) => Promise<void>;
+  onReload: (id: string) => Promise<void>;
+  onReloadPanel: (id: string) => Promise<void>;
   onRefresh: () => Promise<void>;
   onRun: (request: ChatRunRequest) => Promise<void>;
   onStopRun: (conversationId: string) => void;
@@ -97,7 +97,6 @@ export default function AgentShell(props: AgentShellProps) {
   const isMobile = screens.md === false;
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [chatRevealKey, setChatRevealKey] = useState(0);
   const [visited, setVisited] = useState(() => new Set<Page>([props.page]));
   const [chatWasHidden, setChatWasHidden] = useState(false);
   useEffect(() => {
@@ -116,9 +115,6 @@ export default function AgentShell(props: AgentShellProps) {
     if (isMobile) setSidebarCollapsed(false);
     else setMobileSidebarOpen(false);
   }, [isMobile]);
-  useEffect(() => {
-    if (props.page === "chat") setChatRevealKey((current) => current + 1);
-  }, [props.page]);
   useEffect(() => {
     const width = panel.payload?.state.width || DEFAULT_RIGHT_PANEL_WIDTH;
     rawPanelWidthRef.current = width;
@@ -199,7 +195,6 @@ export default function AgentShell(props: AgentShellProps) {
         if (isMobile) closeMobile();
         else setSidebarCollapsed((current) => !current);
       }}
-      revealKey={chatRevealKey}
     />
   );
   const sourceTurnId = props.current?.activeTurnId ?? props.current?.lastNodeId;
@@ -234,7 +229,7 @@ export default function AgentShell(props: AgentShellProps) {
           onFork={(conversationId, messageId) => userBackendRequest(() => props.onFork(conversationId, messageId))}
           onRewind={(conversationId, messageId) => userBackendRequest(() => props.onRewind(conversationId, messageId))}
           onSelectSession={useSession}
-          onReload={(id, turnId) => userBackendRequest(() => props.onReload(id, turnId))}
+          onReload={(id) => userBackendRequest(() => props.onReload(id))}
           onRefresh={() => userBackendRequest(() => props.onRefresh())}
           running={Boolean(props.current?.messages.some((message) => message.running))}
           onRun={(request) => userBackendRequest(() => props.onRun(request))}
@@ -263,7 +258,7 @@ export default function AgentShell(props: AgentShellProps) {
           onEnsureSession={async () => window.session_id}
           onRewind={(conversationId, messageId) => userBackendRequest(() => props.onRewindPanel(conversationId, messageId))}
           onSelectSession={useSession}
-          onReload={(id, turnId) => userBackendRequest(() => props.onReloadPanel(id, turnId))}
+          onReload={(id) => userBackendRequest(() => props.onReloadPanel(id))}
           onRefresh={() => userBackendRequest(() => props.onHydratePanelConversation(window))}
           running={Boolean(conversation?.messages.some((message) => message.running))}
           onRun={(request) => userBackendRequest(() => props.onRun(request))}

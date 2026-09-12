@@ -79,16 +79,17 @@ def turn_history(
     store = session_store(state)
     require_active_session(store, session_id)
     try:
-        page, cursor = store.load_turn_page(session_id, thread_id, before=before, limit=limit)
+        page = store.load_turn_page(session_id, thread_id, before=before, limit=limit)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    state.conversation_cache.touch(session_id, thread_id, [node.id for node in page])
+    state.conversation_cache.touch(session_id, thread_id, [node.id for node in page.turns])
     return {
-        "turns": [project_turn(store, node) for node in page],
-        "next_cursor": cursor,
-        "has_more": cursor is not None,
+        "current_turn_id": page.current_turn_id,
+        "turns": [project_turn(store, node) for node in page.turns],
+        "next_cursor": page.next_cursor,
+        "has_more": page.next_cursor is not None,
     }
 
 
@@ -112,26 +113,20 @@ def export_thread_trace(
 @router.get("/{turn_id}/trace")
 def get_turn_trace(
     turn_id: str,
+    session_id: str,
+    thread_id: str,
     data_idx: int,
     request: Request,
     after_sequence: int | None = Query(default=None, ge=0),
 ) -> dict[str, object]:
-    store = session_store(request.app.state.web)
-    turn = _turn(store, turn_id)
-    if data_idx < 0 or data_idx >= len(turn.data):
-        raise HTTPException(status_code=422, detail="data_idx 超出 Turn 版本范围。")
-    try:
-        trace = store.load_turn_trace(
-            turn.session_id,
-            turn.id,
-            data_idx,
-            after_sequence=after_sequence,
-        )
-    except ValueError as exc:
-        return error_response(exc, status_code=422, detail=str(exc))
+    trace = request.app.state.web.session_store.load_thread_trace(
+        session_id,
+        thread_id,
+        turn_id,
+        data_idx,
+        after_sequence=after_sequence,
+    )
     return {
-        "turn": project_turn(store, turn),
-        "data_idx": data_idx,
         "context": trace.context.to_dict() if trace is not None and after_sequence is None else None,
         "items": [item.to_dict() for item in trace.items] if trace is not None else [],
         "last_sequence": trace.last_sequence if trace is not None else 0,

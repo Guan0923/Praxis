@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
+import { MemoryRouter, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TURN_PROTOCOL_VERSION } from "../../app/runtime/runtimeNodeNormalization";
@@ -7,7 +8,7 @@ import type { AgentThreadStreamEvent, Conversation, RuntimeStateNode } from "../
 import { useAgentThreadView } from "./useAgentThreadView";
 
 const api = vi.hoisted(() => ({
-  getSessionNodes: vi.fn(),
+  getTurnPage: vi.fn(),
   sendAgentThreadMessage: vi.fn(),
   streamAgentThread: vi.fn(),
 }));
@@ -147,9 +148,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   streams.length = 0;
   latestView = null;
-  api.getSessionNodes.mockImplementation(async (sessionId: string) => (
-    sessionId === "session_a" ? [childA1] : []
-  ));
+  api.getTurnPage.mockImplementation(async (sessionId: string) => ({
+    current_turn_id: sessionId === "session_a" ? childA1.id : null,
+    turns: sessionId === "session_a" ? [childA1] : [], next_cursor: null, has_more: false,
+  }));
   api.streamAgentThread.mockImplementation((
     sessionId: string,
     threadId: string,
@@ -171,17 +173,64 @@ beforeEach(() => {
 });
 
 describe("useAgentThreadView", () => {
+  it("retains the child on utility pages and follows chat URLs on back and forward", async () => {
+    const selections: (string | undefined)[] = [];
+    function RoutedHarness() {
+      const navigate = useNavigate();
+      const view = useAgentThreadView({
+        canonical: initialConversations.session_a, enabled: true,
+        retainedConversationIds: ["session_a"], onUpdate: vi.fn(),
+      });
+      selections.push(view.selectedThreadId);
+      return <>
+        <button onClick={() => navigate("/benchmark")}>benchmark</button>
+        <button onClick={() => navigate("/trash")}>trash</button>
+        <button onClick={() => navigate(-1)}>back</button>
+        <button onClick={() => navigate(1)}>forward</button>
+        <button onClick={() => navigate("/chat/session_a/session_a")}>root</button>
+        <output>{view.conversation?.threadId}</output>
+      </>;
+    }
+    render(<MemoryRouter initialEntries={["/chat/session_a/session_a/agent/thread_a_child"]}><RoutedHarness /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText("thread_a_child")).toBeInTheDocument());
+    for (const name of ["benchmark", "trash", "back", "back", "forward", "forward"]) {
+      fireEvent.click(screen.getByRole("button", { name }));
+      expect(screen.getByText("thread_a_child")).toBeInTheDocument();
+    }
+    expect(selections.every((id) => id === "thread_a_child")).toBe(true);
+    expect(api.streamAgentThread).toHaveBeenCalledTimes(1);
+    expect(api.getTurnPage).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "root" }));
+    expect(screen.getByText("session_a")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "back" }));
+    expect(screen.getByText("session_a")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "back" }));
+    fireEvent.click(screen.getByRole("button", { name: "back" }));
+    expect(screen.getByText("thread_a_child")).toBeInTheDocument();
+  });
+
   it("appends child history without replacing the root conversation", async () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole("button", { name: "select child A" }));
     await waitFor(() => expect(streams).toHaveLength(1));
     const older = turn("session_a", "thread_a_child", "turn_a_older");
-    act(() => latestView!.applyHistoryPage({ turns: [older], next_cursor: "child-cursor", has_more: true }));
+    act(() => latestView!.applyHistoryPage({ current_turn_id: childA1.id, turns: [older], next_cursor: "child-cursor", has_more: true }));
     expect(latestView!.conversation?.runtimeNodes?.some((node) => node.id === older.id)).toBe(true);
     expect(latestView!.conversation?.historyCursor).toBe("child-cursor");
     expect(screen.getByTestId("canonical-thread")).toHaveTextContent("session_a");
     expect(screen.getByTestId("canonical-messages")).toHaveTextContent("root task|root answer");
   });
+  it("keeps the backend head when an older Turn snapshot arrives", async () => {
+    const head = turn("session_a", "thread_a_child", "turn_a_2", { parentId: childA1.id });
+    api.getTurnPage.mockResolvedValue({ current_turn_id: head.id, turns: [childA1, head], next_cursor: "server-cursor", has_more: true });
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "select child A" }));
+    await waitFor(() => expect(streams).toHaveLength(1));
+    act(() => streams[0].onEvent({ type: "turn.snapshot", revision: 0, turn: childA1, current_turn_id: head.id }));
+    expect(latestView!.conversation?.activeTurnId).toBe(head.id);
+    expect(latestView!.conversation?.historyCursor).toBe("server-cursor");
+  });
+
   it("invalidates the current root tree when its canonical Turn set changes", async () => {
     render(<Harness />);
     expect(screen.getByTestId("tree-invalidation")).toHaveTextContent("0");
@@ -245,8 +294,9 @@ describe("useAgentThreadView", () => {
       parentId: childA1.id,
       deliveryId: "delivery_1",
     });
+    api.getTurnPage.mockResolvedValue({ current_turn_id: canonical.id, turns: [childA1, canonical], next_cursor: null, has_more: false });
     await act(async () => {
-      streams[0].onEvent({ type: "turn.snapshot", revision: 0, turn: canonical });
+      streams[0].onEvent({ type: "turn.snapshot", revision: 0, turn: canonical, current_turn_id: canonical.id });
       streams[0].onEvent({
         type: "turn.terminal",
         session_id: "session_a",
@@ -265,7 +315,7 @@ describe("useAgentThreadView", () => {
     expect(streams[0].signal.aborted).toBe(false);
   });
 
-  it("reconnects using stream snapshots without reloading cached history", async () => {
+  it("reloads the backend head and cursor before reconnecting the stream", async () => {
     api.streamAgentThread
       .mockImplementationOnce(async (
         sessionId: string,
@@ -290,7 +340,7 @@ describe("useAgentThreadView", () => {
     fireEvent.click(screen.getByRole("button", { name: "select child A" }));
 
     await waitFor(() => expect(api.streamAgentThread).toHaveBeenCalledTimes(2), { timeout: 2_000 });
-    expect(api.getSessionNodes.mock.calls.filter(([sessionId]) => sessionId === "session_a")).toHaveLength(0);
+    expect(api.getTurnPage.mock.calls.filter(([sessionId]) => sessionId === "session_a")).toHaveLength(2);
   });
 
   it("recovers from a revision gap when the reconnected stream starts from a rebased snapshot", async () => {
@@ -305,9 +355,10 @@ describe("useAgentThreadView", () => {
         onEvent: (event: AgentThreadStreamEvent) => void,
       ) => {
         onEvent({ type: "thread.ready", session_id: sessionId, thread_id: threadId });
-        onEvent({ type: "turn.snapshot", revision: 0, turn: running });
+        onEvent({ type: "turn.snapshot", revision: 0, turn: running, current_turn_id: running.id });
         onEvent({
           type: "turn.delta",
+          current_turn_id: running.id,
           session_id: sessionId,
           turn_id: running.id,
           revision: 2,
@@ -322,9 +373,10 @@ describe("useAgentThreadView", () => {
         signal: AbortSignal,
       ) => {
         onEvent({ type: "thread.ready", session_id: sessionId, thread_id: threadId });
-        onEvent({ type: "turn.snapshot", revision: 0, turn: running });
+        onEvent({ type: "turn.snapshot", revision: 0, turn: running, current_turn_id: running.id });
         onEvent({
           type: "turn.delta",
+          current_turn_id: running.id,
           session_id: sessionId,
           turn_id: running.id,
           revision: 1,

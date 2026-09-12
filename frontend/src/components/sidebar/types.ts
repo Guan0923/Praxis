@@ -28,7 +28,6 @@ export interface AppSidebarProps {
   onOpenSettings?: () => void;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
-  revealKey?: number;
 }
 
 export interface HistoryMutationProps {

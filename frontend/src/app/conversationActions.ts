@@ -4,13 +4,13 @@ import {
   archiveSession,
   deleteSession,
   forkTurn,
-  getSessionNodes,
+  getTurnPage,
   listSessions,
   renameSession,
   restoreSession,
 } from "../api";
 import type { Conversation, Page } from "../types";
-import { withLoadedTurns } from "./conversationProjection";
+import { withTurnPage } from "./conversationProjection";
 import { summaryToConversation } from "./storage";
 
 interface ConversationActionsContext {
@@ -115,7 +115,7 @@ export function createConversationActions(context: ConversationActionsContext) {
       if (!sourceTurnId) throw new Error("fork requires an assistant Turn");
       const forked = await forkTurn(sourceTurnId, source.sessionId);
       const sidebar = forked.sidebar_thread;
-      const branch = withLoadedTurns({
+      const branch = withTurnPage({
         id: sidebar.thread_id,
         clientId: sidebar.thread_id,
         sessionId: sidebar.session_id,
@@ -126,7 +126,7 @@ export function createConversationActions(context: ConversationActionsContext) {
         messageCount: sidebar.message_count,
         messagesLoaded: false,
         updatedAt: sidebar.conversation_updated_at,
-      }, await getSessionNodes(sidebar.session_id, sidebar.thread_id));
+      }, await getTurnPage(sidebar.session_id, sidebar.thread_id));
       setConversations((previous) => [branch, ...previous]);
       setCurrentId(branch.id);
       setPage("chat");
@@ -159,12 +159,12 @@ export function createConversationActions(context: ConversationActionsContext) {
     }
   }
 
-  async function reloadConversation(id: string, preferredActiveTurnId?: string): Promise<void> {
+  async function reloadConversation(id: string): Promise<void> {
     const conversation = conversations.find((item) => item.id === id);
     if (!conversation) throw new Error("会话不存在");
     const sessionId = await ensureSession(id);
-    const nodes = await getSessionNodes(sessionId, conversation.threadId);
-    updateConversation(id, (current) => withLoadedTurns(current, nodes, preferredActiveTurnId));
+    const page = await getTurnPage(sessionId, conversation.threadId);
+    updateConversation(id, (current) => withTurnPage(current, page));
   }
 
   async function useSession(sessionId: string): Promise<string> {
@@ -179,9 +179,9 @@ export function createConversationActions(context: ConversationActionsContext) {
     setCurrentId(target.id);
     setPage("chat");
     if (!target.messagesLoaded) {
-      const nodes = await getSessionNodes(target.sessionId ?? sessionId, target.threadId);
+      const page = await getTurnPage(target.sessionId ?? sessionId, target.threadId);
       setConversations((previous) => previous.map((item) => (
-        item.id === target!.id ? withLoadedTurns(item, nodes) : item
+        item.id === target!.id ? withTurnPage(item, page) : item
       )));
     }
     return target.id;
