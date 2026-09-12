@@ -9,6 +9,7 @@ import type { QueuedMessage } from "../../app/types";
 import {
   compactTurn,
   createQueuedMessage,
+  deleteQueuedMessage,
   getSessionNodes,
   listAgentThreadChildren,
   patchRuntimeConfig,
@@ -32,7 +33,7 @@ import ChatPage, { CHAT_COMPACT_WIDTH, composerAction } from "./ChatPage";
 import { clearViewStateCache } from "../../app/viewState";
 
 const viewFixtures = vi.hoisted(() => new Map<string, Record<string, unknown>>());
-beforeEach(() => { clearViewStateCache(); viewFixtures.clear(); });
+beforeEach(() => { clearViewStateCache(); viewFixtures.clear(); vi.mocked(deleteQueuedMessage).mockClear(); });
 
 vi.mock("../../api/transport/request", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../api/transport/request")>();
@@ -54,6 +55,7 @@ vi.mock("../../api", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../api")>(),
   compactTurn: vi.fn(),
   createQueuedMessage: vi.fn(),
+  deleteQueuedMessage: vi.fn().mockResolvedValue(undefined),
   getSessionNodes: vi.fn(),
   listAgentThreadChildren: vi.fn(),
   patchRuntimeConfig: vi.fn(),
@@ -1231,8 +1233,96 @@ describe("ChatPage queued message flushing", () => {
 
     await user.click(screen.getByRole("button", { name: "编辑第 1 条待发送消息" }));
     expect(screen.getByLabelText("聊天输入")).toHaveTextContent("第一条");
-    expect(screen.getByTestId("queued-count")).toHaveTextContent("2");
+    expect(deleteQueuedMessage).toHaveBeenCalledWith("session-rewind", "queued-1", "session-rewind");
+    expect(screen.getByTestId("queued-count")).toHaveTextContent("1");
     expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
+  });
+
+  it("keeps the queue and composer unchanged when take-out fails", async () => {
+    vi.mocked(deleteQueuedMessage).mockRejectedValueOnce(new Error("queued_message_dispatched"));
+    render(<QueueHarness terminalStatus="success" onRun={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "编辑第 1 条待发送消息" }));
+    expect(await screen.findByText("queued_message_dispatched")).toBeVisible();
+    expect(screen.getByTestId("queued-count")).toHaveTextContent("2");
+    expect(screen.getByLabelText("聊天输入")).toHaveTextContent("");
+    expect(screen.getByRole("button", { name: "编辑第 1 条待发送消息" })).toBeEnabled();
+  });
+
+  it("blocks duplicate actions and excludes the item from automatic sending while deleting", async () => {
+    let resolve!: () => void;
+    vi.mocked(deleteQueuedMessage).mockReturnValueOnce(new Promise<void>((done) => { resolve = done; }));
+    const onRun = vi.fn();
+    render(<QueueHarness terminalStatus="success" onRun={onRun} />);
+    const edit = screen.getByRole("button", { name: "编辑第 1 条待发送消息" });
+    fireEvent.click(edit);
+    fireEvent.click(edit);
+    expect(deleteQueuedMessage).toHaveBeenCalledTimes(1);
+    expect(edit).toBeDisabled();
+    expect(screen.getByRole("button", { name: "删除第 1 条待发送消息" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "发送第 1 条待发送消息" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "结束当前 Turn" }));
+    await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
+    expect(onRun.mock.calls[0][0].queuedDelivery.messageIds).toEqual(["queued-2"]);
+    await act(async () => resolve());
+    expect(screen.getByLabelText("聊天输入")).toHaveTextContent("第一条");
+    expect(screen.getByTestId("queued-count")).toHaveTextContent("0");
+    expect(onRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("resubmits taken-out text and references as a new item at the tail", async () => {
+    vi.mocked(createQueuedMessage).mockImplementationOnce(async (threadId, id, content, references) => ({
+      thread_id: threadId, id, content, references: references ?? [], state: "pending", created_at: "now", updated_at: "now",
+    }));
+    const onRun = vi.fn();
+    render(<QueueHarness terminalStatus="success" onRun={onRun} />);
+    await userEvent.click(screen.getByRole("button", { name: "编辑第 1 条待发送消息" }));
+    await userEvent.click(screen.getByRole("button", { name: "发送" }));
+    const calls = vi.mocked(createQueuedMessage).mock.calls;
+    const args = calls[calls.length - 1];
+    expect(args[1]).not.toBe("queued-1");
+    expect(args[2]).toBe("第一条 @README.md");
+    expect(args[3]).toEqual([expect.objectContaining({ path: "C:/workspace/README.md" })]);
+    fireEvent.click(screen.getByRole("button", { name: "结束当前 Turn" }));
+    await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
+    expect(onRun.mock.calls[0][0].queuedDelivery.messageIds).toEqual(["queued-2", args[1]]);
+  });
+
+  it("takes out a failed unsaved item without a backend delete", async () => {
+    vi.mocked(createQueuedMessage).mockRejectedValueOnce(new Error("save failed"));
+    render(<QueueHarness terminalStatus="success" onRun={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText("聊天输入"), "unsaved");
+    await userEvent.click(screen.getByRole("button", { name: "发送" }));
+    await userEvent.click(screen.getByRole("button", { name: "编辑第 3 条待发送消息" }));
+    expect(deleteQueuedMessage).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("聊天输入")).toHaveTextContent("unsaved");
+    expect(screen.getByTestId("queued-count")).toHaveTextContent("2");
+  });
+
+  it("restores uploaded attachments when taking a message out", async () => {
+    vi.mocked(createQueuedMessage).mockImplementationOnce(async (threadId, id, content, references) => ({
+      thread_id: threadId, id, content, references: references ?? [], state: "pending", created_at: "now", updated_at: "now",
+    }));
+    render(<QueueHarness terminalStatus="success" onRun={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "编辑第 2 条待发送消息" }));
+    expect(screen.getByText("notes.txt", { exact: true })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "发送" }));
+    const calls = vi.mocked(createQueuedMessage).mock.calls;
+    expect(calls[calls.length - 1][3]).toEqual([
+      expect.objectContaining({ source: "project", path: "C:/workspace/README.md" }),
+      expect.objectContaining({ source: "upload", path: "C:/uploads/notes.txt" }),
+    ]);
+  });
+
+  it("sends a taken-out draft as a normal new Turn when no Turn is running", async () => {
+    const onRun = vi.fn();
+    render(<QueueHarness terminalStatus="paused" onRun={onRun} />);
+    fireEvent.click(screen.getByRole("button", { name: "结束当前 Turn" }));
+    await userEvent.click(screen.getByRole("button", { name: "编辑第 1 条待发送消息" }));
+    await userEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
+    expect(onRun.mock.calls[0][0]).toEqual(expect.objectContaining({ prompt: "第一条 @README.md", resume: false }));
+    expect(onRun.mock.calls[0][0].queuedDelivery).toBeUndefined();
+    expect(screen.getByTestId("queued-count")).toHaveTextContent("1");
   });
 
   it("creates a child Turn for a paused Turn with a draft", async () => {

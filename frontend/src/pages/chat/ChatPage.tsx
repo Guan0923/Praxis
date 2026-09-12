@@ -780,8 +780,8 @@ export default function ChatPage({
         onStop={queuedMessageFlow.pauseOrSteer}
         onSend={() => void send()}
         actionMode={actionMode}
-        submitDisabled={sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || composerActionState.disabled || (sendPending && actionMode === "send")}
-        disabled={sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly}
+        submitDisabled={queuedMessageFlow.takingOutMessage || sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || composerActionState.disabled || (sendPending && actionMode === "send")}
+        disabled={queuedMessageFlow.takingOutMessage || sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly}
         disabledReason={sandboxBlocked
           ? sandboxHealth.phase === "checking" ? "正在检查沙箱 Broker" : "沙箱 Broker 不可用"
           : sessionReadOnly ? ownership === "unknown" ? "正在确认窗口操作权" : "当前 session 正在另一个窗口对话"

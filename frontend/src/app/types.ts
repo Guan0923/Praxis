@@ -43,5 +43,4 @@ export interface QueuedMessage {
   updated_at: string;
   saving?: boolean;
   error?: string;
-  editing?: boolean;
 }
