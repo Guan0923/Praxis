@@ -3,6 +3,7 @@
 import re
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import unquote_plus
 
 _SENSITIVE_VALUE = re.compile(
     r"(?i)\b(api[\s_-]?(?:key|token)|access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization|cookie|password|secret|token)\b"
@@ -12,6 +13,7 @@ _PRIVATE_HEADER = re.compile(r"(?im)\b(cookie|set-cookie|authorization|proxy-aut
 _URL_CREDENTIALS = re.compile(r"(?i)(https?://)[^\s/@]+@")
 _BEARER = re.compile(r"(?i)\bBearer\s+[^\s,;\"']+")
 _SECRET_KEY = re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_-]{16,}\b")
+_QUERY_VALUE = re.compile(r"([?&])([^=&#\s]+)=([^&#\s\"'<>]*)")
 _REPORT_LIMIT = 64 * 1024
 
 
@@ -37,6 +39,14 @@ def root_error(error: BaseException) -> BaseException:
 def redact_sensitive_text(value: str) -> str:
     """Redact credential-shaped values from one externally visible string."""
 
+    value = _QUERY_VALUE.sub(
+        lambda match: (
+            match.group(1) + match.group(2) + "=[REDACTED]"
+            if re.search(r"auth|cookie|key|token|secret|credential", unquote_plus(match.group(2)), re.IGNORECASE)
+            else match.group(0)
+        ),
+        value,
+    )
     value = _URL_CREDENTIALS.sub(r"\1[REDACTED]@", value)
     value = _PRIVATE_HEADER.sub(lambda match: match.group(1) + match.group(2) + "[REDACTED]", value)
     value = _BEARER.sub("Bearer [REDACTED]", value)

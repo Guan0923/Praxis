@@ -25,10 +25,7 @@ const api = vi.hoisted(() => ({
   deleteSkill: vi.fn(),
   getMcpSettings: vi.fn(),
   setMcpEnabled: vi.fn(),
-  createMcpServer: vi.fn(),
-  updateMcpServer: vi.fn(),
-  setMcpServerEnabled: vi.fn(),
-  deleteMcpServer: vi.fn(),
+  saveMcpSettings: vi.fn(),
   testMcpServer: vi.fn(),
 }));
 
@@ -142,7 +139,7 @@ describe("UserSettingsModal", () => {
     api.updateProviderConfig.mockResolvedValue(settings.provider_config);
     api.discoverProviderModels.mockResolvedValue({ models: [] });
     api.getSkillSettings.mockResolvedValue({ enabled: true, skills: [] });
-    api.getMcpSettings.mockResolvedValue({ enabled: false, servers: [] });
+    api.getMcpSettings.mockResolvedValue({ enabled: false, mcpServers: {} });
   });
 
   it("renders the settings spinner inside the full content-area loading container", () => {

@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import httpx
+import httpx2
 import pytest
 
 from backend.mcp.client import start_external_tools
@@ -26,7 +27,7 @@ LEGACY_PYTHON = Path(os.environ.get("PRAXIS_MCP_V1_PYTHON", str(ROOT / ".tmp-mcp
 
 
 @contextmanager
-def peer(era="modern", transport="stdio", *, token=None, only=None):
+def peer(era="modern", transport="stdio", *, token=None, only=None, query=None):
     python = sys.executable if era == "modern" else str(LEGACY_PYTHON)
     if era == "legacy" and not Path(python).exists():
         pytest.skip("Install the isolated MCP v1 test environment or set PRAXIS_MCP_V1_PYTHON")
@@ -35,6 +36,8 @@ def peer(era="modern", transport="stdio", *, token=None, only=None):
         env["MCP_TEST_ONLY"] = only
     if token:
         env["MCP_TEST_TOKEN"] = token
+    if query:
+        env["MCP_TEST_QUERY"] = query
     if transport == "stdio":
         yield McpServerConfig("fixture", python, (str(SCRIPT),), env=env)
         return
@@ -42,7 +45,7 @@ def peer(era="modern", transport="stdio", *, token=None, only=None):
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     process = subprocess.Popen(
-        [python, str(SCRIPT), "--port", str(port)],
+        [python, str(SCRIPT), "--port", str(port), "--transport", transport],
         env={**os.environ, **env},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -62,8 +65,8 @@ def peer(era="modern", transport="stdio", *, token=None, only=None):
                 if time.monotonic() > deadline:
                     raise RuntimeError("MCP HTTP fixture did not start")
                 time.sleep(0.02)
-        path = "/mcp/" if era == "legacy" else "/mcp"
-        yield McpServerConfig("fixture", transport="streamable_http", url=url + path)
+        path = "/sse" if transport == "sse" else ("/mcp/" if era == "legacy" else "/mcp")
+        yield McpServerConfig("fixture", transport="sse" if transport == "sse" else "streamable_http", url=url + path)
     finally:
         process.terminate()
         try:
@@ -233,7 +236,7 @@ def test_connection_rebuild_preserves_subscription_gap(era):
 @pytest.mark.parametrize("era", ["modern", "legacy"])
 def test_real_http_auth_and_no_redirects(era, monkeypatch):
     with peer(era, "http", token="test-only-credential") as config:
-        with pytest.raises(ToolError):
+        with pytest.raises(httpx2.HTTPStatusError, match="401"):
             start_external_tools((config,))
         monkeypatch.setenv("MCP_TEST_AUTH", "test-only-credential")
         authenticated = replace(config, header_refs={"Authorization": "env://MCP_TEST_AUTH"})
@@ -243,7 +246,7 @@ def test_real_http_auth_and_no_redirects(era, monkeypatch):
         finally:
             resources.close()
         redirect = replace(authenticated, url=config.url.split("/mcp")[0] + "/redirect")
-        with pytest.raises(ToolError) as failure:
+        with pytest.raises(httpx2.HTTPStatusError, match="307") as failure:
             start_external_tools((redirect,))
         assert "test-only-credential" not in str(failure.value)
 

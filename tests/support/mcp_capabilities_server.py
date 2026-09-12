@@ -198,8 +198,20 @@ else:
     server.get_capabilities = capabilities
 
 
-def http_app():
-    if MODERN:
+def http_app(transport="streamableHttp"):
+    if transport == "sse":
+        from mcp.server.sse import SseServerTransport
+        from starlette.responses import Response
+
+        sse = SseServerTransport("/messages/")
+
+        async def connect(request):
+            async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
+                await server.run(*streams, server.create_initialization_options())
+            return Response()
+
+        app = Starlette(routes=[Route("/sse", connect), Mount("/messages/", app=sse.handle_post_message)])
+    elif MODERN:
         app = server.streamable_http_app()
     else:
         from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -223,7 +235,10 @@ def http_app():
 
     async def auth(request, call_next):
         token = os.environ.get("MCP_TEST_TOKEN")
-        if token and request.url.path.startswith("/mcp") and request.headers.get("authorization") != token:
+        query = os.environ.get("MCP_TEST_QUERY")
+        if query and request.url.path.startswith("/mcp") and request.scope["query_string"].decode() != query:
+            return PlainTextResponse("Incorrect query", status_code=401)
+        if token and request.url.path != "/health" and request.headers.get("authorization") != token:
             return PlainTextResponse("Unauthorized", status_code=401)
         return await call_next(request)
 
@@ -239,8 +254,9 @@ async def stdio_main():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int)
+    parser.add_argument("--transport", default="streamableHttp")
     args = parser.parse_args()
     if args.port:
-        uvicorn.run(http_app(), host="127.0.0.1", port=args.port, log_level="error", access_log=False)
+        uvicorn.run(http_app(args.transport), host="127.0.0.1", port=args.port, log_level="error", access_log=False)
     else:
         asyncio.run(stdio_main())

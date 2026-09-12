@@ -8,7 +8,7 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import urlsplit
 
 from backend.configuration import ClientPaths, ConfigurationError, section
 from backend.tools import ToolError
@@ -31,8 +31,6 @@ _KEYRING_REFERENCE_PATTERN = re.compile(r"^keyring://(?P<service>[A-Za-z0-9_.-]+
 class McpSettings:
     """Finite time limits for external MCP lifecycle operations."""
 
-    initialization_timeout_seconds: float = 15.0
-    call_timeout_seconds: float = 60.0
     shutdown_timeout_seconds: float = 5.0
     health_failure_threshold: int = 3
     rebuild_failure_threshold: int = 3
@@ -41,8 +39,6 @@ class McpSettings:
     def from_config(cls, values: Mapping[str, object]) -> McpSettings:
         configured = section(values, "mcp")
         return cls(
-            initialization_timeout_seconds=_positive_number(configured, "initialization_timeout_seconds", 15.0),
-            call_timeout_seconds=_positive_number(configured, "call_timeout_seconds", 60.0),
             shutdown_timeout_seconds=_positive_number(configured, "shutdown_timeout_seconds", 5.0),
             health_failure_threshold=_positive_integer(configured, "health_failure_threshold", 3),
             rebuild_failure_threshold=_positive_integer(configured, "rebuild_failure_threshold", 3),
@@ -62,12 +58,18 @@ class McpServerConfig:
     url: str | None = None
     headers: dict[str, str] | None = None
     header_refs: dict[str, str] | None = None
+    timeout: float = 30.0
+    url_ref: str | None = None
 
     def __post_init__(self) -> None:
+        if isinstance(self.timeout, bool) or not math.isfinite(self.timeout) or self.timeout <= 0:
+            raise ToolError("MCP timeout must be a positive number of seconds.")
+        if self.url_ref is not None and _parse_secret_reference(self.url_ref) is None:
+            raise ToolError("Invalid MCP URL credential reference.")
         if self.transport == "stdio":
             if not self.command.strip() or self.url is not None or self.headers or self.header_refs:
                 raise ToolError("stdio requires a command and cannot include HTTP fields.")
-        elif self.transport == "streamable_http":
+        elif self.transport in {"streamable_http", "sse"}:
             if self.command or self.args or self.cwd is not None or self.env or self.env_refs:
                 raise ToolError("HTTP connections cannot include command or environment fields.")
             validate_http_url(self.url)
@@ -159,7 +161,7 @@ def read_server_configs(path: Path, *, reject_plaintext_secrets: bool = False) -
         cwd, env, enabled = value.get("cwd"), value.get("env"), value.get("enabled", True)
         env_refs = value.get("env_refs")
         transport = value.get("transport", "stdio")
-        if transport == "streamable_http":
+        if transport in {"streamable_http", "sse"}:
             if not isinstance(enabled, bool) or not isinstance(args, list):
                 raise ToolError("Invalid MCP HTTP configuration.")
             result.append(
@@ -175,6 +177,8 @@ def read_server_configs(path: Path, *, reject_plaintext_secrets: bool = False) -
                     url=value.get("url"),
                     headers=value.get("headers"),
                     header_refs=value.get("header_refs"),
+                    timeout=value.get("timeout", 30.0),
+                    url_ref=value.get("url_ref"),
                 )
             )
             continue
@@ -229,6 +233,7 @@ def read_server_configs(path: Path, *, reject_plaintext_secrets: bool = False) -
                 plain_values or None,
                 enabled,
                 references or None,
+                timeout=value.get("timeout", 30.0),
             )
         )
     return tuple(result)
@@ -281,10 +286,9 @@ def validate_http_url(value: str | None) -> None:
             raise ValueError
         if parsed.port is not None and not 0 < parsed.port <= 65535:
             raise ValueError
-        if any(sensitive_header_name(key) for key, _ in parse_qsl(parsed.query)):
-            raise ValueError
+
     except ValueError as exc:
-        raise ToolError("MCP URL must be HTTP(S), without credentials, secret query parameters or fragments.") from exc
+        raise ToolError("MCP URL must be HTTP(S), without user info or fragments.") from exc
 
 
 def validate_headers(headers: dict[str, str], references: dict[str, str]) -> None:

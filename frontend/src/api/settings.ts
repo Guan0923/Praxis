@@ -124,42 +124,23 @@ export interface SkillSettingsResponse {
   skills: SkillSettingsItem[];
 }
 
-export interface McpSecretStatus {
-  name: string;
-  configured: boolean;
-}
-
-export interface McpServerSettings {
-  transport: "stdio" | "streamable_http";
-  url: string | null;
-  headers: Record<string, string>;
-  secret_headers: McpSecretStatus[];
-  name: string;
-  command: string;
-  args: string[];
-  cwd: string | null;
-  env: Record<string, string>;
-  secret_env: McpSecretStatus[];
-  enabled: boolean;
-}
-
-export interface McpSettingsResponse {
-  enabled: boolean;
-  servers: McpServerSettings[];
-}
-
-export interface McpServerInput {
-  transport: "stdio" | "streamable_http";
-  url?: string | null;
+export interface McpServerConfig {
+  type: "stdio" | "sse" | "streamableHttp";
+  disabled?: boolean;
+  timeout?: number;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  url?: string;
   headers?: Record<string, string>;
-  header_secrets?: Record<string, string>;
-  remove_header_secrets?: string[];
-  command: string;
-  args: string[];
-  cwd: string | null;
-  env: Record<string, string>;
-  secrets: Record<string, string>;
-  remove_secrets: string[];
+}
+
+export interface McpConfigDocument {
+  mcpServers: Record<string, McpServerConfig>;
+}
+
+export interface McpSettingsResponse extends McpConfigDocument {
   enabled: boolean;
 }
 
@@ -215,32 +196,12 @@ export function setMcpEnabled(enabled: boolean): Promise<McpSettingsResponse> {
   });
 }
 
-export function createMcpServer(values: McpServerInput & { name: string }): Promise<McpServerSettings> {
-  return requestJson<McpServerSettings>("/api/settings/mcp/servers", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(values),
-  });
-}
-
-export function updateMcpServer(name: string, values: McpServerInput): Promise<McpServerSettings> {
-  return requestJson<McpServerSettings>(`/api/settings/mcp/servers/${encodeURIComponent(name)}`, {
+export function saveMcpSettings(document: McpConfigDocument): Promise<McpSettingsResponse> {
+  return requestJson<McpSettingsResponse>("/api/settings/mcp", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(values),
+    body: JSON.stringify(document),
   });
-}
-
-export function setMcpServerEnabled(name: string, enabled: boolean): Promise<McpServerSettings> {
-  return requestJson<McpServerSettings>(`/api/settings/mcp/servers/${encodeURIComponent(name)}/enabled`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ enabled }),
-  });
-}
-
-export function deleteMcpServer(name: string): Promise<void> {
-  return requestVoid(`/api/settings/mcp/servers/${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 
 export interface McpConnectionTest {

@@ -56,7 +56,7 @@ def test_project_mcp_file_is_ignored(tmp_path: Path) -> None:
 @pytest.mark.parametrize("value", [0, -1, float("inf"), "10", True])
 def test_mcp_timeouts_require_finite_positive_numbers(value: object) -> None:
     with pytest.raises(ConfigurationError, match="finite positive"):
-        McpSettings.from_config({"mcp": {"call_timeout_seconds": value}})
+        McpSettings.from_config({"mcp": {"shutdown_timeout_seconds": value}})
 
 
 def test_user_mcp_servers_are_started_and_project_file_is_ignored(tmp_path: Path, monkeypatch) -> None:
@@ -175,7 +175,8 @@ def test_mcp_initialization_timeout_has_stable_error(monkeypatch) -> None:
 
 def test_mcp_call_timeout_has_stable_error(monkeypatch) -> None:
     manager = object.__new__(mcp_client.ExternalMcpManager)
-    manager._settings = McpSettings(call_timeout_seconds=0.01)
+    manager._settings = McpSettings()
+    manager._configs = (mcp_client.McpServerConfig("demo", "demo-server", timeout=0.01),)
     manager._sessions = {"demo": SimpleNamespace(call_tool=lambda *_args: object())}
 
     def timeout(*_args, **_kwargs):

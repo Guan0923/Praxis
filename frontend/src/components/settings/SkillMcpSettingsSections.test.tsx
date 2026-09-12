@@ -1,5 +1,5 @@
 import { App as AntApp } from "antd";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { McpSettingsSection } from "./McpSettingsSection";
@@ -13,10 +13,7 @@ const api = vi.hoisted(() => ({
   deleteSkill: vi.fn(),
   getMcpSettings: vi.fn(),
   setMcpEnabled: vi.fn(),
-  createMcpServer: vi.fn(),
-  updateMcpServer: vi.fn(),
-  setMcpServerEnabled: vi.fn(),
-  deleteMcpServer: vi.fn(),
+  saveMcpSettings: vi.fn(),
   testMcpServer: vi.fn(),
 }));
 
@@ -35,17 +32,9 @@ const skillSettings = {
   }],
 };
 
-const mcpServer = {
-  name: "trace",
-  command: "python",
-  args: ["server.py"],
-  cwd: null,
-  env: { MODE: "test" },
-  secret_env: [{ name: "API_TOKEN", configured: true }],
-  enabled: true,
-};
-
-const mcpSettings = { enabled: false, servers: [mcpServer] };
+const mcpSettings = { enabled: false, mcpServers: {
+  trace: { type: "stdio", command: "python", args: ["server.py"], env: { TOKEN: "<stored-secret>" } },
+} };
 
 function renderWithApp(node: React.ReactNode) {
   return render(<AntApp>{node}</AntApp>);
@@ -105,96 +94,56 @@ describe("McpSettingsSection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.getMcpSettings.mockResolvedValue(structuredClone(mcpSettings));
+    api.saveMcpSettings.mockResolvedValue(structuredClone(mcpSettings));
     api.setMcpEnabled.mockResolvedValue({ ...structuredClone(mcpSettings), enabled: true });
-    api.setMcpServerEnabled.mockResolvedValue({ ...structuredClone(mcpServer), enabled: false });
-    api.createMcpServer.mockResolvedValue(structuredClone(mcpServer));
-    api.updateMcpServer.mockResolvedValue(structuredClone(mcpServer));
-    api.deleteMcpServer.mockResolvedValue(undefined);
-    api.testMcpServer.mockResolvedValue({ tools: ["mcp_trace_inspect_trace"], count: 1, protocol_version: "2026-07-28", capabilities: ["tools"], counts: { tools: 1, resources: 0, resource_templates: 0, prompts: 0 } });
+    api.testMcpServer.mockResolvedValue({ protocol_version: "test", counts: { tools: 1, resources: 0, resource_templates: 0, prompts: 0 } });
   });
 
-  it("shows redacted secret state and tests the saved connection", async () => {
+  it("loads protected JSON and tests a saved server", async () => {
     renderWithApp(<McpSettingsSection />);
-    expect(await screen.findByText("trace")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "启用 MCP" })).not.toBeChecked();
-
-    await userEvent.click(screen.getByRole("button", { name: /trace/ }));
-    expect(await screen.findByText("已配置")).toBeInTheDocument();
-    expect(screen.getByLabelText("MCP 密钥变量值 1")).toHaveValue("");
-    await userEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    await screen.findByText("trace");
+    expect(screen.getByLabelText("MCP JSON 配置")).toHaveValue(JSON.stringify({ mcpServers: mcpSettings.mcpServers }, null, 2));
+    await userEvent.click(screen.getByRole("button", { name: "测试连接 trace" }));
     await waitFor(() => expect(api.testMcpServer).toHaveBeenCalledWith("trace"));
+    await screen.findByText(/连接成功/);
   });
 
-  it("updates the explicit secret removal state immediately", async () => {
+  it("saves the whole document and does not test stale settings", async () => {
     renderWithApp(<McpSettingsSection />);
     await screen.findByText("trace");
-    await userEvent.click(screen.getByRole("button", { name: /trace/ }));
-
-    const secretInput = await screen.findByLabelText("MCP 密钥变量值 1");
-    await userEvent.click(screen.getByRole("button", { name: /清\s*除/ }));
-    expect(await screen.findByText("待清除")).toBeInTheDocument();
-    expect(secretInput).toBeDisabled();
-
-    await userEvent.click(screen.getByRole("button", { name: /撤\s*销\s*清\s*除/ }));
-    expect(await screen.findByText("已配置")).toBeInTheDocument();
-    expect(secretInput).not.toBeDisabled();
+    const document = { mcpServers: { remote: { type: "sse", url: "http://127.0.0.1:1234/sse", headers: { Authorization: "test-token" } } } };
+    fireEvent.change(screen.getByLabelText("MCP JSON 配置"), { target: { value: JSON.stringify(document) } });
+    expect(screen.getByRole("button", { name: "测试连接 trace" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: /保存配置/ }));
+    await waitFor(() => expect(api.saveMcpSettings).toHaveBeenCalledWith(document));
+    await waitFor(() => expect(screen.getByLabelText("MCP JSON 配置")).not.toHaveValue(JSON.stringify(document)));
   });
 
-  it("creates a structured server and immediately persists switches", async () => {
+  it("keeps a draft when toggling the global switch and can discard it", async () => {
     renderWithApp(<McpSettingsSection />);
     await screen.findByText("trace");
-
+    fireEvent.change(screen.getByLabelText("MCP JSON 配置"), { target: { value: "draft" } });
     await userEvent.click(screen.getByRole("switch", { name: "启用 MCP" }));
     await waitFor(() => expect(api.setMcpEnabled).toHaveBeenCalledWith(true));
-    await userEvent.click(screen.getByRole("switch", { name: "启用 MCP Server trace" }));
-    await waitFor(() => expect(api.setMcpServerEnabled).toHaveBeenCalledWith("trace", false));
-
-    await userEvent.click(screen.getByRole("button", { name: /新增 MCP Server/ }));
-    await userEvent.type(screen.getByLabelText("MCP Server 名称"), "local");
-    await userEvent.type(screen.getByLabelText("MCP Command new"), "python");
-    await userEvent.click(screen.getByRole("button", { name: "创建 Server" }));
-    await waitFor(() => expect(api.createMcpServer).toHaveBeenCalledWith(expect.objectContaining({
-      name: "local",
-      command: "python",
-      args: [],
-      env: {},
-      secrets: {},
-      enabled: true,
-    })));
+    expect(screen.getByLabelText("MCP JSON 配置")).toHaveValue("draft");
+    await userEvent.click(screen.getByRole("button", { name: /撤销修改/ }));
+    expect(screen.getByLabelText("MCP JSON 配置")).toHaveValue(JSON.stringify({ mcpServers: mcpSettings.mcpServers }, null, 2));
   });
 
-  it("creates an HTTP connection without carrying hidden command fields", async () => {
+  it("reports invalid JSON without echoing its contents", async () => {
     renderWithApp(<McpSettingsSection />);
     await screen.findByText("trace");
-    await userEvent.click(screen.getByRole("button", { name: /新增 MCP Server/ }));
-    await userEvent.type(screen.getByLabelText("MCP Server 名称"), "remote");
-    await userEvent.type(screen.getByLabelText("MCP Command new"), "discard-this-command");
-    await userEvent.click(screen.getByText("Streamable HTTP", { exact: true }));
-    await userEvent.type(screen.getByLabelText("MCP URL new"), "http://127.0.0.1:19999/mcp");
-    expect(await screen.findByText("HTTP 会明文传输请求头和内容。")).toBeInTheDocument();
-    expect(screen.queryByLabelText("MCP Command new")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /添加密钥请求头/ }));
-    await userEvent.type(screen.getByLabelText("MCP 密钥请求头名称 1"), "Authorization");
-    await userEvent.type(screen.getByLabelText("MCP 密钥请求头值 1"), "test-only-token");
-    await userEvent.click(screen.getByRole("button", { name: "创建 Server" }));
-    await waitFor(() => expect(api.createMcpServer).toHaveBeenCalledWith(expect.objectContaining({
-      transport: "streamable_http", command: "", env: {}, secrets: {},
-      url: "http://127.0.0.1:19999/mcp", header_secrets: { Authorization: "test-only-token" },
-    })));
+    fireEvent.change(screen.getByLabelText("MCP JSON 配置"), { target: { value: "invalid-secret-json" } });
+    await userEvent.click(screen.getByRole("button", { name: /保存配置/ }));
+    await screen.findByText("JSON 格式错误，请检查引号、逗号和括号。");
+    expect(api.saveMcpSettings).not.toHaveBeenCalled();
   });
 
-  it("retains and explicitly clears saved HTTP credentials", async () => {
-    api.getMcpSettings.mockResolvedValue({ enabled: true, servers: [{
-      ...mcpServer, transport: "streamable_http", command: "", args: [], env: {}, secret_env: [],
-      url: "https://example.test/mcp", headers: {}, secret_headers: [{ name: "authorization", configured: true }],
-    }] });
+  it("displays the original connection failure", async () => {
+    api.testMcpServer.mockRejectedValue(new Error("Connection refused"));
     renderWithApp(<McpSettingsSection />);
     await screen.findByText("trace");
-    await userEvent.click(screen.getByRole("button", { name: /trace/ }));
-    expect(await screen.findByLabelText("MCP 密钥请求头值 1")).toHaveValue("");
-    await userEvent.click(screen.getByRole("button", { name: "保存 Server" }));
-    await waitFor(() => expect(api.updateMcpServer).toHaveBeenCalledWith("trace", expect.objectContaining({
-      header_secrets: {}, remove_header_secrets: [],
-    })));
+    await userEvent.click(screen.getByRole("button", { name: "测试连接 trace" }));
+    await screen.findByText("Connection refused");
   });
 });

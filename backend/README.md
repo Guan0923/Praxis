@@ -33,7 +33,7 @@ src/
 ├─ api/            FastAPI 装配、Origin 防护、HTTP/SSE 路由
 ├─ domain/         无外层依赖的消息、计划、会话、Skill 与运行状态
 ├─ jobs/           本地后台 Job 注册和生命周期
-├─ mcp/            审批型外部 MCP 客户端（stdio / Streamable HTTP）
+├─ mcp/            审批型外部 MCP 客户端（stdio / SSE / Streamable HTTP）
 ├─ observability/  日志、指标与递归脱敏
 ├─ planning/       Planner、上下文与模型请求生命周期
 ├─ providers/      通用 transport 和 Provider 适配
@@ -83,9 +83,43 @@ src/
 
 ## MCP 客户端
 
-Praxis 只作为 MCP 客户端使用外部工具、资源与提示词，不提供 MCP 服务端命令。在设置页选择本地命令或 Streamable HTTP；SDK 自动优先使用 `2026-07-28` 并兼容旧版初始化协议。
+Praxis 只作为 MCP 客户端使用外部工具、资源与提示词，不提供 MCP 服务端命令。设置页直接编辑整份 JSON，保存会替换全部服务器配置；删除条目即删除服务器及其托管凭据。
 
-HTTP 请求头中的 Token 和 API Key 存入 OS 凭据库，配置只保存引用。HTTP 可明文传输内容；HTTPS 校验证书，连接不自动跟随重定向。不提供 OAuth 或旧 SSE 连接。
+```json
+{
+  "mcpServers": {
+    "local": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/absolute/path/server.js"],
+      "env": {"TOKEN": "your-token"},
+      "timeout": 30,
+      "disabled": false
+    },
+    "remote": {
+      "type": "streamableHttp",
+      "url": "https://example.com/mcp?apiKey=your-key",
+      "headers": {"Authorization": "your-original-authorization-value"}
+    },
+    "events": {
+      "type": "sse",
+      "url": "http://127.0.0.1:8080/sse"
+    }
+  }
+}
+```
+
+- 必填 `type`：`stdio`、`sse`、`streamableHttp`。
+- `stdio` 必填 `command`；`args` 默认 `[]`，`env` 默认 `{}`，`cwd` 默认用户家目录。相对脚本路径相对于此目录。
+- 两种 HTTP 连接必填 `url`，可选 `headers`（默认 `{}`）。URL 查询参数保持原样，请求头值不添加 Bearer 前缀或做其他编码。
+- `timeout` 是每台服务器初始化和单次调用的超时秒数，默认 30，必须是有限正数。
+- `disabled` 默认 false。总开关和配置修改影响下一次运行，不修改正在运行的连接。
+- 测试使用已保存配置，忽略总开关和该服务器的 disabled，测试完成后关闭连接。有未保存修改时需先保存。
+- 不支持 `requestInit`。协议管理的请求头（例如 Host、Content-Length、MCP-Protocol-Version）不能由配置覆盖。
+
+敏感环境变量、认证请求头和 URL 密钥存入 OS 凭据库，TOML 配置只保存引用。编辑器回读以 `<stored-secret>` 标记已保存的密钥：原样保留即沿用，输入新值即替换，删除字段即删除。修改含占位符的 URL 时须重新粘贴完整 URL；不同服务器不能复用占位符。普通请求头名称按 HTTP 不区分大小写的规则统一保存为小写。
+
+HTTP 可明文传输内容；HTTPS 校验证书，连接不自动跟随重定向。不提供 OAuth。错误保留连接失败详情，URL 中的密钥和认证信息不会出现在返回的错误或 HTTP 传输日志中。
 
 资源和提示词通过审批型 Agent 工具按需读取。订阅只在当前运行内有效，更新只记录 URI，Agent 检查后决定是否重读；外部提示词不会覆盖系统消息。
 

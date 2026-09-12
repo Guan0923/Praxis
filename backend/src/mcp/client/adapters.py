@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import BaseModel
@@ -55,7 +56,7 @@ def _parameters(server: McpServerConfig) -> StdioServerParameters:
     return StdioServerParameters(
         command=server.command,
         args=list(server.args),
-        cwd=server.cwd,
+        cwd=server.cwd or str(Path.home()),
         env=environment,
     )
 

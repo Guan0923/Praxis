@@ -83,7 +83,7 @@ class ExternalMcpManager:
         self._closed = False
         self._thread.start()
         try:
-            self.definitions = self._submit(self._start(), timeout=self._settings.initialization_timeout_seconds)
+            self.definitions = self._submit(self._start())
             self._register_service_jobs()
         except Exception:
             try:
@@ -143,7 +143,7 @@ class ExternalMcpManager:
         task = asyncio.create_task(self._serve(server, ready))
         self._connections[server.name] = task
         try:
-            return await ready
+            return await asyncio.wait_for(ready, timeout=server.timeout)
         except BaseException:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
@@ -160,7 +160,7 @@ class ExternalMcpManager:
                 mode="auto",
                 cache=None,
                 message_handler=subscriptions.notification,
-                read_timeout_seconds=self._settings.call_timeout_seconds,
+                read_timeout_seconds=server.timeout,
             ) as client:
                 self._sessions[server.name] = client
                 self.capabilities[server.name] = client.server_capabilities
@@ -208,7 +208,7 @@ class ExternalMcpManager:
         try:
             definitions = self._submit(
                 self._open_server(self._server_config(server_name)),
-                timeout=self._settings.initialization_timeout_seconds,
+                timeout=self._server_config(server_name).timeout + self._settings.shutdown_timeout_seconds,
             )
             self.definitions[server_name] = definitions
             self.failed_servers.pop(server_name, None)
@@ -246,7 +246,7 @@ class ExternalMcpManager:
         try:
             result = self._submit(
                 self._sessions[server_name].call_tool(tool_name, arguments),
-                timeout=self._settings.call_timeout_seconds,
+                timeout=self._server_config(server_name).timeout,
                 context=context,
             )
         except FutureTimeoutError as exc:
@@ -278,7 +278,7 @@ class ExternalMcpManager:
 
     def request(self, server: str, method: str, **arguments: Any) -> str:
         try:
-            return self._submit(self._request(server, method, arguments), timeout=self._settings.call_timeout_seconds)
+            return self._submit(self._request(server, method, arguments), timeout=self._server_config(server).timeout)
         except Exception as exc:
             if isinstance(exc, ToolError):
                 raise
@@ -310,7 +310,7 @@ class ExternalMcpManager:
         return render_mcp_value(result)
 
     def describe(self, server: str) -> dict[str, Any]:
-        return self._submit(self._describe(server), timeout=self._settings.initialization_timeout_seconds)
+        return self._submit(self._describe(server), timeout=self._server_config(server).timeout)
 
     async def _describe(self, server: str) -> dict[str, Any]:
         client = self._sessions[server]
@@ -372,7 +372,7 @@ class ExternalMcpManager:
             job = ServiceJob(
                 self._job_registry.new_job_id(),
                 _McpServiceDriver(self, server_name),
-                init_timeout_seconds=self._settings.initialization_timeout_seconds,
+                init_timeout_seconds=self._server_config(server_name).timeout,
                 max_failures=self._settings.health_failure_threshold,
                 max_restarts=self._settings.rebuild_failure_threshold,
             )
