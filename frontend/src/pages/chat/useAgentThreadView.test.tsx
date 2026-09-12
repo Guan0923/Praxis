@@ -199,7 +199,7 @@ describe("useAgentThreadView", () => {
     }
     expect(selections.every((id) => id === "thread_a_child")).toBe(true);
     expect(api.streamAgentThread).toHaveBeenCalledTimes(1);
-    expect(api.getSessionNodes).not.toHaveBeenCalled();
+    expect(api.getTurnPage).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "root" }));
     expect(screen.getByText("session_a")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "back" }));
