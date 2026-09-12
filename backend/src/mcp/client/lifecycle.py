@@ -109,10 +109,15 @@ def start_external_tools(
             pass
         raise
     if not manager.definitions and configs:
+        failures = list(manager.failed_servers.values())
         try:
             manager.close()
         except ToolError:
             pass
+        if len(failures) == 1:
+            raise failures[0]
+        if failures:
+            raise BaseExceptionGroup("External MCP server initialization failed", failures)
         raise ToolError("Cannot initialize external MCP servers: all configured servers failed.")
     tools.extend(feature_tools(manager))
     return ExternalMcpResources(tuple(tools), manager)

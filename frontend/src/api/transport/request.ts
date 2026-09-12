@@ -28,10 +28,18 @@ export async function errorDetailsFrom(res: Response): Promise<ApiErrorDetails> 
         code: typeof body.code === "string" ? body.code : undefined,
       };
     }
+    if (Array.isArray(body?.detail)) {
+      const messages = body.detail.flatMap((item: unknown) => {
+        if (!item || typeof item !== "object" || !("msg" in item) || typeof item.msg !== "string") return [];
+        const location = "loc" in item && Array.isArray(item.loc) ? item.loc.join(".") : "";
+        return [location ? `${location}: ${item.msg}` : item.msg];
+      });
+      if (messages.length) return { message: messages.join("\n") };
+    }
   } catch {
     /* fall through */
   }
-  return { message: `HTTP ${res.status}` };
+  return { message: res.statusText || "Request failed" };
 }
 
 export async function apiErrorFrom(res: Response): Promise<ApiError> {

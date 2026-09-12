@@ -264,5 +264,3 @@ def test_mcp_server(name: str, request: Request) -> dict[str, object]:
         return {"tools": tools, "count": details["counts"]["tools"], **details}
     except McpServerNotFound as exc:
         return error_response(exc, status_code=404, detail=str(exc))
-    except Exception as exc:
-        return error_response(exc, status_code=422)

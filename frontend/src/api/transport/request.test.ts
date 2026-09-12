@@ -6,6 +6,13 @@ afterEach(() => {
 });
 
 describe("requestVoid", () => {
+  it("shows field validation errors", async () => {
+    const error = await apiErrorFrom(new Response(JSON.stringify({
+      detail: [{ loc: ["body", "url"], msg: "Invalid MCP URL" }],
+    }), { status: 422 }));
+    expect(error.message).toBe("body.url: Invalid MCP URL");
+  });
+
   it("keeps the report even when detail is structured", async () => {
     const report = { type: "OSError", message: "denied", traceback: "server.py:9", winerror: 5 };
     const error = await apiErrorFrom(new Response(JSON.stringify({
