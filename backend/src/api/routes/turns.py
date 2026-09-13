@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from backend.api.error_handlers import error_response
-from backend.domain import MessageEnvelope, MessageQueueError, PlanningError
+from backend.domain import MessageEnvelope, MessageQueueError, PlanningError, QueuedMessage
 from backend.domain.execution_config import RuntimeConfigUpdate
 from backend.domain.input_message import InputMessage
 from backend.domain.message_queue import TurnStart
@@ -191,6 +191,39 @@ def create_turn(body: CreateTurnRequest, request: Request) -> dict[str, object]:
             )
             if message is None:
                 raise ValueError("Turn message is missing.")
+            thread = store.get_runtime_thread(body.session_id, body.thread_id)
+            current = (
+                store.get_node(body.session_id, thread.current_turn_id) if thread and thread.current_turn_id else None
+            )
+            if isinstance(current, RuntimeState) and current.thread_id == body.thread_id:
+                if current.status == "running":
+                    raise HTTPException(
+                        status_code=409, detail="Current Turn is running; send input through its queue."
+                    )
+                runtime = store.load_runtime(body.session_id, thread_id=body.thread_id)
+                # A copied branch anchor has no execution to resume yet.
+                if current.status == "paused" and runtime is not None:
+                    run = runtime.current_run
+                    if run is None or run.turn_id != current.id or run.thread_id != current.thread_id:
+                        raise HTTPException(status_code=409, detail="Current Turn has no resumable runtime.")
+                    if body.queued_delivery is not None:
+                        message_ids = body.queued_delivery.message_ids
+                    else:
+                        state.message_queue.create(QueuedMessage(delivery_id, body.thread_id, message))
+                        message_ids = [delivery_id]
+                    state.message_queue.dispatch(
+                        delivery_id=delivery_id,
+                        message_ids=message_ids,
+                        session_id=body.session_id,
+                        thread_id=body.thread_id,
+                        turn_id=current.id,
+                    )
+                    try:
+                        resume_turn(current.id, config, request)
+                    except Exception:
+                        state.message_queue.release_turn(current.id)
+                        raise
+                    return {**project_turn(store, current), "delivery_id": delivery_id}
             turn, config = create_initial_turn(
                 state,
                 store,

@@ -63,6 +63,21 @@ function accepted(value = turn()): Response {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Turn SSE contract", () => {
+  it("waits for the accepted input when a paused Turn is reused", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(accepted({
+      ...turn("paused"), delivery_id: "resume-input",
+    } as RuntimeStateNode)).mockResolvedValueOnce(response([
+      JSON.stringify({ type: "turn.snapshot", revision: 0, turn: turn("success") }),
+      '<SSE id="turn_1" type="success"></SSE>',
+    ]));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(streamChat("follow up", () => undefined, new AbortController().signal, {
+      sessionId: "session_1", sourceNodeId: "turn_1",
+    })).resolves.toBe("completed");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("/turn_1/stream?");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("delivery_id=resume-input");
+  });
+
   it("notifies rewind admission before receiving the new Turn baseline", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(accepted()).mockResolvedValueOnce(response([
       JSON.stringify({ type: "turn.snapshot", revision: 0, turn: turn("success") }),

@@ -315,6 +315,130 @@ def memory_queue():
     queue.close()
 
 
+@pytest.mark.parametrize("queued", [False, True])
+@pytest.mark.parametrize("terminal_status", ["success", "failed"])
+def test_paused_message_resumes_same_turn(tmp_path: Path, monkeypatch, queued: bool, terminal_status: str) -> None:
+    state = WebAppState(tmp_path / "web")
+    configure_local_model(state)
+    seen = []
+
+    class LocalPlanner:
+        name = "paused-input-test"
+
+        def decide(self, runtime):
+            seen.append([message.content for message in runtime.state.messages if message.role == "user"])
+            if terminal_status == "failed" and seen[-1][-1] == "follow up":
+                raise RuntimeError("Expected local failure.")
+            return AssistantMessage(content="done")
+
+    def application(_state, **kwargs):
+        store = session_store(state)
+        return AgentApplication(
+            AgentRunner(LocalPlanner(), ToolRegistry(kwargs["workspace"]), checkpoints=store), store
+        )
+
+    monkeypatch.setattr(chat_routes, "build_local_application", application)
+    with TestClient(create_app(state)) as client:
+        sidebar = client.post("/api/sidebar-threads", json={}).json()
+        store = session_store(state)
+        app = application(state, workspace=state.session_workspace(sidebar["session_id"]))
+        conversation = app.open_conversation(sidebar["session_id"])
+        paused = conversation.run_task("original", mode="agent", suspend_requested=lambda: True)
+        original_id = paused.turn_id
+        before = len(store.load_nodes(sidebar["session_id"]))
+        body = {"session_id": sidebar["session_id"], "thread_id": sidebar["thread_id"], "parent_id": original_id}
+        if queued:
+            message_id = str(uuid4())
+            client.post(
+                f"/api/sidebar-threads/{sidebar['thread_id']}/queued-messages",
+                json={"id": message_id, "content": "follow up", "references": []},
+            ).raise_for_status()
+            body["queued_delivery"] = {"message_ids": [message_id]}
+        else:
+            body["message"] = {"role": "user", "content": [{"type": "text", "text": "follow up"}]}
+        accepted = client.post("/api/turns", json=body)
+        assert accepted.status_code == 202, accepted.text
+        receipt = accepted.json()
+        assert receipt["id"] == original_id
+        stream = client.get(
+            f"/api/turns/{original_id}/stream",
+            params={"session_id": sidebar["session_id"], "delivery_id": receipt["delivery_id"]},
+        )
+        assert f'type="{terminal_status}"' in stream.text, stream.text
+        current = store.find_node(original_id)
+        assert current.status == terminal_status
+        assert len(store.load_nodes(sidebar["session_id"])) == before
+        assert [
+            message["content"][0]["text"] for message in current.selected_messages if message["role"] == "user"
+        ] == ["original", "follow up"]
+        assert seen == [["original", "follow up"]]
+        assert client.get(f"/api/sidebar-threads/{sidebar['thread_id']}/queued-messages").json() == []
+        next_turn = client.post(
+            "/api/turns",
+            json={
+                "session_id": sidebar["session_id"],
+                "thread_id": sidebar["thread_id"],
+                "parent_id": original_id,
+                "message": {"role": "user", "content": [{"type": "text", "text": "next turn"}]},
+            },
+        )
+        assert next_turn.status_code == 202, next_turn.text
+        assert next_turn.json()["id"] != original_id
+        client.get(f"/api/turns/{next_turn.json()['id']}/stream", params={"session_id": sidebar["session_id"]})
+        app.close()
+
+
+def test_paused_fork_resumes_independently(tmp_path: Path, monkeypatch) -> None:
+    state = WebAppState(tmp_path / "web")
+    configure_local_model(state)
+    seen = []
+
+    class LocalPlanner:
+        name = "paused-fork-test"
+
+        def decide(self, runtime):
+            seen.append((runtime.run.thread_id, runtime.run.turn_id, runtime.run.task))
+            return AssistantMessage(content="continued")
+
+    def application(_state, **kwargs):
+        store = session_store(state)
+        return AgentApplication(
+            AgentRunner(LocalPlanner(), ToolRegistry(kwargs["workspace"]), checkpoints=store), store
+        )
+
+    monkeypatch.setattr(chat_routes, "build_local_application", application)
+    with TestClient(create_app(state)) as client:
+        sidebar = client.post("/api/sidebar-threads", json={}).json()
+        store = session_store(state)
+        app = application(state, workspace=state.session_workspace(sidebar["session_id"]))
+        paused = app.open_conversation(sidebar["session_id"]).run_task(
+            "original task",
+            mode="agent",
+            suspend_requested=lambda: True,
+        )
+        original = store.load_runtime(sidebar["session_id"]).to_dict()
+        response = client.post(f"/api/turns/{paused.turn_id}/fork", json={})
+        assert response.status_code == 201, response.text
+        forked = response.json()["turn"]
+        assert forked["status"] == "paused" and forked["data"] == store.find_node(paused.turn_id).data
+        copied = store.load_runtime(sidebar["session_id"], thread_id=forked["thread_id"])
+        assert (copied.current_run.turn_id, copied.current_run.thread_id) == (forked["id"], forked["thread_id"])
+        assert copied.current_run.run_id != paused.run_id
+        for turn_id in (forked["id"], paused.turn_id):
+            resumed = client.post(f"/api/turns/{turn_id}/resume", json={})
+            assert resumed.status_code == 202, resumed.text
+            stream = client.get(f"/api/turns/{turn_id}/stream", params={"session_id": sidebar["session_id"]})
+            assert 'type="success"' in stream.text, stream.text
+            if turn_id == forked["id"]:
+                assert store.find_node(paused.turn_id).status == "paused"
+                assert store.load_runtime(sidebar["session_id"]).to_dict() == original
+        assert seen == [
+            (forked["thread_id"], forked["id"], "original task"),
+            (sidebar["thread_id"], paused.turn_id, "original task"),
+        ]
+        app.close()
+
+
 def test_memory_side_chat_runs_while_main_turn_is_running(
     tmp_path: Path, monkeypatch, memory_queue: MemoryMessageQueue
 ) -> None:

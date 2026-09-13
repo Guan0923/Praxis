@@ -206,9 +206,9 @@ export async function streamChat(
         }),
       ...executionConfig(options),
     };
-  let turn: RuntimeStateNode;
+  let turn: RuntimeStateNode & { delivery_id?: string };
   try {
-    turn = await requestJson<RuntimeStateNode>(
+    turn = await requestJson<RuntimeStateNode & { delivery_id?: string }>(
       "/api/turns",
       { ...jsonBody(body), signal, operation: { sessionId: options.sessionId, group: `thread-turn:${options.threadId ?? options.sessionId}` } },
     );
@@ -218,7 +218,7 @@ export async function streamChat(
     throw error;
   }
   return streamEndpoint(
-    `/api/turns/${encodeURIComponent(turn.id)}/stream?session_id=${encodeURIComponent(options.sessionId)}&thread_id=${encodeURIComponent(options.threadId ?? options.sessionId)}`,
+    `/api/turns/${encodeURIComponent(turn.id)}/stream?session_id=${encodeURIComponent(options.sessionId)}&thread_id=${encodeURIComponent(options.threadId ?? options.sessionId)}${turn.delivery_id ? `&delivery_id=${encodeURIComponent(turn.delivery_id)}` : ""}`,
     undefined,
     turn.id,
     onMessage,

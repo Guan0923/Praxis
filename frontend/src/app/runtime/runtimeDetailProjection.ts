@@ -266,7 +266,7 @@ export function projectTurnPath(nodes: Map<string, RuntimeTreeNode>, activeTurnI
       }
       const assistant = projectRuntimeNode(turn, run.start);
       const isLatestMessage = run.end === selected.length - 1;
-      if (assistant.compactionNotice || assistant.content || assistant.events.length || assistant.error || (turn.status === "running" && isLatestMessage)) {
+      if (assistant.compactionNotice || assistant.content || assistant.events.length || assistant.error || ((turn.status === "running" || turn.status === "paused") && isLatestMessage)) {
         result.push({
           id: `${turn.id}:message:${run.start}`,
           role: "assistant",

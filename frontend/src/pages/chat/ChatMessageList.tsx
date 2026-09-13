@@ -150,7 +150,7 @@ export function ChatMessageList({
               display={display}
               onDecision={onDecision}
               busy={interactionBusy}
-              onFork={onFork && (message.status === "success" || message.status === "failed") ? () => onFork(message.id) : undefined}
+              onFork={onFork && (message.status === "success" || message.status === "failed" || message.status === "paused") ? () => onFork(message.id) : undefined}
             />
           ))}
           {sandboxFailure ? (

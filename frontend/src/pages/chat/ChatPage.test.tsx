@@ -1834,6 +1834,29 @@ describe("ChatPage Agent Thread navigation", () => {
 });
 
 describe("ChatPage composer action matrix", () => {
+  it("allows an empty paused fork to continue without sending a new message", async () => {
+    const node = { ...turn("turn-paused-fork", "original task"), thread_id: "thread-fork", status: "paused" as const };
+    node.data[0][1].content = [];
+    const onRun = vi.fn();
+    const onFork = vi.fn();
+    const conversation: Conversation = {
+      id: "thread-fork", sessionId: node.session_id, threadId: node.thread_id, title: "fork",
+      runtimeNodes: [node], activeTurnId: node.id, lastNodeId: node.id, messagesLoaded: true,
+      messages: projectTurnPath(new Map([[`${node.session_id}:${node.id}`, node]]), node.id),
+    };
+    render(<AntApp><ChatPage
+      conversation={conversation} onUpdate={() => undefined} onNew={async () => conversation.id}
+      onNavigate={() => undefined} onRun={onRun} onFork={onFork}
+    /></AntApp>);
+    expect(await screen.findByRole("button", { name: "Fork" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+    expect(onFork).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    await waitFor(() => expect(onRun).toHaveBeenCalledWith(expect.objectContaining({
+      resume: true, sourceNodeId: node.id, prompt: null,
+    })));
+  });
+
   it.each([
     ["running", true, "send", false],
     ["running", false, "pause", false],

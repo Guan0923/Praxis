@@ -21,7 +21,7 @@ from backend.domain.runtime_state import (
     utc_iso,
 )
 from backend.domain.runtime_state import RuntimeState as TreeRuntimeState
-from backend.domain.state import utc_now
+from backend.domain.state import new_run_id, utc_now
 
 
 @dataclass
@@ -625,7 +625,20 @@ class SQLiteNodeMixin:
         forked = RuntimeStateTree([parent]).fork(
             source, id=new_turn_id or new_node_id(), thread_id=thread_id or new_thread_id()
         )
+        runtime = (
+            self.load_runtime(source.session_id, thread_id=source.thread_id) if source.status == "paused" else None
+        )
+        if runtime is not None:
+            run = runtime.current_run
+            if run is None or run.turn_id != source.id or run.thread_id != source.thread_id:
+                raise ValueError("The paused Turn does not match its saved runtime.")
+            runtime.thread_id = forked.thread_id
+            run.thread_id = forked.thread_id
+            run.turn_id = forked.id
+            run.run_id = new_run_id()
         self.create_finalized_nodes([forked])
+        if runtime is not None:
+            self.save_runtime(runtime)
         return forked
 
     def build_side_chat_anchor(
