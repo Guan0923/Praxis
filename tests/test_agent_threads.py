@@ -2032,7 +2032,7 @@ def test_real_http_sse_queue_subagents_persist_model_trace(
                     child_turn.current_data_idx,
                 )
                 assert trace is not None and trace.thread_id == child.thread_id
-                assert [entry.role for entry in trace.items] == ["user", "assistant"]
+                assert [entry.role for entry in trace.items] == ["user", "developer", "assistant"]
                 assert trace.items[-1].item.get("text") == "child answered through local HTTP"
             assert model_calls == ["subagent-trace-test"] * len(children)
 
@@ -2083,7 +2083,7 @@ def test_real_http_sse_queue_subagents_persist_model_trace(
             )
             assert follow_up_trace is not None
             assert follow_up_trace.thread_id == target.thread_id
-            assert [entry.role for entry in follow_up_trace.items] == ["user", "assistant"]
+            assert [entry.role for entry in follow_up_trace.items] == ["user", "developer", "assistant"]
             assert follow_up_trace.items[-1].item.get("text") == "child answered through local HTTP"
     finally:
         state.close()

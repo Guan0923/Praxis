@@ -28,8 +28,11 @@ class _FinalizationMixin:
                     for item in message.get("content", []):
                         if item.get("status") == "running":
                             item["status"] = "failed"
+                items = saved.assistant_items if saved.selected_messages[-1]["role"] == "assistant" else []
+                saved = saved.with_assistant_items([*items, self.terminal_error])
                 saved.status = "failed"
                 self.store.finalize_node(saved)
+                self.assistant = self.last_node = saved
         except Exception:
             logging.getLogger(__name__).error(
                 "Unable to seal the interrupted durable Turn; restart recovery is required."

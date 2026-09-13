@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from typing import Protocol
+from typing import Any, Protocol
 
 from backend.domain import TurnTrace
 from backend.domain.runtime_state import NodeFrame, RuntimeState
@@ -74,6 +74,29 @@ class _CanonicalRuntimeStore:
 
     def initialize_turn_trace(self, _session_id: str, trace: TurnTrace) -> TurnTrace:
         return getattr(self.store, "initialize_turn_trace")(self.session_id, trace)
+
+    def append_turn_trace_item(
+        self,
+        _session_id: str,
+        turn_id: str,
+        data_idx: int,
+        *,
+        message_idx: int,
+        item_idx: int,
+        role: str,
+        item: dict[str, Any],
+        completed_at: str,
+    ) -> TurnTrace | None:
+        return getattr(self.store, "append_turn_trace_item")(
+            self.session_id,
+            turn_id,
+            data_idx,
+            message_idx=message_idx,
+            item_idx=item_idx,
+            role=role,
+            item=item,
+            completed_at=completed_at,
+        )
 
     def register_turn_report(self, turn_id: str, agent_thread_id: str, recipient_thread_id: str) -> object:
         return getattr(self.store, "register_agent_turn_report")(

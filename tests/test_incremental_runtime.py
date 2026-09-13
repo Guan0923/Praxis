@@ -168,6 +168,41 @@ def test_persistence_failure_is_reported_and_never_emits_success(tmp_path: Path)
         persistence.close()
 
 
+def test_persistence_failure_keeps_error_details_when_history_is_reloaded(tmp_path: Path) -> None:
+    store, node = new_turn(tmp_path, GatedStore)
+    store.release.set()
+    persistence = RuntimeFramePersistence(store)
+    bridge = RuntimeEventNodeBridge(
+        store,
+        session_id=node.session_id,
+        message=InputMessage("hello"),
+        emit=lambda _frame: None,
+        persist_delta=persistence.submit,
+        flush_persistence=persistence.flush,
+    )
+    try:
+        bridge.start()
+        bridge._update_stream_item("text", "saved text")
+        persistence.flush()
+        store.fail = True
+        bridge._update_stream_item("text", " unsaved text")
+        bridge.finish("success")
+
+        reopened = SQLiteSessionStore(store.paths)
+        saved = reopened.get_node(node.session_id, bridge.turn_id)
+        assert saved.status == "failed"
+        assert saved.assistant_items == [
+            {"type": "text", "text": "saved text", "status": "failed"},
+            bridge.terminal_error,
+        ]
+        report = saved.assistant_items[-1]["error_report"]
+        assert (report["type"], report["message"]) == ("OSError", "simulated disk failure")
+        assert "append_runtime_delta" in report["traceback"]
+    finally:
+        with pytest.raises(TracePersistenceError):
+            persistence.close()
+
+
 def test_old_execution_cursor_is_not_replayed_after_restart() -> None:
     old = SimpleNamespace()
     current = SimpleNamespace()
