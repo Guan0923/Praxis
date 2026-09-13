@@ -83,7 +83,6 @@ class MemoryMessageQueue:
                 if not self._streams.get(turn_id):
                     self._streams.pop(turn_id, None)
             # Receipts survive eviction to distinguish conflicting retries.
-            # Value comparison still retains input; the eviction regression tracks the pending digest decision.
             for delivery_id, (identity, status, envelope) in self._receipts.items():
                 if (
                     status == "acknowledged"

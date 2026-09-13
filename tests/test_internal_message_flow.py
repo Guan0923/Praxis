@@ -158,20 +158,31 @@ def test_real_sqlite_failure_does_not_acknowledge_mailbox(tmp_path: Path, monkey
     queue.close()
 
 
-def test_acknowledged_comparison_does_not_retain_evicted_message_body():
+@pytest.mark.parametrize("sender_kind,target_kind", [("agent", "thread"), ("user", "turn_start")])
+def test_acknowledged_comparison_does_not_retain_evicted_message_body(sender_kind, target_kind):
     queue = MemoryMessageQueue()
     envelope = MessageEnvelope(
         "evicted",
-        "agent",
+        sender_kind,
         "source",
-        "thread",
+        target_kind,
         "target",
         "session",
         "target",
         InputMessage("body-that-must-leave-the-conversation-cache"),
         ("evicted",),
+        start=TurnStart("create", TurnExecutionConfig()) if target_kind == "turn_start" else None,
     )
-    queue.dispatch_agent(envelope)
-    queue.ack(queue.claim_thread("target", "reader"))
+    dispatch = queue.dispatch_agent if target_kind == "thread" else queue.dispatch_turn_start
+    dispatch(envelope)
+    claimed = queue.claim_thread("target", "reader") if target_kind == "thread" else queue.claim_turn_start("reader")
+    queue.ack(claimed)
     queue.release_thread_cache("target")
     assert "body-that-must-leave-the-conversation-cache" not in repr(queue._receipts)
+    dispatch(replace(envelope, attempts=3))
+    assert not queue.has_pending("target")
+    with pytest.raises(DeliveryConflict):
+        dispatch(replace(envelope, message=InputMessage("changed body")))
+    with pytest.raises(DeliveryConflict):
+        dispatch(replace(envelope, need_reply=True))
+    queue.close()

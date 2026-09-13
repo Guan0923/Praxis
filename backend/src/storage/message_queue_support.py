@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import replace
+from hashlib import sha256
 
 from backend.domain.input_message import FileReference, InputMessage
 from backend.domain.message_queue import MessageEnvelope, QueuedMessage
@@ -14,7 +15,9 @@ def _dispatch_identity(thread_id: str, turn_id: str, message_ids: Sequence[str])
 
 
 def _envelope_identity(envelope: MessageEnvelope) -> MessageEnvelope:
-    return replace(envelope, attempts=0)
+    # Retain content comparison without keeping the body alive after eviction.
+    message = replace(envelope.message, text=sha256(envelope.message.text.encode("utf-8")).hexdigest())
+    return replace(envelope, message=message, attempts=0)
 
 
 def _merge(messages: Sequence[QueuedMessage]) -> InputMessage:
