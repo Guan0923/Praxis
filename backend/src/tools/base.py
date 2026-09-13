@@ -34,6 +34,7 @@ class ToolInvocationContext:
     resource_wait: Callable[[dict], None] | None = None
     register_abort: Callable[[Callable[[], None]], Callable[[], None]] | None = None
     sandbox_decision: SandboxExecutionDecision | None = None
+    approve_command_escalation: Callable[[str, str, str], bool] | None = None
 
 
 ToolHandler = Callable[..., str]

@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
 import subprocess
 import tempfile
 import threading
@@ -23,6 +22,7 @@ from ..errors import (
     SandboxPolicyError,
 )
 from ..native_windows import AclLeaseEntry, WindowsAclManager
+from ..native_windows.permission_audit import CommandAudit, WindowsSecurityAudit
 from ..policy import (
     FileAccessMode,
     NetworkMode,
@@ -32,7 +32,7 @@ from ..policy import (
     remove_temp_dir,
 )
 from .leases import CommandLease, CommandLeaseStore
-from .proxy import ProxyCredential, RunCommandProxy
+from .proxy import RunCommandProxy
 
 
 class _RollbackAction:
@@ -94,6 +94,7 @@ class SandboxLauncher:
         lease_store_path: Path | None = None,
         proxy_factory=None,
         maintenance_gate: SandboxMaintenanceGate | None = None,
+        permission_auditor=None,
     ) -> None:
         self.broker = broker
         self.is_windows = os.name == "nt" if is_windows is None else is_windows
@@ -108,6 +109,8 @@ class SandboxLauncher:
         self._leases: dict[int, CommandLease] = {}
         self._proxies: dict[int, RunCommandProxy] = {}
         self._maintenance_leases: dict[int, SandboxCommandLease] = {}
+        self._permission_auditor = permission_auditor or WindowsSecurityAudit()
+        self._command_audits: dict[int, CommandAudit] = {}
 
     def command_lease(self) -> SandboxCommandLease:
         return self.maintenance_gate.acquire_command()
@@ -167,6 +170,7 @@ class SandboxLauncher:
             maintenance_lease = self.command_lease()
             rollback.push(maintenance_lease.close)
             self._recover_once()
+            self._permission_auditor.prepare()
             policy_payload = {
                 **policy.to_dict(),
                 "workspaces": [str(path) for path in workspace_paths],
@@ -186,6 +190,7 @@ class SandboxLauncher:
             reservation_id = str(reservation["reservation_id"])
             logon_sid = str(reservation["logon_sid"])
             account_sid = str(reservation["account_sid"])
+            command_audit = self._permission_auditor.start(account_sid)
             service_sid = str(reservation["service_sid"])
             capability_sids = reservation["capability_sids"]
             if not isinstance(capability_sids, Mapping):
@@ -269,6 +274,7 @@ class SandboxLauncher:
                 service_sid=service_sid,
                 execute_paths=explicit_paths,
             )
+            command_audit.bind_process(process.pid, logon_sid)
         except Exception as exc:
             if not rollback.run():
                 raise SandboxPathError(SandboxPathFailure.CLEANUP_FAILED, temp_dir) from exc
@@ -286,6 +292,7 @@ class SandboxLauncher:
         self._maintenance_leases[pid] = maintenance_lease
         self._job_contexts[pid] = job_context
         self._leases[pid] = lease
+        self._command_audits[pid] = command_audit
         if proxy is not None:
             self._proxies[pid] = proxy
         return process
@@ -351,6 +358,9 @@ class SandboxLauncher:
                 cleaned = False
         return cleaned
 
+    def command_audit(self, process: Any) -> CommandAudit:
+        return self._command_audits[process.pid]
+
     def cleanup(self, process_or_pid: Any) -> bool:
         pid = process_or_pid if isinstance(process_or_pid, int) else getattr(process_or_pid, "pid", None)
         if not isinstance(pid, int):
@@ -371,7 +381,8 @@ class SandboxLauncher:
         if broker_released:
             if proxy is not None and job_context is not None:
                 try:
-                    proxy.revoke_job(job_context.policy.job_id)
+                    denials = proxy.revoke_job(job_context.policy.job_id)
+                    self._command_audits[pid].proxy_denials = denials or ()
                 except Exception:
                     cleaned = False
             if lease is not None:
@@ -390,6 +401,7 @@ class SandboxLauncher:
             else:
                 self._maintenance_leases.pop(pid, None)
         if cleaned:
+            self._command_audits.pop(pid, None)
             self._temp_dirs.pop(pid, None)
             self._job_contexts.pop(pid, None)
             self._leases.pop(pid, None)
@@ -448,14 +460,11 @@ class SandboxLauncher:
         if policy.network_mode is NetworkMode.FULL_NETWORK:
             return None
         proxy = self.proxy_factory(policy.proxy_port)
-        if policy.network_mode is NetworkMode.RESTRICTED_NETWORK:
-            credential = proxy.issue(
-                policy.job_id,
-                policy.network_allowlist,
-                ttl_seconds=min(3600, policy.limits.wall_seconds + 30),
-            )
-        else:
-            credential = ProxyCredential(f"disabled-{secrets.token_urlsafe(8)}", secrets.token_urlsafe(24))
+        credential = proxy.issue(
+            policy.job_id,
+            policy.network_allowlist if policy.network_mode is NetworkMode.RESTRICTED_NETWORK else (),
+            ttl_seconds=min(3600, policy.limits.wall_seconds + 30),
+        )
         proxy_url = credential.url(policy.proxy_port)
         env.update(
             {

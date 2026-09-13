@@ -11,7 +11,6 @@ import ctypes
 import ipaddress
 import os
 import re
-import socket
 import uuid
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -338,6 +337,47 @@ class _WfpApi:
         return _ByteBlob(size.value, ctypes.cast(data, ctypes.POINTER(ctypes.c_ubyte))), data
 
 
+def sandbox_block_filter_ids() -> frozenset[int]:
+    """Read runtime IDs only for block filters in our provider and sublayer."""
+    api = _WfpApi()
+    engine = wintypes.HANDLE()
+    enum_handle = wintypes.HANDLE()
+    api.check(api.library.FwpmEngineOpen0(None, _RPC_C_AUTHN_WINNT, None, None, ctypes.byref(engine)), "open")
+    result: set[int] = set()
+    try:
+        api.check(
+            api.library.FwpmFilterCreateEnumHandle0(engine, None, ctypes.byref(enum_handle)),
+            "filter enumeration create",
+        )
+        while True:
+            entries = ctypes.POINTER(ctypes.POINTER(_Filter))()
+            count = ctypes.c_uint32()
+            api.check(
+                api.library.FwpmFilterEnum0(engine, enum_handle, 256, ctypes.byref(entries), ctypes.byref(count)),
+                "filter enumeration",
+            )
+            try:
+                for index in range(count.value):
+                    current = entries[index].contents
+                    if (
+                        current.action.type == _FWP_ACTION_BLOCK
+                        and current.provider_key
+                        and bytes(current.provider_key.contents) == bytes(_Guid.from_uuid(_PROVIDER_UUID))
+                        and bytes(current.sub_layer_key) == bytes(_Guid.from_uuid(_SUBLAYER_UUID))
+                    ):
+                        result.add(int(current.filter_id))
+            finally:
+                if entries:
+                    api.library.FwpmFreeMemory0(ctypes.cast(ctypes.byref(entries), ctypes.POINTER(ctypes.c_void_p)))
+            if count.value == 0:
+                break
+        return frozenset(result)
+    finally:
+        if enum_handle:
+            api.library.FwpmFilterDestroyEnumHandle0(engine, enum_handle)
+        api.library.FwpmEngineClose0(engine)
+
+
 def configure_static_wfp(offline_sid: str, online_sid: str, proxy_port: int) -> None:
     """Atomically replace Praxis's persistent WFP filters."""
 
@@ -467,7 +507,7 @@ def _add_filter(
             raise ValueError("Only the IPv4 loopback proxy address is supported")
         value = _ConditionValue()
         value.type = _FWP_UINT32
-        value.uint32 = socket.htonl(int(address))
+        value.uint32 = int(address)
         conditions.append(_FilterCondition(_Guid.from_uuid(_CONDITION_IP_REMOTE_ADDRESS), _FWP_MATCH_EQUAL, value))
     condition_array = (_FilterCondition * len(conditions))(*conditions)
     weight = _Value()

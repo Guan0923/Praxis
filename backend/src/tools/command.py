@@ -6,6 +6,7 @@ import json
 import os
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -13,6 +14,7 @@ from typing import Any
 from backend.domain.terminal import DEFAULT_TERMINAL_TYPE, TERMINAL_LABELS, TerminalType, normalize_terminal_type
 from backend.jobs import (
     AdmissionPolicy,
+    CommandError,
     JobLane,
     JobRegistry,
     JobScope,
@@ -31,6 +33,16 @@ from backend.sandbox import (
 
 from .base import ToolError, ToolInvocationContext
 from .terminal import terminal_executable, windows_workspace_to_wsl
+
+
+@dataclass
+class _CommandSession:
+    job: SubprocessJob
+    owner: ToolInvocationContext
+    registry: JobRegistry | None
+    command: str
+    escalated: bool = False
+    approval_handled: bool = False
 
 
 class WorkspaceCommand:
@@ -65,7 +77,7 @@ class WorkspaceCommand:
         tree_terminator: TreeTerminator | None = None,
         environment: Mapping[str, str] | None = None,
     ) -> None:
-        self._sessions: dict[str, tuple[SubprocessJob, ToolInvocationContext, JobRegistry | None]] = {}
+        self._sessions: dict[str, _CommandSession] = {}
         self._session_lock = RLock()
         self._workspace = workspace.resolve()
         self._is_windows = os.name == "nt" if is_windows is None else is_windows
@@ -79,6 +91,11 @@ class WorkspaceCommand:
 
     def run_with_context(
         self, context: ToolInvocationContext, cmd: str, yield_time_ms: int = 10000, max_output_tokens: int = 2000
+    ) -> str:
+        return self._start(context, cmd, yield_time_ms, max_output_tokens, escalated=False)
+
+    def _start(
+        self, context: ToolInvocationContext, cmd: str, yield_time_ms: int, max_output_tokens: int, *, escalated: bool
     ) -> str:
         self._validate_request(yield_time_ms, max_output_tokens)
         if not isinstance(cmd, str) or not cmd.strip():
@@ -109,19 +126,19 @@ class WorkspaceCommand:
             if isinstance(decision, SandboxExecutionDecision):
                 if self._terminal_type == "wsl":
                     raise ToolError("WSL is disabled for sandboxed run_command execution.")
-                policy = decision.command_policy(job_id, TerminalKind(self._terminal_type))
                 max_output_chars = decision.limits.output_chars
                 job_options["max_output_chars"] = max_output_chars
                 effective_timeout = decision.limits.wall_seconds
-                sandbox_user_id = decision.user_id or "local"
-                job_options["popen_factory"] = decision.launcher.popen_factory(
-                    policy,
-                    user_id=sandbox_user_id,
-                    job_kind="command",
-                )
-                job_options["tree_terminator"] = decision.launcher.terminate_tree
-                job_options["sandbox_policy"] = policy
-                job_options["sandbox_launcher"] = decision.launcher
+                if not escalated:
+                    policy = decision.command_policy(job_id, TerminalKind(self._terminal_type))
+                    job_options["popen_factory"] = decision.launcher.popen_factory(
+                        policy,
+                        user_id=decision.user_id or "local",
+                        job_kind="command",
+                    )
+                    job_options["tree_terminator"] = decision.launcher.terminate_tree
+                    job_options["sandbox_policy"] = policy
+                    job_options["sandbox_launcher"] = decision.launcher
             job = SubprocessJob(
                 job_id,
                 self._command_line(cmd),
@@ -131,7 +148,7 @@ class WorkspaceCommand:
                 interactive=True,
                 **job_options,
             )
-            if isinstance(decision, SandboxExecutionDecision):
+            if isinstance(decision, SandboxExecutionDecision) and not escalated:
                 decision.launcher.wait_resources(
                     job_id,
                     cancelled=context.cancel_requested,
@@ -145,17 +162,17 @@ class WorkspaceCommand:
                     lane=JobLane.FOREGROUND,
                     admission=AdmissionPolicy(slot_mode=SlotMode.INHERIT),
                 )
-                if isinstance(decision, SandboxExecutionDecision) and not job.info().pids:
+                if isinstance(decision, SandboxExecutionDecision) and not escalated and not job.info().pids:
                     raise InterruptedError("Command cancelled before launch.")
             except BaseException as original:
-                if isinstance(decision, SandboxExecutionDecision):
+                if isinstance(decision, SandboxExecutionDecision) and not escalated:
                     try:
                         decision.launcher.cancel_resource_wait(job_id)
                     except Exception as cleanup:
                         original.add_note(f"Resource wait cleanup failed: {cleanup}")
                 raise
             with self._session_lock:
-                self._sessions[job_id] = (job, context, private_registry)
+                self._sessions[job_id] = _CommandSession(job, context, private_registry, cmd, escalated)
                 job.release_callback = lambda: self._release(job_id)
             return self._read(job, context, yield_time_ms, max_output_tokens)
         except BaseException:
@@ -182,7 +199,7 @@ class WorkspaceCommand:
             entry = self._sessions.get(session_id)
         if entry is None:
             raise ToolError("Command session does not exist or has been released.")
-        job, owner, _registry = entry
+        job, owner = entry.job, entry.owner
         if (owner.session_id, owner.turn_id, owner.job_scope) != (
             context.session_id,
             context.turn_id,
@@ -210,22 +227,21 @@ class WorkspaceCommand:
         with self._session_lock:
             expired = [
                 key
-                for key, (_job, owner, _registry) in self._sessions.items()
-                if isinstance(owner.job_scope, JobScope) and owner.job_scope.closed
+                for key, entry in self._sessions.items()
+                if isinstance(entry.owner.job_scope, JobScope) and entry.owner.job_scope.closed
             ]
             for key in expired:
-                job, _owner, _registry = self._sessions.pop(key)
-                job.buffer.clear()
+                self._sessions.pop(key).job.buffer.clear()
 
     def close(self) -> None:
         with self._session_lock:
             entries = list(self._sessions.values())
             self._sessions.clear()
-        for job, _owner, registry in entries:
-            job.close(timeout=5)
-            job.buffer.clear()
-            if registry is not None:
-                registry.close_all(reason="command manager closed", timeout=5)
+        for entry in entries:
+            entry.job.close(timeout=5)
+            entry.job.buffer.clear()
+            if entry.registry is not None:
+                entry.registry.close_all(reason="command manager closed", timeout=5)
 
     @staticmethod
     def _validate_request(yield_time_ms: int, max_output_tokens: int) -> None:
@@ -249,6 +265,12 @@ class WorkspaceCommand:
         truncated = bool(cache_omitted or response_omitted)
         del output
         result: dict[str, Any] = {"output": bounded_output, "status": info.state.value, "output_truncated": truncated}
+        with self._session_lock:
+            entry = self._sessions.get(info.id)
+        if entry is not None and entry.escalated:
+            result["escalated"] = True
+        if job.sandbox_permission_denials:
+            result["permission_denials"] = list(job.sandbox_permission_denials)
         if cache_omitted:
             result["cache_omitted_bytes"] = cache_omitted
         if response_omitted:
@@ -263,6 +285,33 @@ class WorkspaceCommand:
             failure = job.failure_exception or ToolError("Command was cancelled.")
             result["error_report"] = error_report(failure)
             failure.tool_output = json.dumps(result, ensure_ascii=False)
+            if (
+                entry is not None
+                and not entry.escalated
+                and not entry.approval_handled
+                and entry.owner.sandbox_decision is not None
+                and job.sandbox_permission_denials
+                and info.state is JobState.FAILED
+                and info.exit_code not in (None, 0)
+                and isinstance(failure, CommandError)
+                and failure.__cause__ is None
+                and not (info.sandbox or {}).get("failure_code")
+                and context.approve_command_escalation is not None
+                and not (context.cancel_requested and context.cancel_requested())
+            ):
+                entry.approval_handled = True
+                if context.approve_command_escalation(entry.command, str(self._workspace), failure.tool_output):
+                    # The original tree has finished cleanup. Never replay interactive input.
+                    retry_context = replace(context, sandbox_decision=entry.owner.sandbox_decision)
+                    job.release_output()
+                    if entry.registry is not None:
+                        entry.registry.close_all(reason="command escalation", timeout=5)
+                    return self._start(retry_context, entry.command, wait_ms, tokens, escalated=True)
+                failure.failure_code = (
+                    "tool_batch_interrupted"
+                    if context.cancel_requested and context.cancel_requested()
+                    else "user_denied"
+                )
             raise failure
         return json.dumps(result, ensure_ascii=False)
 

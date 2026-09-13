@@ -150,6 +150,8 @@ function pendingDecision(items: TurnItem[], status: RuntimeStateNode["status"]):
   return {
     decision_id: latest.decision_id,
     kind: kind as DecisionRequest["kind"],
+    approval_kind: latest.approval_kind === "sandbox_escalation" ? "sandbox_escalation" : undefined,
+    cwd: typeof latest.cwd === "string" ? latest.cwd : undefined,
     message: typeof latest.text === "string" ? latest.text : undefined,
     tool: typeof latest.tool === "string" ? latest.tool : undefined,
     arguments: latest.arguments as DecisionRequest["arguments"],

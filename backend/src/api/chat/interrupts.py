@@ -17,6 +17,8 @@ from backend.sandbox import ApprovalDecision, ApprovalStore
 
 
 def auto_approve(request: InterruptRequest) -> InterruptDecision:
+    if request.data.get("approval_kind") == "sandbox_escalation":
+        return InterruptDecision("deny")
     if request.kind == "plan":
         return InterruptDecision("implement")
     if request.kind == "tool":
@@ -35,12 +37,14 @@ class _PendingDecision:
         request_kind: str | None = None,
         approval_context: dict[str, str] | None = None,
         approval_store: ApprovalStore | None = None,
+        approval_kind: str | None = None,
     ) -> None:
         self.event = threading.Event()
         self.result: dict[str, Any] = {}
         self.request_kind = request_kind
         self.approval_context = approval_context
         self.approval_store = approval_store
+        self.approval_kind = approval_kind
 
 
 class DecisionRegistry:
@@ -58,8 +62,9 @@ class DecisionRegistry:
         request_kind: str | None = None,
         approval_context: dict[str, str] | None = None,
         approval_store: ApprovalStore | None = None,
+        approval_kind: str | None = None,
     ) -> _PendingDecision:
-        pending = _PendingDecision(request_kind, approval_context, approval_store)
+        pending = _PendingDecision(request_kind, approval_context, approval_store, approval_kind)
         with self._lock:
             self._pending[decision_id] = pending
         return pending
@@ -73,6 +78,12 @@ class DecisionRegistry:
         with self._lock:
             pending = self._pending.get(decision_id)
             if pending is None:
+                return False
+            if pending.approval_kind == "sandbox_escalation" and decision.get("choice") not in {
+                "allow_once",
+                "deny",
+                "cancel",
+            }:
                 return False
             self._pending.pop(decision_id, None)
         if pending is None:
@@ -109,7 +120,8 @@ def make_interactive_interrupt(
     """Wait for the client's decision or explicit cancellation, without expiry."""
 
     def decide(request: InterruptRequest) -> InterruptDecision:
-        if request.kind == "tool" and auto_approve_tools:
+        escalation = request.data.get("approval_kind") == "sandbox_escalation"
+        if request.kind == "tool" and auto_approve_tools and not escalation:
             return InterruptDecision("continue")
         approval_context = _approval_context(request)
         active_approval_store = approval_store or registry.approval_store
@@ -130,6 +142,7 @@ def make_interactive_interrupt(
             request_kind=request.kind,
             approval_context=approval_context,
             approval_store=active_approval_store,
+            approval_kind=request.data.get("approval_kind"),
         )
         try:
             sink(
@@ -140,8 +153,10 @@ def make_interactive_interrupt(
                     "data": {
                         "decision_id": decision_id,
                         "kind": request.kind,
+                        "approval_kind": request.data.get("approval_kind"),
                         "call_id": request.data.get("call_id"),
                         "tool": request.data.get("tool"),
+                        "cwd": request.data.get("cwd"),
                         "arguments": request.data.get("arguments", {}),
                         "questions": questions,
                         "plan": request.data.get("plan"),
@@ -200,6 +215,8 @@ def make_interactive_interrupt(
 
 
 def _approval_context(request: InterruptRequest) -> dict[str, str] | None:
+    if request.data.get("approval_kind") == "sandbox_escalation":
+        return None
     if request.kind != "tool" or not isinstance(request.data, dict):
         return None
     values = request.data

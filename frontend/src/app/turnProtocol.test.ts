@@ -663,6 +663,15 @@ describe("Turn protocol projection", () => {
   });
 
   it("folds persisted tool approval lifecycle Items into one allowed status", () => {
+    const approval = { type: "approval", event: "decision_requested", decision_id: "escalation", kind: "tool",
+      call_id: "command", tool: "run_command", approval_kind: "sandbox_escalation", cwd: "workspace",
+      status: "success" as const };
+    const data = [[{ role: "assistant" as const, content: [approval] }]];
+    expect(projectRuntimeNode(turn({ status: "running", data })).decision).toMatchObject({
+      approval_kind: "sandbox_escalation", cwd: "workspace",
+    });
+    data[0][0].content.push({ ...approval, event: "approval_granted" });
+    expect(projectRuntimeNode(turn({ status: "running", data })).decision).toBeUndefined();
     const items = [
       { type: "tool_call", call_id: "call-search", name: "web_search", arguments: { query: "local" }, status: "success" as const },
       { type: "approval", event: "approval_requested", call_id: "call-search", tool: "web_search", text: "Call tool web_search?", status: "success" as const },

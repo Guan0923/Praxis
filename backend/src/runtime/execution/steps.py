@@ -13,7 +13,7 @@ from backend.sandbox import SandboxExecutionDecision
 from backend.tools import ToolError, ToolInvocationContext
 
 from ..core.context import AgentRuntime
-from ..core.contracts import InterruptDecision, WorkflowModeChanged
+from ..core.contracts import InterruptDecision, InterruptRequest, WorkflowModeChanged
 from ..core.events import RuntimeEvent
 from ..core.hooks import (
     HookOutcome,
@@ -166,6 +166,7 @@ class ToolStepExecutor:
                     commit_lock=lock,
                     action_number=action_number,
                     cancel_requested=cancel_requested or runtime.operation_interrupted,
+                    approval_lock=approval_lock,
                 )
         except ToolError as exc:
             failure_code = "tool_queue_timeout" if isinstance(exc, ToolQueueTimeout) else "tool_batch_interrupted"
@@ -193,6 +194,7 @@ class ToolStepExecutor:
         commit_lock: RLock,
         action_number: int | None,
         cancel_requested: Callable[[], bool],
+        approval_lock: RLock | None = None,
     ) -> ToolStepResult:
         run = runtime.run
         tool_message = message.tool_messages[index]
@@ -201,6 +203,44 @@ class ToolStepExecutor:
         publish = runtime.services.publish or (lambda _event: None)
         started_at = perf_counter()
         started_at_timestamp = runtime.services.clock()
+        attempts = 1
+
+        def approve_escalation(command: str, cwd: str, original_result: str) -> bool:
+            nonlocal attempts
+            with approval_lock if approval_lock is not None else nullcontext():
+                if cancel_requested() or runtime.services.interrupt is None:
+                    return False
+                request = InterruptRequest(
+                    "tool",
+                    "The sandbox recorded a permission denial for this command. Retry once outside the sandbox as the current "
+                    "Windows user? This permits access to files outside the workspace and the network. "
+                    "It does not request administrator rights. Earlier operations may run again.",
+                    {
+                        "approval_kind": "sandbox_escalation",
+                        "call_id": tool_message.call_id,
+                        "tool": "run_command",
+                        "arguments": {"cmd": command},
+                        "command": command,
+                        "cwd": cwd,
+                        "session_id": runtime.state.session_id,
+                        "permission_target": "host_once",
+                        "details": original_result,
+                    },
+                )
+                with commit_lock:
+                    tool_message.execution_stage = "waiting_approval"
+                    publish(RuntimeEvent("approval_requested", request.message, request.data))
+                    runtime.save()
+                decision = runtime.services.interrupt(request)
+                if decision.choice != "continue" or cancel_requested():
+                    return False
+                attempts = 2
+                with commit_lock:
+                    tool_message.execution_stage = "running"
+                    publish(RuntimeEvent("approval_granted", "One-time command escalation approved.", request.data))
+                    runtime.save()
+                return True
+
         with commit_lock:
             tool_message.execution_stage = "running"
             publish(
@@ -240,6 +280,7 @@ class ToolStepExecutor:
                             cancel_requested=cancel_requested,
                             register_abort=runtime.services.register_operation_abort,
                             sandbox_decision=sandbox_decision,
+                            approve_command_escalation=approve_escalation if runtime.services.interrupt else None,
                             resource_wait=lambda usage: publish(
                                 RuntimeEvent(
                                     "tool_call",
@@ -281,7 +322,7 @@ class ToolStepExecutor:
                             {
                                 "tool": tool,
                                 "duration_ms": duration_ms,
-                                "attempts": 1,
+                                "attempts": attempts,
                                 "execution_stage": "succeeded",
                             },
                         ),
@@ -309,7 +350,8 @@ class ToolStepExecutor:
                 index,
                 tool,
                 exc,
-                retryable=retryable,
+                retryable=False if getattr(exc, "failure_code", None) or cancel_requested() else retryable,
+                failure_code=getattr(exc, "failure_code", None),
                 duration_ms=round((perf_counter() - started_at) * 1000, 3),
                 commit_lock=commit_lock,
             )

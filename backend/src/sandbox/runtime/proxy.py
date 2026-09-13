@@ -9,7 +9,7 @@ import select
 import socket
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar
 from urllib.parse import urlsplit
 
@@ -37,6 +37,7 @@ class _Grant:
     password: str
     rules: tuple[NetworkRule, ...]
     expires_at: float
+    denials: list[dict] = field(default_factory=list)
 
 
 class RunCommandProxy:
@@ -84,7 +85,7 @@ class RunCommandProxy:
         self._thread.start()
 
     def issue(self, job_id: str, rules: tuple[NetworkRule, ...], *, ttl_seconds: int) -> ProxyCredential:
-        if not job_id or not rules or not 1 <= ttl_seconds <= 3600:
+        if not job_id or not 1 <= ttl_seconds <= 3600:
             raise ValueError("proxy grant is invalid")
         credential = ProxyCredential(f"job-{secrets.token_urlsafe(12)}", secrets.token_urlsafe(32))
         with self._lock:
@@ -97,9 +98,26 @@ class RunCommandProxy:
             )
         return credential
 
-    def revoke_job(self, job_id: str) -> None:
+    def revoke_job(self, job_id: str) -> tuple[dict, ...]:
         with self._lock:
+            denials = tuple(
+                event for grant in self._grants.values() if grant.job_id == job_id for event in grant.denials
+            )
             self._grants = {name: grant for name, grant in self._grants.items() if grant.job_id != job_id}
+            return denials
+
+    def _record_denial(self, grant: _Grant, host: str, port: int) -> None:
+        with self._lock:
+            if any(active is grant for active in self._grants.values()) and len(grant.denials) < 32:
+                grant.denials.append(
+                    {
+                        "source": "sandbox_proxy",
+                        "reason": "target_not_allowed",
+                        "job_id": grant.job_id,
+                        "host": host,
+                        "port": port,
+                    }
+                )
 
     def close(self) -> None:
         self._stop.set()
@@ -164,6 +182,7 @@ class RunCommandProxy:
             method = request.method.decode("ascii", errors="strict").upper()
             host, port, target = self._target(request, method)
             if not self._allowed(grant.rules, host, port):
+                self._record_denial(grant, host, port)
                 self._send_error(client, 403, b"Proxy target denied")
                 return
             upstream = self._connect_once(host, port)

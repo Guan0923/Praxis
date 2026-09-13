@@ -9,6 +9,25 @@ from backend.sandbox import SandboxLauncher
 from backend.sandbox.control.maintenance import SandboxMaintenanceGate
 
 
+class FakeCommandAudit:
+    def bind_process(self, process_id, logon_sid):
+        pass
+
+    def __init__(self, denials=()) -> None:
+        self.denials = denials
+
+    def collect(self, **_kwargs):
+        return self.denials
+
+
+class FakeSecurityAudit:
+    def prepare(self):
+        pass
+
+    def start(self, _account_sid):
+        return FakeCommandAudit()
+
+
 class DirectTestSandboxLauncher(SandboxLauncher):
     """Test-only process launcher for tests that do not exercise isolation."""
 
@@ -46,6 +65,9 @@ class DirectTestSandboxLauncher(SandboxLauncher):
     @staticmethod
     def terminate_tree(process: Any) -> None:
         process.terminate()
+
+    def command_audit(self, _process):
+        return FakeCommandAudit()
 
     def cleanup(self, process_or_pid: Any) -> bool:
         pid = process_or_pid if isinstance(process_or_pid, int) else getattr(process_or_pid, "pid", None)

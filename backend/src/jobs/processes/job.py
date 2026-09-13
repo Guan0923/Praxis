@@ -108,6 +108,7 @@ class SubprocessJob(Job):
         self.sandbox_policy = sandbox_policy
         self.sandbox_launcher = sandbox_launcher
         self.resource_monitor = resource_monitor
+        self.sandbox_permission_denials: tuple[dict, ...] = ()
         if sandbox_policy is not None:
             raw = sandbox_policy.to_dict()
             self._set_sandbox_info(
@@ -243,6 +244,8 @@ class SubprocessJob(Job):
             outcome = ("failed", None, exc)
         finally:
             cleanup_errors: list[Exception] = []
+            permission_audit = None
+            audit_error = None
             if self.resource_monitor is not None:
                 try:
                     self.resource_monitor.stop()
@@ -256,6 +259,10 @@ class SubprocessJob(Job):
             if self.sandbox_launcher is not None:
                 process = getattr(self._group, "_process", None)
                 try:
+                    permission_audit = self.sandbox_launcher.command_audit(process)
+                except Exception as exc:
+                    audit_error = exc
+                try:
                     if not self.sandbox_launcher.cleanup(process):
                         cleanup_errors.append(CommandError("Sandbox cleanup failed."))
                 except Exception as exc:
@@ -266,6 +273,19 @@ class SubprocessJob(Job):
                 except Exception as exc:
                     cleanup_errors.append(exc)
                 self.command_lease = None
+            if (
+                not cleanup_errors
+                and permission_audit is not None
+                and outcome[0] == "failed"
+                and outcome[1] not in (None, 0)
+            ):
+                try:
+                    self.sandbox_permission_denials = permission_audit.collect()
+                except Exception as exc:
+                    audit_error = exc
+            if audit_error is not None:
+                self._mark_sandbox_failure("audit_unavailable")
+                outcome = ("failed", outcome[1], audit_error)
             if cleanup_errors:
                 current = self.info().sandbox or {}
                 current.update({"cleanup_pending": True, "failure_code": "sandbox_cleanup_failed"})

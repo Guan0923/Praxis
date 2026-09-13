@@ -137,14 +137,19 @@ export default function DecisionCard({ request, onSubmit }: Props) {
 
   const shownArguments =
     typeof request.arguments === "string" ? request.arguments : JSON.stringify(request.arguments ?? {}, null, 2);
+  const escalation = request.approval_kind === "sandbox_escalation";
   return (
-    <Card className="decision-card tool-decision" size="small" title={<><SafetyCertificateOutlined /> 工具审批</>}>
-      <p>{request.message || `请求调用 ${request.tool || "工具"}`}</p>
+    <Card className="decision-card tool-decision" size="small" title={<><SafetyCertificateOutlined /> {escalation ? "工具提权" : "工具审批"}</>}>
+      <p>{escalation
+        ? "命令遇到权限拒绝。允许使用当前 Windows 用户权限，在沙箱外重新执行一次吗？这将允许访问工作区外文件和网络，但不会申请管理员权限。之前已完成的操作可能重复执行。"
+        : request.message || `请求调用 ${request.tool || "工具"}`}</p>
       {request.tool ? <strong className="mono">{request.tool}</strong> : null}
       <pre>{shownArguments}</pre>
+      {escalation && request.cwd ? <p className="muted">工作目录：<code>{request.cwd}</code></p> : null}
+      {escalation && request.details ? <details><summary>第一次运行的错误</summary><pre>{request.details}</pre></details> : null}
       <Space className="decision-actions" wrap>
-        <Button autoInsertSpace={false} type="primary" loading={submitting} disabled={submitting} onClick={() => void submit("allow_once")}>本次允许</Button>
-        <Button autoInsertSpace={false} loading={submitting} disabled={submitting} onClick={() => void submit("allow_session")}>本会话允许</Button>
+        <Button autoInsertSpace={false} type="primary" loading={submitting} disabled={submitting} onClick={() => void submit("allow_once")}>{escalation ? "提权并重试一次" : "本次允许"}</Button>
+        {!escalation ? <Button autoInsertSpace={false} loading={submitting} disabled={submitting} onClick={() => void submit("allow_session")}>本会话允许</Button> : null}
         <Button autoInsertSpace={false} danger disabled={submitting} onClick={() => void submit("deny")}>拒绝</Button>
       </Space>
     </Card>

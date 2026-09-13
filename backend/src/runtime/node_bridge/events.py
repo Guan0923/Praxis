@@ -345,6 +345,9 @@ class _EventProjectionMixin:
         elif kind in {"approval_requested", "approval_granted"}:
             if kind == "approval_requested" and data.get("tool"):
                 self._set_tool_call_stage(str(data.get("call_id") or "call_unknown"), "waiting_approval")
+            elif kind == "approval_granted" and data.get("approval_kind") == "sandbox_escalation":
+                self._set_tool_call_stage(str(data.get("call_id") or "call_unknown"), "running")
+                self._event_item("approval", kind, message, data)
             # Tool approval lifecycle events remain in the Runtime log.  The
             # durable Turn stores only the interactive decision Item emitted
             # by ``handle_input`` so one approval cannot become three

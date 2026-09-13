@@ -14,6 +14,8 @@ export interface DecisionRequest {
   decision_id: string;
   kind: "tool" | "plan" | "question" | "resume" | "skill";
   message?: string;
+  approval_kind?: "sandbox_escalation";
+  cwd?: string;
   tool?: string;
   arguments?: Record<string, unknown> | string;
   plan?: string;

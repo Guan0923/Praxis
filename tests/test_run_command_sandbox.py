@@ -29,6 +29,12 @@ from backend.sandbox.native_windows import AclLeaseEntry, WindowsAclManager, ran
 from backend.sandbox.native_windows.desktop import _station_participant_rights
 from backend.sandbox.native_windows.wfp import build_static_filter_specs
 from backend.sandbox.runtime.proxy import ProxyCredential, RunCommandProxy
+from tests.testing_sandbox import FakeSecurityAudit
+
+
+@pytest.fixture(autouse=True)
+def fake_permission_audit(monkeypatch):
+    monkeypatch.setattr("backend.sandbox.runtime.launcher.WindowsSecurityAudit", FakeSecurityAudit)
 
 
 @pytest.mark.parametrize("value", [0, 300, 600, 600.0, None])
@@ -322,7 +328,7 @@ def test_launcher_uses_two_phase_broker_for_every_file_and_network_mode(
     else:
         assert launch[1]["HTTP_PROXY"].startswith("http://")
         assert launch[1]["NO_PROXY"] == ""
-    if network_mode is NetworkMode.RESTRICTED_NETWORK:
+    if network_mode is not NetworkMode.FULL_NETWORK:
         assert any(call[0] == "proxy_issue" for call in calls)
     else:
         assert not any(call[0] == "proxy_issue" for call in calls)
