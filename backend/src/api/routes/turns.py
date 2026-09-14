@@ -56,6 +56,10 @@ from .turn_support import (
 router = APIRouter(prefix="/api/turns", tags=["turns"])
 
 
+class _TurnFinished(ValueError):
+    pass
+
+
 @router.get("")
 def list_turns(session_id: str, request: Request) -> list[dict[str, object]]:
     store = session_store(request.app.state.web)
@@ -234,7 +238,9 @@ def create_turn(body: CreateTurnRequest, request: Request) -> dict[str, object]:
                 config=config,
                 turn_id=turn_id,
                 delivery_id=delivery_id,
+                continue_compact=body.queued_delivery is not None,
             )
+            turn_id = turn.id
             if sidebar is not None:
                 store.touch_sidebar_thread_activity(body.thread_id, session_id=body.session_id)
             start = TurnStart("create", config, body.parent_id or None)
@@ -382,27 +388,43 @@ def steer_turn(
     state: WebAppState = request.app.state.web
     store = session_store(state)
     source = _turn(store, turn_id, state=state, session_id=getattr(request.state, "operation_session_id", None))
+    if source.status in {"success", "failed"}:
+        return error_response(ValueError("Turn has finished."), status_code=409, code="turn_finished")
     if source.status != "running":
         raise HTTPException(status_code=409, detail="只有 running Turn 可以接收新输入。")
-    active_stream = getattr(state, "active_turn_streams", {}).get(turn_id)
-    if active_stream is None:
-        raise HTTPException(status_code=409, detail="Turn 执行流已经封闭。")
+    observed_stream = state.active_turn_streams.get(turn_id)
     controller = getattr(state, "active_turn_cancellations", {}).get(turn_id)
 
     def dispatch():
-        return state.message_queue.dispatch(
-            delivery_id=body.delivery_id,
-            message_ids=body.message_ids,
-            session_id=source.session_id,
-            thread_id=source.thread_id,
-            turn_id=active_stream.turn_id,
-        )
+        # Read the bridge before taking the registry lock: frame emission takes these locks in that order.
+        current = _turn(store, turn_id, state=state, session_id=source.session_id)
+        with state.active_turn_streams_lock:
+            if current.status in {"success", "failed"}:
+                raise _TurnFinished("Turn has finished.")
+            if current.status != "running":
+                raise HTTPException(status_code=409, detail="只有 running Turn 可以接收新输入。")
+            active_stream = state.active_turn_streams.get(turn_id)
+            if active_stream is None:
+                if observed_stream is not None:
+                    raise _TurnFinished("Turn has finished.")
+                raise HTTPException(status_code=409, detail="Turn 执行流已经封闭。")
+            return state.message_queue.dispatch(
+                delivery_id=body.delivery_id,
+                message_ids=body.message_ids,
+                session_id=source.session_id,
+                thread_id=source.thread_id,
+                turn_id=active_stream.turn_id,
+            )
 
     try:
         if controller is None:
             dispatch()
         else:
             controller.dispatch_steering(dispatch)
+    except _TurnFinished as exc:
+        return error_response(exc, status_code=409, code="turn_finished")
+    except HTTPException:
+        raise
     except ValueError as exc:
         return error_response(exc, status_code=409, detail="Turn 正在暂停，消息保留在待发队列。")
     except Exception as exc:

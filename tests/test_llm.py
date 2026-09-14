@@ -426,10 +426,11 @@ class FailingSession:
         raise requests.Timeout("timeout")
 
 
-def test_llm_client_delegates_to_chat_completions_runtime() -> None:
+@pytest.mark.parametrize("base_path", ["", "/v1", "/api/paas/v4"])
+def test_llm_client_delegates_to_chat_completions_runtime(base_path) -> None:
     session = FakeSession()
     client = LLMClient(
-        ModelConfig("secret", "https://example.test/v1", "demo"),
+        ModelConfig("secret", f"https://example.test{base_path}", "demo"),
         session=session,
     )
     runtime = runtime_for()
@@ -438,7 +439,7 @@ def test_llm_client_delegates_to_chat_completions_runtime() -> None:
     response = client.run(runtime)
 
     assert isinstance(client.llm, ChatCompletions)
-    assert session.request["url"] == "https://example.test/v1/chat/completions"
+    assert session.request["url"] == f"https://example.test{base_path}/chat/completions"
     assert session.request["json"]["messages"] == [{"role": "user", "content": "hello"}]
     assert response.message.content == "Hello"
     assert response.message.reasoning == "Greet."

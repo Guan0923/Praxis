@@ -8,6 +8,7 @@ import * as sessionOwnershipHook from "../../app/useSessionOwnership";
 import { TURN_PROTOCOL_VERSION } from "../../app/runtime/runtimeNodeNormalization";
 import type { QueuedMessage } from "../../app/types";
 import {
+  ApiError,
   compactTurn,
   createQueuedMessage,
   deleteQueuedMessage,
@@ -121,6 +122,7 @@ function Harness({
   const descendant = turn("turn-descendant", "descendant", target);
   const nodes = [root, target, descendant];
   const map = new Map(nodes.map((node) => [`${node.session_id}:${node.id}`, node] as const));
+  const [queued, setQueued] = useState<QueuedMessage[]>([]);
   const [conversation, setConversation] = useState<Conversation>({
     id: "session-rewind",
     sessionId: "session-rewind",
@@ -137,6 +139,8 @@ function Harness({
     <AntApp>
       <ChatPage
         conversation={conversation}
+        queuedMessages={queued}
+        onQueuedMessagesChange={(_id, updater) => setQueued(updater)}
         onUpdate={(_id, updater) => setConversation((current) => updater(current))}
         onNew={async () => conversation.id}
         onNavigate={() => undefined}
@@ -908,7 +912,7 @@ describe("ChatPage rewind projection", () => {
     expect(status).toHaveTextContent("正在执行compaction操作中");
     expect(progress?.querySelector(".shimmer-text.is-active")).not.toBeNull();
     expect(vi.mocked(compactTurn)).toHaveBeenCalledTimes(1);
-    expect(screen.getByLabelText("聊天输入")).toHaveAttribute("contenteditable", "false");
+    expect(screen.getByLabelText("聊天输入")).toHaveAttribute("contenteditable", "true");
     expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "发送" }));
     expect(vi.mocked(compactTurn)).toHaveBeenCalledTimes(1);
@@ -917,6 +921,29 @@ describe("ChatPage rewind projection", () => {
     await waitFor(() => expect(screen.queryByText("正在执行compaction操作中")).toBeNull());
     expect(onReload).toHaveBeenCalledWith("session-rewind");
     expect(vi.mocked(compactTurn)).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues drafts during Compact and only sends them automatically after completion", async () => {
+    let finish!: (value: RuntimeStateNode) => void;
+    vi.mocked(compactTurn).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    vi.mocked(createQueuedMessage).mockImplementationOnce(async (threadId, id, content, references) => ({
+      id, thread_id: threadId, content, references: references ?? [], state: "pending",
+      created_at: "2026-09-14", updated_at: "2026-09-14",
+    }));
+    const onRun = vi.fn();
+    render(<Harness onRun={onRun} onRewind={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText("聊天输入"), "/compact");
+    await userEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByText("正在执行compaction操作中");
+    await userEvent.type(screen.getByLabelText("聊天输入"), "after compact");
+    await userEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送第 1 条待发送消息" })).toBeDisabled());
+    expect(screen.getByLabelText("聊天输入").textContent).toBe("");
+    expect(onRun).not.toHaveBeenCalled();
+    expect(steerTurn).not.toHaveBeenCalled();
+    await act(async () => finish(turn("turn-compact", "compact")));
+    await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
+    expect(onRun.mock.calls[0][0].queuedDelivery.messageIds).toHaveLength(1);
   });
 
   it("removes the Compact shimmer and surfaces the request failure", async () => {
@@ -1299,6 +1326,18 @@ describe("ChatPage queued message flushing", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "确认 steering" }));
     await waitFor(() => expect(screen.getByTestId("queued-count")).toHaveTextContent("1"));
+  });
+
+  it("starts a new Turn when steering reaches a finished Turn", async () => {
+    vi.mocked(steerTurn).mockRejectedValueOnce(new ApiError(409, "Turn has finished.", "turn_finished"));
+    const onRun = vi.fn();
+    render(<QueueHarness terminalStatus="success" onRun={onRun} />);
+    fireEvent.click(screen.getByRole("button", { name: "追加指令" }));
+    await waitFor(() => expect(onRun).toHaveBeenCalledTimes(1));
+    expect(onRun.mock.calls[0][0]).toMatchObject({
+      sourceNodeId: "turn-running", queuedDelivery: { messageIds: ["queued-1", "queued-2"] },
+    });
+    expect(screen.queryByText("Turn has finished.")).toBeNull();
   });
 
   it("labels the queue action as steering and allows pause while delivery is pending", async () => {

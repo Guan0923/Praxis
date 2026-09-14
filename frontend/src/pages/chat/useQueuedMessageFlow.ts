@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
-import { createQueuedMessage, deleteQueuedMessage, steerTurn } from "../../api";
+import { ApiError, createQueuedMessage, deleteQueuedMessage, steerTurn } from "../../api";
 import type { QueuedMessage } from "../../app/types";
 import { completionToken } from "../../commands/fileCompletion";
 import type { Conversation, FileReference, RuntimeStateNode } from "../../types";
@@ -18,6 +18,7 @@ interface UseQueuedMessageFlowOptions {
   activeRuntimeNode?: RuntimeStateNode;
   queuedMessages: QueuedMessage[];
   disabled: boolean;
+  compactionPending: boolean;
   input: string;
   collectedReferences: () => FileReference[];
   clearComposer: () => void;
@@ -33,7 +34,7 @@ interface UseQueuedMessageFlowOptions {
 }
 
 export function useQueuedMessageFlow({
-  conversation, activeRuntimeNode, queuedMessages, disabled, input, collectedReferences,
+  conversation, activeRuntimeNode, queuedMessages, disabled, compactionPending, input, collectedReferences,
   clearComposer, editorRef, setInput, setReferences, setPendingUploads,
   onQueuedMessagesChange, onQueuedMessagesRefresh, onDispatch, onWarning,
 }: UseQueuedMessageFlowOptions) {
@@ -52,12 +53,12 @@ export function useQueuedMessageFlow({
   }, [conversation?.id, activeRuntimeNode?.id, activeRuntimeNode?.status, deliveryIds]);
 
   useEffect(() => {
-    if (!disabled && (activeRuntimeNode?.status === "success" || activeRuntimeNode?.status === "failed")) {
+    if (!disabled && !compactionPending && (activeRuntimeNode?.status === "success" || activeRuntimeNode?.status === "failed")) {
       if (queuedMessages.some((item) => item.saving)) return;
       const pending = queuedMessages.filter((item) => item.state === "pending" && !item.saving && !item.error);
       if (pending.length) void dispatchMessages(pending);
     }
-  }, [conversation?.id, activeRuntimeNode?.id, activeRuntimeNode?.status, queuedMessages, disabled, startingConversation]);
+  }, [conversation?.id, activeRuntimeNode?.id, activeRuntimeNode?.status, queuedMessages, disabled, compactionPending, startingConversation]);
 
   function updateQueue(updater: (items: QueuedMessage[]) => QueuedMessage[]) {
     if (conversation?.id) onQueuedMessagesChange(conversation.id, updater);
@@ -156,9 +157,11 @@ export function useQueuedMessageFlow({
   }
 
   async function dispatchMessages(items: QueuedMessage[]) {
+    if (compactionPending) return;
     items = items.filter((item) => canChange(item));
     if (!conversation?.sessionId || !items.length || starting.current === conversation.id) return;
     const running = activeRuntimeNode?.status === "running";
+    let startsTurn = !running;
     if (!running) {
       starting.current = conversation.id;
       setStartingConversation(conversation.id);
@@ -168,7 +171,22 @@ export function useQueuedMessageFlow({
     updateQueue((current) => current.map((item) => ids.has(item.id) ? { ...item, state: "dispatched", error: undefined } : item));
     try {
       if (running) {
-        await steerTurn(activeRuntimeNode.id, crypto.randomUUID(), [...ids], conversation.sessionId);
+        try {
+          await steerTurn(activeRuntimeNode.id, crypto.randomUUID(), [...ids], conversation.sessionId);
+        } catch (error) {
+          if (!(error instanceof ApiError) || error.code !== "turn_finished") throw error;
+          if (starting.current === conversation.id) {
+            await refresh();
+            return;
+          }
+          startsTurn = true;
+          starting.current = conversation.id;
+          setStartingConversation(conversation.id);
+          await onDispatch({
+            conversationId: conversation.id, sessionId: conversation.sessionId,
+            sourceNodeId: activeRuntimeNode.id, messageIds: [...ids],
+          });
+        }
       } else {
         await onDispatch({
           conversationId: conversation.id, sessionId: conversation.sessionId,
@@ -180,7 +198,7 @@ export function useQueuedMessageFlow({
       fail(items, error);
     } finally {
       ids.forEach((id) => inFlight.current.delete(id));
-      if (!running) {
+      if (startsTurn) {
         starting.current = null;
         setStartingConversation(null);
       }

@@ -293,7 +293,7 @@ export default function ChatPage({
   } = messageEditing;
   const hasDraft = Boolean(input.trim() || references.length > 0 || pendingUploads.some((upload) => upload.status === "done"));
   const composerActionState = composerAction(
-    agentThreadView.isSubagent ? undefined : activeRuntimeNode?.status,
+    agentThreadView.isSubagent || compactionPending ? undefined : activeRuntimeNode?.status,
     hasDraft,
     pendingUploads.some((upload) => upload.status === "uploading"),
     queuedMessages.some((item) => item.state === "pending" && !item.saving && !item.error),
@@ -321,6 +321,7 @@ export default function ChatPage({
     activeRuntimeNode,
     queuedMessages,
     disabled: sandboxBlocked || sessionReadOnly || agentThreadView.isSubagent,
+    compactionPending,
     input,
     collectedReferences,
     clearComposer,
@@ -567,7 +568,7 @@ export default function ChatPage({
   }
 
   async function send() {
-    if (compactionPending || sandboxBlocked || sessionReadOnly || sendPendingRef.current || rewindPending || queuedMessageFlow.startingTurn || queuedMessageFlow.takingOutMessage) return;
+    if (sandboxBlocked || sessionReadOnly || sendPendingRef.current || rewindPending || queuedMessageFlow.startingTurn || queuedMessageFlow.takingOutMessage) return;
     const attempt = {};
     sendPendingRef.current = attempt;
     setSendPending(true);
@@ -605,6 +606,7 @@ export default function ChatPage({
       // explicit commands even while an assistant is active.
       const command = parseCommand(prompt);
       if (command && prompt) {
+        releaseSend();
         await chatCommands.executeCommand(command.name);
         return;
       }
@@ -625,7 +627,7 @@ export default function ChatPage({
         }
         return;
       }
-      if (activeRuntimeNode?.status === "running") {
+      if (compactionPending || activeRuntimeNode?.status === "running") {
         const queued = queuedMessageFlow.queueCurrentPrompt(prompt, mergedReferences);
         releaseSend();
         await queued;
@@ -784,8 +786,9 @@ export default function ChatPage({
         onStop={actionMode === "steer" ? queuedMessageFlow.sendPendingMessages : stop}
         onSend={() => void send()}
         actionMode={actionMode}
-        submitDisabled={sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || rewindPending || composerActionState.disabled || (actionMode === "steer" && queuedMessages.some((item) => item.saving)) || ((sendPending || queuedMessageFlow.startingTurn || queuedMessageFlow.takingOutMessage) && (actionMode === "send" || actionMode === "resume"))}
-        disabled={sandboxBlocked || projectUnavailable || compactionPending || sessionReadOnly || rewindPending}
+        submitDisabled={sandboxBlocked || projectUnavailable || sessionReadOnly || rewindPending || composerActionState.disabled || (actionMode === "steer" && queuedMessages.some((item) => item.saving)) || ((sendPending || queuedMessageFlow.startingTurn || queuedMessageFlow.takingOutMessage) && (actionMode === "send" || actionMode === "resume"))}
+        disabled={sandboxBlocked || projectUnavailable || sessionReadOnly || rewindPending}
+        queueSendDisabled={compactionPending}
         inputDisabled={queuedMessageFlow.takingOutMessage}
         disabledReason={sandboxBlocked
           ? sandboxHealth.phase === "checking" ? "正在检查沙箱 Broker" : "沙箱 Broker 不可用"

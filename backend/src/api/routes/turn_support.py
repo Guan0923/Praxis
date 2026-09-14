@@ -102,6 +102,7 @@ def create_initial_turn(
     config: TurnExecutionConfig,
     turn_id: str,
     delivery_id: str,
+    continue_compact: bool = False,
 ) -> tuple[RuntimeState, TurnExecutionConfig]:
     if not parent_id:
         thread = store.get_runtime_thread(session_id, thread_id)
@@ -131,6 +132,32 @@ def create_initial_turn(
         running_mode=config.running_mode,
         full_access_acknowledged=config.full_access_acknowledged,
     )
+    selected_messages = parent.data[parent.current_data_idx] if isinstance(parent, RuntimeState) else []
+    if (
+        continue_compact
+        and isinstance(parent, RuntimeState)
+        and parent.thread_id == thread_id
+        and parent.status == "success"
+        and parent.compaction_id == parent.id
+        and len([entry for entry in selected_messages if entry["role"] != "developer"]) == 2
+        and selected_messages[-1]["content"]
+        and selected_messages[-1]["content"][0].get("type") == "compaction"
+    ):
+        # The first queued input continues the compact checkpoint in place.
+        turn = parent.clone()
+        turn.data[turn.current_data_idx].extend(
+            [
+                {"role": "user", "content": [message.to_item()], "delivery_id": delivery_id},
+                {"role": "assistant", "content": []},
+            ]
+        )
+        turn.status = "running"
+        turn.provider_name = resolved_config.provider_name
+        turn.model = model.model_dump()
+        turn.permission_mode = resolved_config.permission_mode
+        turn.running_mode = resolved_config.running_mode
+        turn.__post_init__()
+        return NodeWriter(store).update(turn, persist=True), resolved_config
     turn = RuntimeState.create(
         session_id=session_id,
         thread_id=thread_id,

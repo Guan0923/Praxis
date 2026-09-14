@@ -171,6 +171,4 @@ class ModelConfig:
             "responses": "responses",
             "messages": "messages",
         }[self.protocol]
-        if base.endswith("/v1"):
-            return f"{base}/{suffix}"
-        return f"{base}/v1/{suffix}"
+        return f"{base}/{suffix}"

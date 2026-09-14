@@ -639,18 +639,18 @@ def _stream(
             # persisted version while its previous terminal is being emitted.
             with stream_lock:
                 stream_locks["keys"].difference_update(reserved_stream_keys)
-                try:
-                    if pending_terminal is not None:
-                        publish_terminal(*pending_terminal)
-                finally:
-                    with active_turn_streams_lock:
+                with active_turn_streams_lock:
+                    try:
+                        if pending_terminal is not None:
+                            publish_terminal(*pending_terminal)
+                    finally:
                         for alias in active_stream_aliases:
                             if active_turn_streams.get(alias) is active_stream:
                                 active_turn_streams.pop(alias, None)
                             if active_turn_cancellations.get(alias) is pause_controller:
                                 active_turn_cancellations.pop(alias, None)
-                    if cache is not None:
-                        cache.finish(thread_id, turn_id)
+                        if cache is not None:
+                            cache.finish(thread_id, turn_id)
 
     if job_registry is not None:
         parent_scope = getattr(state, "system_job_scope", job_registry.root_scope())

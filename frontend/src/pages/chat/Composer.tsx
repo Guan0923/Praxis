@@ -67,6 +67,7 @@ export interface ComposerProps {
   onStop: () => void;
   onSend: () => void;
   disabled?: boolean;
+  queueSendDisabled?: boolean;
   inputDisabled?: boolean;
   disabledReason?: string;
   // File references: completion menu + inline editor nodes.
@@ -247,6 +248,7 @@ export default function Composer(props: ComposerProps) {
         <QueuedMessageList
           items={props.queuedMessages ?? []}
           disabled={props.disabled}
+          sendDisabled={props.queueSendDisabled}
           onSend={(item) => props.onQueueSend?.(item)}
           onEdit={(item) => props.onQueueEdit?.(item)}
           onDelete={(item) => props.onQueueDelete?.(item)}

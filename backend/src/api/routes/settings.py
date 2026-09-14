@@ -268,8 +268,6 @@ def _models_endpoint(base_url: str) -> str:
         if path.endswith(suffix):
             path = path[: -len(suffix)].rstrip("/")
             break
-    if not path.endswith("/v1"):
-        path = f"{path}/v1" if path else "/v1"
     return parsed._replace(path=f"{path}/models", query="", fragment="").geturl()
 
 
@@ -279,23 +277,29 @@ _MAX_MODEL_RESPONSE_BYTES = 2 * 1024 * 1024
 def _model_response_json(response: requests.Response) -> object:
     headers = getattr(response, "headers", None) or {}
     content_length = headers.get("content-length")
-    if content_length and int(content_length) > _MAX_MODEL_RESPONSE_BYTES:
+    if content_length and content_length.isdigit() and int(content_length) > _MAX_MODEL_RESPONSE_BYTES:
         raise HTTPException(status_code=502, detail="模型服务响应过大")
+    chunks: list[bytes] = []
+    size = 0
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        size += len(chunk)
+        if size > _MAX_MODEL_RESPONSE_BYTES:
+            raise HTTPException(status_code=502, detail="模型服务响应过大")
+        chunks.append(chunk)
+    raw = b"".join(chunks)
+    status = f"HTTP {response.status_code}"
+    if not raw.strip():
+        raise HTTPException(
+            status_code=502, detail=f"模型列表接口返回了空响应（{status}），请检查 Base URL 或模型服务。"
+        )
     try:
-        chunks: list[bytes] = []
-        size = 0
-        for chunk in response.iter_content(chunk_size=64 * 1024):
-            if not chunk:
-                continue
-            chunks.append(chunk)
-            size += len(chunk)
-            if size > _MAX_MODEL_RESPONSE_BYTES:
-                raise HTTPException(status_code=502, detail="模型服务响应过大")
-        if chunks:
-            return json.loads(b"".join(chunks).decode(getattr(response, "encoding", None) or "utf-8"))
-    except (AttributeError, TypeError):
-        pass
-    return response.json()
+        return json.loads(raw)
+    except (ValueError, UnicodeError):
+        if raw.lstrip().startswith(b"<"):
+            detail = f"模型列表接口返回了网页而不是 JSON（{status}），请检查 Base URL 是否为 API 地址，以及代理是否拦截请求。"
+        else:
+            detail = f"模型列表接口返回了无效 JSON（{status}），请检查模型服务或代理响应。"
+        raise HTTPException(status_code=502, detail=detail) from None
 
 
 @router.post("/providers/models")
@@ -325,8 +329,9 @@ def discover_provider_models(body: ProviderModelDiscoveryPayload, request: Reque
             headers.update({"x-api-key": api_key, "anthropic-version": "2023-06-01"})
         else:
             headers["Authorization"] = f"Bearer {api_key}"
+    response = None
     try:
-        response = requests.get(endpoint, headers=headers, timeout=10, allow_redirects=False)
+        response = requests.get(endpoint, headers=headers, timeout=10, allow_redirects=False, stream=True)
         if (
             300 <= int(getattr(response, "status_code", 0)) < 400
             or getattr(response, "is_redirect", False)
@@ -341,6 +346,9 @@ def discover_provider_models(body: ProviderModelDiscoveryPayload, request: Reque
         return error_response(exc, status_code=502, detail="获取模型列表失败，请检查 Base URL 和 API Key")
     except ValueError as exc:
         return error_response(exc, status_code=502, detail="模型服务返回的不是有效 JSON")
+    finally:
+        if response is not None:
+            response.close()
     values = payload.get("data") if isinstance(payload, dict) else payload
     if not isinstance(values, list):
         values = payload.get("models") if isinstance(payload, dict) else []

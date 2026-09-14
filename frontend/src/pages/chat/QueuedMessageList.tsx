@@ -7,9 +7,10 @@ interface Props {
   onEdit: (item: QueuedMessage) => void;
   onDelete: (item: QueuedMessage) => void;
   disabled?: boolean;
+  sendDisabled?: boolean;
 }
 
-export default function QueuedMessageList({ items, onSend, onEdit, onDelete, disabled = false }: Props) {
+export default function QueuedMessageList({ items, onSend, onEdit, onDelete, disabled = false, sendDisabled = false }: Props) {
   if (items.length === 0) return null;
   return (
     <section className="queued-message-list" aria-label="待发送消息">
@@ -25,7 +26,7 @@ export default function QueuedMessageList({ items, onSend, onEdit, onDelete, dis
               {item.error ? <span role="alert"> · {item.error}</span> : null}
             </span>
             <span className="queued-message-actions">
-              <button type="button" className="queued-message-button" title={item.error ? "重试" : "追加指令"} aria-label={`${item.error ? "重试" : "发送"}第 ${index + 1} 条待发送消息`} disabled={disabled || item.saving || item.state === "dispatched"} onClick={() => onSend(item)}>
+              <button type="button" className="queued-message-button" title={item.error ? "重试" : "追加指令"} aria-label={`${item.error ? "重试" : "发送"}第 ${index + 1} 条待发送消息`} disabled={disabled || sendDisabled || item.saving || item.state === "dispatched"} onClick={() => onSend(item)}>
                 <SendOutlined aria-hidden="true" />
               </button>
               <button type="button" className="queued-message-button" aria-label={`编辑第 ${index + 1} 条待发送消息`} disabled={disabled || item.saving || item.state === "dispatched"} onClick={() => onEdit(item)}>
