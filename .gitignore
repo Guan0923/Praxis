@@ -81,6 +81,7 @@ backend/webapp-data/
 !/.praxis/skills/
 !/.praxis/skills/**
 /.praxis-local/
+/.mini_agent/
 
 # Backend, frontend and benchmark run artifacts
 /backend_run*.log
@@ -92,6 +93,7 @@ benchmarks/output/
 benchmarks/artifacts/
 
 # uv and temporary task caches
+/.test-tmp/
 /.uv-cache*/
 /.uv-python*/
 /bt_*/
@@ -103,6 +105,7 @@ benchmarks/artifacts/
 /.p[0-9]*/
 
 # Editors, OS metadata and local agent state
+/.workbuddy/
 .vscode/
 .idea/
 .DS_Store
