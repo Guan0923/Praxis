@@ -60,6 +60,7 @@ class ToolStepExecutor:
         index: int,
         *,
         approval_lock: RLock | None = None,
+        approval_wait: Callable[[], AbstractContextManager[None]] = nullcontext,
         execution_slot: Callable[[], AbstractContextManager[None]] | None = None,
         commit_lock: RLock | None = None,
         action_number: int | None = None,
@@ -102,6 +103,10 @@ class ToolStepExecutor:
         except ToolError as exc:
             return self._failure(runtime, message, index, tool, exc, commit_lock=lock)
 
+        def interrupt_with_wait(request: InterruptRequest) -> InterruptDecision:
+            with approval_wait():
+                return runtime.services.interrupt(request)
+
         context = ToolHookContext(
             run=RunHookInfo(runtime.state.session_id, run.run_id, run.task, run.mode),
             call_id=tool_message.call_id,
@@ -116,7 +121,7 @@ class ToolStepExecutor:
             sandbox_launcher=runtime.services.sandbox_launcher,
             sandbox_config=runtime.services.sandbox_config or {},
             sandbox_user_id=runtime.services.sandbox_user_id,
-            interrupt=runtime.services.interrupt,
+            interrupt=interrupt_with_wait if runtime.services.interrupt is not None else None,
             record_event=lambda _kind, _message, _data: None,
             publish=publish,
         )
@@ -167,6 +172,7 @@ class ToolStepExecutor:
                     action_number=action_number,
                     cancel_requested=cancel_requested or runtime.operation_interrupted,
                     approval_lock=approval_lock,
+                    approval_wait=approval_wait,
                 )
         except ToolError as exc:
             failure_code = "tool_queue_timeout" if isinstance(exc, ToolQueueTimeout) else "tool_batch_interrupted"
@@ -195,6 +201,7 @@ class ToolStepExecutor:
         action_number: int | None,
         cancel_requested: Callable[[], bool],
         approval_lock: RLock | None = None,
+        approval_wait: Callable[[], AbstractContextManager[None]] = nullcontext,
     ) -> ToolStepResult:
         run = runtime.run
         tool_message = message.tool_messages[index]
@@ -231,7 +238,8 @@ class ToolStepExecutor:
                     tool_message.execution_stage = "waiting_approval"
                     publish(RuntimeEvent("approval_requested", request.message, request.data))
                     runtime.save()
-                decision = runtime.services.interrupt(request)
+                with approval_wait():
+                    decision = runtime.services.interrupt(request)
                 if decision.choice != "continue" or cancel_requested():
                     return False
                 attempts = 2

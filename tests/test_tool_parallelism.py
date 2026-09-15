@@ -224,6 +224,30 @@ def test_runner_settings_defaults_and_validation() -> None:
         RunnerSettings(max_tool_parellel=0)
 
 
+def test_queue_clock_preserves_remaining_time_and_unions_approval_waits(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.runtime.execution import tool_batch
+
+    now = 100.0
+    monkeypatch.setattr(tool_batch, "monotonic", lambda: now)
+    clock = tool_batch._QueueClock()
+    deadline = clock.now() + 90
+    now += 20
+    with pytest.raises(RuntimeError, match="approval failed"):
+        with clock.approval_wait():
+            now += 100
+            during_approval_deadline = clock.now() + 90
+            with clock.approval_wait():
+                now += 100
+            now += 100
+            assert deadline - clock.now() == 70
+            raise RuntimeError("approval failed")
+    assert deadline - clock.now() == 70
+    assert during_approval_deadline - clock.now() == 90
+    now += 30
+    assert deadline - clock.now() == 40
+    assert during_approval_deadline - clock.now() == 60
+
+
 def test_queue_timeout_fails_only_the_waiting_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     from backend.runtime.execution import tool_batch
 
@@ -304,6 +328,53 @@ def test_approval_is_serial_but_does_not_block_normal_tools_and_denial_is_isolat
     assert [outcome.success for outcome in result.outcomes] == [False, True, True]
     assert message.tool_messages[0].failure_code == "user_denied"
     assert message.tool_messages[2].status == "succeeded"
+
+
+@pytest.mark.parametrize("choice", ["continue", "deny", "cancel"])
+def test_ordinary_approval_pauses_batch_queue_without_blocking_cancellation(monkeypatch, choice) -> None:
+    from backend.runtime.execution import tool_batch
+
+    monkeypatch.setattr(tool_batch, "_QUEUE_TIMEOUT_SECONDS", 0.15)
+    probe = ConcurrencyProbe(expected=1)
+    cancelled = threading.Event()
+
+    def interrupt(_request):
+        if not probe.ready.wait(3):
+            raise RuntimeError("Normal tool did not start")
+        time.sleep(0.3)
+        if choice == "cancel":
+            cancelled.set()
+        probe.release.set()
+        return InterruptDecision(choice)
+
+    tools = ToolRegistry(
+        [
+            Tool("inspect", "inspect", probe.run),
+            Tool("protected", "protected", lambda: "approved", requires_confirmation=True),
+        ]
+    )
+    runtime = runtime_for(tools, parallel=1)
+    runtime.state.permission_mode = "read_only"
+    runtime.services.interrupt = interrupt
+    runtime.services.cancel_requested = cancelled.is_set
+    message = AssistantMessage(
+        tool_messages=[
+            ToolMessage(name="inspect", call_id="normal-first"),
+            ToolMessage(name="inspect", call_id="normal-second"),
+            ToolMessage(name="protected", call_id="approval"),
+        ]
+    )
+    runtime.state.active_message = message
+    try:
+        result = ToolBatchExecutor().execute(runtime, message)
+        assert not any(tool.failure_code == "tool_queue_timeout" for tool in message.tool_messages)
+        if choice == "cancel":
+            assert not any(outcome.success for outcome in result.outcomes)
+        else:
+            assert all(outcome.success for outcome in result.outcomes[:2])
+            assert result.outcomes[2].success == (choice == "continue")
+    finally:
+        probe.release.set()
 
 
 def test_batch_interrupt_cancels_running_tool_and_clears_queued_tools() -> None:

@@ -675,7 +675,7 @@ describe("Turn protocol projection", () => {
     const items = [
       { type: "tool_call", call_id: "call-search", name: "web_search", arguments: { query: "local" }, status: "success" as const },
       { type: "approval", event: "approval_requested", call_id: "call-search", tool: "web_search", text: "Call tool web_search?", status: "success" as const },
-      { type: "approval", event: "decision_requested", decision_id: "dec-search", kind: "tool", tool: "web_search", text: "Call tool web_search?", status: "success" as const },
+      { type: "approval", event: "decision_requested", decision_id: "dec-search", kind: "tool", call_id: "call-search", tool: "web_search", text: "Call tool web_search?", status: "success" as const },
       { type: "approval", event: "approval_granted", call_id: "call-search", tool: "web_search", text: "Call tool web_search?", status: "success" as const },
       { type: "tool_result", call_id: "call-search", tool: "web_search", content: "local result", status: "success" as const },
       { type: "text", text: "done", status: "success" as const },
@@ -695,6 +695,53 @@ describe("Turn protocol projection", () => {
       tool: "web_search",
     });
     expect(projected[1].decision).toBeUndefined();
+  });
+
+  it("keeps consecutive command approvals separate through retry, denial and reload", () => {
+    const request = (callId: string) => ({
+      type: "approval", event: "decision_requested", decision_id: "dec-" + callId,
+      kind: "tool", tool: "run_command", call_id: callId,
+      approval_kind: "sandbox_escalation", status: "success" as const,
+    });
+    const first = request("first");
+    const second = request("second");
+    const content = [first, { ...first, event: "approval_granted" }, second];
+    const project = (items: object[]) => projectRuntimeNode(turn({
+      status: "running",
+      data: JSON.parse(JSON.stringify([[{ role: "assistant", content: items }]])),
+    }));
+    for (const items of [content, [...content, {
+      type: "tool_result", call_id: "first", tool: "run_command", status: "failed",
+      content: "Retry failed",
+    }]]) {
+      const projected = project(items);
+      expect(projected.decision).toMatchObject({ decision_id: "dec-second" });
+      expect(projected.items.filter((item) => item.type === "approval")).toMatchObject([
+        { call_id: "first", event: "approval_resolved" },
+        { call_id: "second", event: "decision_requested", decision_id: "dec-second" },
+      ]);
+    }
+    expect(project([...content, { ...second, event: "approval_granted" }]).decision).toBeUndefined();
+    const denied = project([...content, {
+      type: "tool_result", call_id: "second", tool: "run_command", status: "failed",
+      failure_code: "user_denied", content: "Denied",
+    }]);
+    expect(denied.decision).toBeUndefined();
+    expect(denied.items.filter((item) => item.type === "approval")).toMatchObject([
+      { call_id: "first", approval_status: "allowed" },
+      { call_id: "second", approval_status: "denied" },
+    ]);
+  });
+
+  it("does not merge an unidentified approval with a different command", () => {
+    const projected = projectRuntimeNode(turn({ status: "running", data: [[{
+      role: "assistant", content: [
+        { type: "approval", event: "approval_granted", call_id: "first", tool: "run_command", status: "success" },
+        { type: "approval", event: "decision_requested", decision_id: "unidentified", kind: "tool", tool: "run_command", status: "success" },
+      ],
+    }]] }));
+    expect(projected.decision).toMatchObject({ decision_id: "unidentified" });
+    expect(projected.items).toHaveLength(2);
   });
 
   it("projects one pending card and derives a denied approval from its tool result", () => {

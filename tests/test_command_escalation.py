@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -146,6 +147,56 @@ def test_polling_remembers_denial_and_uses_the_current_approval_callback(tmp_pat
         assert len(approvals) == 1
         assert result["escalated"] is True
         assert "retry-from-poll" in result["output"]
+    finally:
+        commands.close()
+
+
+def test_serial_commands_retry_after_separate_interactive_approvals(tmp_path: Path, monkeypatch) -> None:
+    from backend.runtime.execution import tool_batch
+
+    monkeypatch.setattr(tool_batch, "_QUEUE_TIMEOUT_SECONDS", 0.8)
+    decisions = interrupts.DecisionRegistry()
+    monkeypatch.setattr(interrupts, "registry", decisions)
+    commands = WorkspaceCommand(tmp_path)
+    events = []
+    approved = []
+
+    def sink(payload):
+        data = payload["data"]
+        approved.append(data["call_id"])
+        time.sleep(1.0)
+        if not decisions.resolve(data["decision_id"], {"choice": "allow_once"}):
+            raise RuntimeError("Approval did not resolve")
+
+    runner = AgentRunner(
+        None,
+        ToolRegistry([command_tool(commands)]),
+        max_tool_parellel=1,
+        workspace_root=str(tmp_path),
+        sandbox_launcher=DenyingLauncher(delay=0.1),
+        sandbox_config={},
+    )
+    runtime = runner.new_runtime(
+        task="serial approvals",
+        interrupt=interrupts.make_interactive_interrupt(sink),
+        on_event=events.append,
+    )
+    runtime.state.permission_mode = "workspace_write"
+    message = AssistantMessage(
+        tool_messages=[
+            ToolMessage(name="run_command", call_id=name, arguments={"cmd": "echo " + name})
+            for name in ("first", "second")
+        ]
+    )
+    runtime.state.active_message = message
+    try:
+        batch = tool_batch.ToolBatchExecutor().execute(runtime, message)
+        assert sorted(approved) == ["first", "second"]
+        assert all(outcome.success for outcome in batch.outcomes)
+        for tool in message.tool_messages:
+            result = json.loads(tool.content)
+            assert result["escalated"] is True and tool.call_id in result["output"]
+        assert not [event for event in events if event.kind == "tool_failed"]
     finally:
         commands.close()
 

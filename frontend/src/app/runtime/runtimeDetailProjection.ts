@@ -90,15 +90,17 @@ function displayAssistantItems(turn: RuntimeStateNode, items: TurnItem[]): TurnI
     }
 
     const tool = String(item.tool);
-    const approvals: TurnItem[] = [];
-    while (index < items.length && isToolApproval(items[index]) && String(items[index].tool) === tool) {
+    const callId = typeof item.call_id === "string" ? item.call_id : undefined;
+    const approvals: TurnItem[] = [item];
+    index += 1;
+    while (callId && index < items.length && isToolApproval(items[index])
+      && items[index].call_id === callId && String(items[index].tool) === tool) {
       approvals.push(items[index]);
       index += 1;
     }
     const decision = [...approvals].reverse().find(
       (approval) => approval.event === "decision_requested" && typeof approval.decision_id === "string",
     );
-    const callId = approvals.find((approval) => typeof approval.call_id === "string")?.call_id;
     const result = typeof callId === "string" ? toolResults.get(callId) : undefined;
     const granted = approvals.some((approval) => approval.event === "approval_granted");
 

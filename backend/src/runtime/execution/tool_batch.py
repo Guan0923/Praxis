@@ -40,11 +40,39 @@ class ToolBatchResult:
     steering: SteeringUpdate | None = None
 
 
+class _QueueClock:
+    def __init__(self) -> None:
+        self._lock = RLock()
+        self._waiters = 0
+        self._paused_at = 0.0
+        self._excluded = 0.0
+
+    def now(self) -> float:
+        with self._lock:
+            return (self._paused_at if self._waiters else monotonic()) - self._excluded
+
+    @contextmanager
+    def approval_wait(self) -> Iterator[None]:
+        # Count overlapping approval waits only once in the batch queue clock.
+        with self._lock:
+            if not self._waiters:
+                self._paused_at = monotonic()
+            self._waiters += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._waiters -= 1
+                if not self._waiters:
+                    self._excluded += monotonic() - self._paused_at
+
+
 class _FairGate:
     """FIFO capacity gate with bounded, cancellation-aware waiting."""
 
-    def __init__(self, capacity: int) -> None:
+    def __init__(self, capacity: int, clock: Callable[[], float] = monotonic) -> None:
         self._capacity = capacity
+        self._clock = clock
         self._condition = Condition()
         self._waiting: deque[object] = deque()
         self._active = 0
@@ -56,7 +84,7 @@ class _FairGate:
         with self._condition:
             self._waiting.append(token)
             while True:
-                remaining = deadline - monotonic()
+                remaining = deadline - self._clock()
                 if stop.is_set():
                     self._waiting.remove(token)
                     self._condition.notify_all()
@@ -118,8 +146,9 @@ class ToolBatchExecutor:
         parallel = min(len(tools), runtime.state.runner_settings.max_tool_parellel)
         commit_lock = RLock()
         approval_lock = RLock()
-        serial_gate = _FairGate(1)
-        slots = _FairGate(parallel)
+        queue_clock = _QueueClock()
+        serial_gate = _FairGate(1, queue_clock.now)
+        slots = _FairGate(parallel, queue_clock.now)
         stop = Event()
         steering_lock = RLock()
         path_gates: dict[str, _FairGate] = {}
@@ -145,7 +174,7 @@ class ToolBatchExecutor:
             if not isinstance(path, str):
                 return None
             with commit_lock:
-                return path_gates.setdefault(path.casefold(), _FairGate(1))
+                return path_gates.setdefault(path.casefold(), _FairGate(1, queue_clock.now))
 
         def ensure_start_allowed() -> None:
             nonlocal steering
@@ -161,7 +190,7 @@ class ToolBatchExecutor:
 
         @contextmanager
         def execution_slot(index: int) -> Iterator[None]:
-            deadline = monotonic() + _QUEUE_TIMEOUT_SECONDS
+            deadline = queue_clock.now() + _QUEUE_TIMEOUT_SECONDS
             with commit_lock:
                 tool = tools[index]
                 tool.execution_stage = "queued"
@@ -228,6 +257,7 @@ class ToolBatchExecutor:
                 message,
                 index,
                 approval_lock=approval_lock,
+                approval_wait=queue_clock.approval_wait,
                 execution_slot=lambda: execution_slot(index),
                 commit_lock=commit_lock,
                 action_number=action_offset + index + 1,
