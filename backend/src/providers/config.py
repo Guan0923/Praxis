@@ -16,7 +16,7 @@ DEFAULT_PROVIDER_NAME = "default"
 
 def _normalize_provider_name(value: object) -> str:
     name = str(value or DEFAULT_PROVIDER_NAME).strip()
-    if not name or name.casefold() == "deepseek":
+    if not name:
         return DEFAULT_PROVIDER_NAME
     return name
 

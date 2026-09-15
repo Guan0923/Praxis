@@ -211,8 +211,6 @@ def normalize_provider_config(current: Mapping[str, object], values: Mapping[str
     explicit_name = values.get("provider_name")
     fallback_name = current.get("provider_name") or "default"
     provider_name = str(explicit_name if explicit_name is not None else fallback_name or "default").strip()
-    if provider_name.casefold() == "deepseek":
-        provider_name = "default"
     if not provider_name:
         raise ValueError("provider_name is required")
     if len(provider_name) > 80:

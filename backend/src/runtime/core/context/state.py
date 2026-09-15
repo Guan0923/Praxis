@@ -153,11 +153,7 @@ class RuntimeState:
                 else str(data.get("provider") or "unknown")
             ),
             model=str(data.get("model") or "unknown"),
-            provider_name=(
-                "default"
-                if str(data.get("provider_name") or data.get("provider") or "").casefold() == "deepseek"
-                else str(data.get("provider_name") or data.get("provider") or "unknown")
-            ),
+            provider_name=str(data.get("provider_name") or data.get("provider") or "unknown"),
             model_snapshot=dict(data.get("model_snapshot") or {}),
             permission_mode=str(data.get("permission_mode") or "read_only"),
             running_mode=str(data.get("running_mode") or "agent"),

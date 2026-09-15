@@ -112,7 +112,7 @@ export function normalizeSettings(next: UserSettings): UserSettings {
     const providerName = provider.provider_name || (provider as ProviderConfig & { provider?: string }).provider || "default";
     return {
       ...provider,
-      provider_name: providerName.toLowerCase() === "deepseek" ? "default" : providerName,
+      provider_name: providerName,
       temperature: typeof provider.temperature === "number" ? provider.temperature : 0,
     };
   });
