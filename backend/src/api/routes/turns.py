@@ -566,12 +566,7 @@ def patch_turn_config(turn_id: str, body: TurnConfigPatch, request: Request) -> 
         if updated is None:
             updated = state.subagent_coordinator.apply_runtime_config(node.session_id, node.thread_id, changes)
         if updated is None:
-            writer_node = node.clone()
-            for key, value in changes.stored_changes().items():
-                setattr(writer_node, key, value)
-            writer_node = RuntimeState.from_dict(writer_node.to_dict())
-            store.update_node(writer_node)
-            updated = writer_node
+            updated = store.update_running_turn_config(node.session_id, node.id, changes.stored_changes())
     except (ValueError, RuntimeStateValidationError) as exc:
         return error_response(exc, status_code=422, detail=str(exc))
     return updated.to_dict()

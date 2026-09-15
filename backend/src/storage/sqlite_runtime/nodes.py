@@ -154,6 +154,25 @@ class SQLiteNodeMixin:
     def update_node(self, node: TreeRuntimeState) -> None:
         self._update_node(node, None)
 
+    def update_running_turn_config(
+        self, session_id: str, turn_id: str, changes: Mapping[str, object]
+    ) -> TreeRuntimeState:
+        if set(changes) - {"provider_name", "model", "permission_mode", "running_mode"}:
+            raise RuntimeStateValidationError("Unsupported Turn configuration field.")
+        with self._connection(session_id, write=True) as connection:
+            self._assert_writable(connection)
+            payload = self._json_object(connection, session_id, "runtime_node", turn_id)
+            if payload is None:
+                raise KeyError(turn_id)
+            if payload.get("status") != "running":
+                raise ValueError("Only a running Turn can change configuration.")
+            # Read and merge under the write transaction so startup deltas cannot be lost.
+            payload.update(deepcopy(dict(changes)))
+            node = TreeRuntimeState.from_dict(payload)
+            self._put_json_object(connection, session_id, "runtime_node", turn_id, node.to_dict(), node.timestamp)
+            self._touch_session(connection, session_id, utc_now())
+            return node
+
     def update_node_with_frame(self, node: TreeRuntimeState, frame: NodeFrame) -> None:
         if frame.type == "turn.delta":
             self.append_runtime_delta(frame, thread_id=node.thread_id, status=node.status)
