@@ -418,6 +418,8 @@ class NodeWriter:
             changed_message = dict(messages[target_idx])
             changed_message["content"] = list(messages[target_idx]["content"])
             changed_message["content"][item_idx] = {**item, "text": item["text"] + delta}
+            if item["type"] == "reasoning" and isinstance(item.get("summary"), str):
+                changed_message["content"][item_idx]["summary"] = item["summary"] + delta
             value.data[data_idx][target_idx] = changed_message
             self._dynamic[value.key] = value
             self._emit_delta(
@@ -434,6 +436,61 @@ class NodeWriter:
                 persist=persist,
             )
             return value
+
+    def set_reasoning_summary(
+        self, node: RuntimeState, *, message_idx: int, item_idx: int, key: str, text: str
+    ) -> RuntimeState:
+        with self._lock:
+            current = self._dynamic.get(node.key) or self.current(node.session_id, node.id)
+            item = current.data[current.current_data_idx][message_idx]["content"][item_idx]
+            if item.get("type") != "reasoning":
+                raise RuntimeStateValidationError("A reasoning summary must target a reasoning Item.")
+            previous = str(item.get("summary", ""))
+            if item.get("summary_key") == key and text.startswith(previous):
+                return self.append_text(
+                    current,
+                    data_idx=current.current_data_idx,
+                    message_idx=message_idx,
+                    item_idx=item_idx,
+                    delta=text[len(previous) :],
+                    persist=True,
+                )
+            current = current.clone()
+            item = current.data[current.current_data_idx][message_idx]["content"][item_idx]
+            if item.get("summary_key") == key:
+                prefix = item["text"][: len(item["text"]) - len(previous)]
+            else:
+                prefix = item["text"] + "\n\n" if item["text"] else ""
+            item.update(text=prefix + text, summary=text, summary_key=key)
+            value = self._store_dynamic(current, persist=True)
+            self._emit_delta(
+                value,
+                operations=(
+                    {
+                        "op": "set_reasoning_summary",
+                        "data_idx": current.current_data_idx,
+                        "message_idx": message_idx,
+                        "item_idx": item_idx,
+                        "text": item["text"],
+                        "summary": text,
+                        "summary_key": key,
+                    },
+                ),
+                persist=True,
+            )
+            return value.clone()
+
+    def restore_message_content(self, node: RuntimeState, lengths: list[int]) -> RuntimeState:
+        """Discard a failed model attempt and publish the corrected baseline."""
+        with self._lock:
+            current = self.current(node.session_id, node.id)
+            messages = current.data[current.current_data_idx]
+            for message, length in zip(messages, lengths):
+                message["content"] = message["content"][:length]
+            del messages[len(lengths) :]
+            result = self._store_dynamic(current, persist=True)
+            self._emit_snapshot(result, persist=True)
+            return result.clone()
 
     def persist(self, node: RuntimeState) -> RuntimeState:
         """Persist the current dynamic Turn without publishing another delta."""

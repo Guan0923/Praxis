@@ -147,7 +147,7 @@ def test_update_todo_list_rejects_whole_invalid_batch_without_state_change(tmp_p
     assert snapshot.todos[0].status == "pending"
 
 
-def test_update_todo_list_rejects_noop_and_call_id_conflict(tmp_path: Path) -> None:
+def test_update_todo_list_accepts_noop_and_rejects_call_id_conflict(tmp_path: Path) -> None:
     registry = build_tool_registry(tmp_path)
     store = MemoryTodoListStore()
     added = _invoke(
@@ -167,14 +167,14 @@ def test_update_todo_list_rejects_noop_and_call_id_conflict(tmp_path: Path) -> N
             1,
             [{"op": "update", "id": todo_id, "status": "completed"}],
         )
-    with pytest.raises(ToolError, match="no_change"):
-        _invoke(
-            registry,
-            store,
-            "call-noop",
-            1,
-            [{"op": "update", "id": todo_id, "content": "keep"}],
-        )
+    updated = _invoke(
+        registry,
+        store,
+        "call-noop",
+        1,
+        [{"op": "update", "id": todo_id, "content": "keep", "status": "pending"}],
+    )
+    assert updated["todos"] == added["todos"]
 
 
 @pytest.mark.parametrize(

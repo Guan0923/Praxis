@@ -220,7 +220,7 @@ class ConversationNodeBridgeMixin:
             # Web SSE already owns RuntimeEvent projection and frame
             # publication. Reusing its pre-started bridge is essential: a
             # second dynamic writer would diverge after decision_requested and
-            # collide with the immutable Turn Trace coordinate.
+            # project stale message positions into the Turn.
             self.runtime.services.on_event = on_event
             return bridge
 

@@ -202,6 +202,15 @@ export function applyRuntimeNodeFrame(
       items[operation.item_idx] = { ...item, status: operation.status };
       continue;
     }
+    if (operation.op === "set_reasoning_summary") {
+      const item = items[operation.item_idx];
+      if (item?.type !== "reasoning" || typeof operation.text !== "string"
+        || typeof operation.summary !== "string" || typeof operation.summary_key !== "string") {
+        throw new Error("Turn reasoning summary delta is invalid");
+      }
+      items[operation.item_idx] = { ...item, text: operation.text, summary: operation.summary, summary_key: operation.summary_key };
+      continue;
+    }
     if (operation.op !== "append_text" || typeof operation.delta !== "string" || !operation.delta) {
       throw new Error("Turn delta operation is invalid");
     }
@@ -210,6 +219,9 @@ export function applyRuntimeNodeFrame(
       throw new Error("Turn text delta targets a non-streaming Item");
     }
     items[operation.item_idx] = { ...item, text: item.text + operation.delta };
+    if (item.type === "reasoning" && typeof item.summary === "string") {
+      items[operation.item_idx].summary = item.summary + operation.delta;
+    }
   }
   turn.data = data;
   if (!turn.data[turn.current_data_idx]) throw new Error("Turn delta produced an invalid data index");

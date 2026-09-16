@@ -5,6 +5,29 @@ import type { ChatMessage, DisplayMode, TurnItem } from "../../types";
 import { AssistantMessage, MessageActions, summarizeReasoningTail, ToolLine } from "./messageParts";
 
 describe("runtime thinking summary", () => {
+  it("replaces the latest summary title, renders emphasis, and retains the full expanded text", async () => {
+    const first = "**Inspecting** the files.";
+    const second = "**Checking** the result.";
+    const item: TurnItem = { type: "reasoning", text: first, summary: first, status: "running" };
+    const view = render(renderAssistant(assistant([item], true)));
+    const title = () => view.container.querySelector(".runtime-summary-text")!;
+    expect(title().querySelector("strong")).toHaveTextContent("Inspecting");
+    view.rerender(renderAssistant(assistant([{ ...item, text: first + "\n\n" + second, summary: second }], true)));
+    expect(title()).toHaveTextContent("Checking the result.");
+    expect(title()).not.toHaveTextContent("Inspecting");
+    expect(title().querySelector("strong")).toHaveTextContent("Checking");
+    fireEvent.click(view.container.querySelector(".ant-collapse-header")!);
+    await waitFor(() => expect(view.container.querySelector(".thinking-content")).toHaveTextContent("Inspecting the files. Checking the result."));
+  });
+
+  it("does not turn summary HTML into executable elements", () => {
+    const summary = '**Safe** <img src=x onerror="alert(1)">';
+    const view = render(renderAssistant(assistant([{ type: "reasoning", text: summary, summary, status: "success" }])));
+    const title = view.container.querySelector(".runtime-summary-text")!;
+    expect(title.querySelector("strong")).toHaveTextContent("Safe");
+    expect(title.querySelector("img")).toBeNull();
+  });
+
   it("normalizes whitespace into one line", () => {
     expect(summarizeReasoningTail("\n\n  第一段思考  \n\n第二段\t继续 ")).toBe("第一段思考 第二段 继续");
   });
@@ -27,6 +50,18 @@ describe("runtime thinking summary", () => {
 });
 
 describe("message actions", () => {
+  it("does not recompute a completed item while the following text streams", () => {
+    const readText = vi.fn(() => "Completed reasoning");
+    const stable: TurnItem = { type: "reasoning", status: "success", get text() { return readText(); } };
+    const msg: ChatMessage = { id: "memo", role: "assistant", content: "", events: [], running: true,
+      items: [stable, { type: "text", text: "First", status: "running" }] };
+    const props = { display: "medium" as DisplayMode, busy: false, onDecision: vi.fn() };
+    const view = render(<AssistantMessage {...props} msg={msg} />);
+    readText.mockClear();
+    view.rerender(<AssistantMessage {...props} msg={{ ...msg, items: [stable, { type: "text", text: "First second", status: "running" }] }} />);
+    expect(readText).not.toHaveBeenCalled();
+    expect(screen.getByText("First second")).toBeTruthy();
+  });
   it("keeps Markdown and formula nodes mounted when a running answer finishes", () => {
     const msg: ChatMessage = {
       id: "turn:message:1", role: "assistant", content: "$x^2$\n\nStable text.", events: [],
@@ -101,7 +136,7 @@ function assistant(items: TurnItem[], running = false): ChatMessage {
   };
 }
 
-function renderAssistant(message: ChatMessage, display: DisplayMode = "developer") {
+function renderAssistant(message: ChatMessage, display: DisplayMode = "verbose") {
   return (
     <AntApp>
       <AssistantMessage
@@ -212,16 +247,17 @@ describe("parallel tool groups", () => {
 });
 
 describe("assistant Item presentation", () => {
-  it("keeps Turn execution errors inside the assistant message bubble", () => {
+  it("shows Turn execution errors without an error box", () => {
     const message = assistant([]);
     message.error = "Turn execution failed";
     const { container } = render(renderAssistant(message));
 
     expect(screen.getByText("Turn execution failed")).toBeInTheDocument();
-    expect(container.querySelector(".message.assistant .bubble .ant-alert-error")).toBeInTheDocument();
+    expect(container.querySelector(".message.assistant .bubble [data-item-type='error']")).toBeInTheDocument();
+    expect(container.querySelector(".ant-alert-error, .error-text")).toBeNull();
   });
 
-  it.each<DisplayMode>(["minimal", "medium", "verbose", "developer"])(
+  it.each<DisplayMode>(["minimal", "medium", "verbose"])(
     "shows a live network retry and retains the raw backend message after recovery in %s mode",
     (display) => {
     const retry: TurnItem = {
@@ -277,7 +313,7 @@ describe("assistant Item presentation", () => {
         status: "running",
       },
     ];
-    const { container } = render(renderAssistant(assistant(retries, true), "developer"));
+    const { container } = render(renderAssistant(assistant(retries, true), "verbose"));
 
     const rendered = [...container.querySelectorAll<HTMLElement>('[data-item-type="retry"]')];
     expect(rendered.map((item) => item.textContent)).toEqual([
@@ -374,7 +410,7 @@ describe("assistant Item presentation", () => {
     expect(resultCollapse).toHaveTextContent("工具结果");
   });
 
-  it.each<DisplayMode>(["medium", "verbose", "developer"])(
+  it.each<DisplayMode>(["medium", "verbose"])(
     "starts every runtime Collapse folded in %s mode",
     (display) => {
       const activeItems: TurnItem[] = [
@@ -611,12 +647,23 @@ describe("assistant Item presentation", () => {
     expect(css).toMatch(/\.runtime-summary-viewport \.runtime-summary-text\s*{[^}]*overflow:\s*visible;[^}]*text-overflow:\s*clip;/s);
   });
 
-  it("keeps tool results inside a pre block in developer mode", () => {
+  it("formats JSON tool arguments and results without duplicate blocks", () => {
+    const argumentsValue = { path: "file.txt", limit: 5 };
+    const { container } = render(<>
+      <ToolLine ev={{ kind: "tool_call", message: "read_file", data: { arguments: argumentsValue } }} display="verbose" />
+      <ToolLine ev={{ kind: "tool_result", message: "", data: { result: JSON.stringify(argumentsValue) } }} display="verbose" />
+    </>);
+    const blocks = container.querySelectorAll("pre");
+    expect(blocks).toHaveLength(2);
+    for (const block of blocks) expect(block.textContent).toBe(JSON.stringify(argumentsValue, null, 2));
+  });
+
+  it("keeps tool results inside a pre block in verbose mode", () => {
     const result = "第一行\n第二行\n第三行\n第四行\n第五行\n第六行";
     const { container } = render(
       <ToolLine
         ev={{ kind: "tool_result", message: result, data: { tool: "读取文件", result } }}
-        display="developer"
+        display="verbose"
       />,
     );
 
@@ -638,7 +685,7 @@ describe("assistant Item presentation", () => {
     expect(answerCode).toHaveTextContent("最终答案代码");
   });
 
-  it.each(["minimal", "verbose", "developer"] as const)("keeps a denied tool visible without exposing model feedback in %s mode", (display) => {
+  it.each(["minimal", "verbose"] as const)("keeps a denied tool visible without exposing model feedback in %s mode", (display) => {
     const { container } = render(
       <ToolLine
         ev={{
@@ -655,7 +702,7 @@ describe("assistant Item presentation", () => {
     expect(container).not.toHaveTextContent("The user denied this write_file tool call.");
   });
 
-  it.each(["minimal", "verbose", "developer"] as const)("renders tool failures like ordinary results in %s mode", (display) => {
+  it.each(["minimal", "verbose"] as const)("renders tool failures like ordinary results in %s mode", (display) => {
     const result = "The selected lines no longer match expected_lines; file was not changed.\n  Original indentation preserved.\n";
     const data = { tool: "edit_file", call_id: "call-failed", result };
     const { container } = render(
@@ -670,8 +717,8 @@ describe("assistant Item presentation", () => {
     expect(failed.querySelector(".tool-result-label")).toHaveTextContent("edit_file 结果");
     expect(container.querySelector(".error-text, .tool-line.failed, .tool-status.failed")).toBeNull();
     expect(failed.querySelector(".tool-result > pre")?.textContent ?? null).toBe(display === "minimal" ? null : result);
-    expect(failed.querySelector(".tool-call-id")?.textContent ?? null).toBe(display === "developer" ? "call ID: call-failed" : null);
-    expect(failed.querySelector(".tool-payload")?.textContent ?? null).toBe(display === "developer" ? JSON.stringify(data, null, 2) : null);
+    expect(failed.querySelector(".tool-call-id")).toBeNull();
+    expect(failed.querySelectorAll(".tool-payload")).toHaveLength(display === "minimal" ? 0 : 1);
   });
 
   it("uses the failure message when no result field is provided", () => {
@@ -680,9 +727,10 @@ describe("assistant Item presentation", () => {
     expect(container.querySelector(".tool-result > pre")?.textContent).toBe(message);
   });
 
-  it("keeps genuine task errors in their error alert", () => {
+  it("shows task error items as message content without an error box", () => {
     const { container } = render(renderAssistant(assistant([{ type: "error", message: "Task execution failed", status: "failed" }])));
-    expect(container.querySelector(".ant-alert.error-text")).toHaveTextContent("Task execution failed");
+    expect(container.querySelector("[data-item-type='error']")).toHaveTextContent("Task execution failed");
+    expect(container.querySelector(".ant-alert-error, .error-text")).toBeNull();
     expect(container.querySelector(".tool-result")).toBeNull();
   });
 });

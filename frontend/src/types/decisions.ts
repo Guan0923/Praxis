@@ -19,6 +19,7 @@ export interface DecisionRequest {
   tool?: string;
   arguments?: Record<string, unknown> | string;
   plan?: string;
+  plan_path?: string;
   goal?: string;
   steps?: string[];
   details?: string;

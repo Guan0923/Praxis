@@ -20,7 +20,7 @@ vi.mock("../../api", async (importOriginal) => ({
   ...api,
 }));
 
-vi.mock("./CodeEditor", () => ({ default: () => <div>editor</div> }));
+vi.mock("./CodeEditor", () => ({ default: ({ value, onChange }: { value: string; onChange: (value: string) => void }) => <textarea aria-label="file editor" value={value} onChange={(event) => onChange(event.target.value)} /> }));
 
 const panelWindow = {
   id: "window-files",
@@ -63,6 +63,14 @@ it("shows workspace and unavailable project roots", async () => {
 
   expect(await screen.findByText("workspace", { exact: true })).toBeInTheDocument();
   expect(screen.getByText("project", { exact: true })).toBeInTheDocument();
+});
+
+it("loads a plan requested from the tool result without browsing the tree", async () => {
+  api.readEditorFile.mockResolvedValue({ source: "workspace", path: "workspace:plan/test.md", name: "test.md", kind: "text", content: "Saved plan", encoding: "utf-8", bom: false, newline: "\n", version: "1" });
+  render(<App><FilesPane active panelWindow={panelWindow} fileToOpen={{ sessionId: "session", source: "workspace", path: "workspace:plan/test.md", requestId: 1 }} /></App>);
+  await waitFor(() => expect(api.readEditorFile).toHaveBeenCalledWith("session", "workspace", "workspace:plan/test.md", undefined));
+  expect(await screen.findByText("workspace:plan/test.md")).toBeInTheDocument();
+  expect(await screen.findByRole("textbox", { name: "file editor" })).toHaveValue("Saved plan");
 });
 
 it("expands directories from the row or switcher and keeps file switcher spacing", async () => {

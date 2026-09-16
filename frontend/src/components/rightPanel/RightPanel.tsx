@@ -1,4 +1,4 @@
-import { ErrorDisplay } from "../ErrorDisplay";
+import { showErrorMessage } from "../errorFeedback";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { App, Button, Dropdown, Empty, Input, Space, Tabs, Tooltip, Typography, type TabsProps } from "antd";
 import { CloseOutlined, CommentOutlined, FileOutlined, PlusOutlined, ProductOutlined } from "@ant-design/icons";
@@ -15,6 +15,7 @@ import type { RightPanelPayload, RightPanelWindow } from "../../types";
 import TerminalPane from "./TerminalPane";
 import { useSessionOwnership } from "../../app/useSessionOwnership";
 import FilesPane from "./FilesPane";
+import type { OpenPanelFile } from "./fileEvents";
 import { allowAllFilePanelsToLeave, allowFilePanelClose } from "./filePanelLifecycle";
 
 const RIGHT_PANEL_TAB_STYLES: TabsProps["styles"] = {
@@ -23,6 +24,7 @@ const RIGHT_PANEL_TAB_STYLES: TabsProps["styles"] = {
 };
 
 export interface RightPanelController {
+  fileToOpen?: OpenPanelFile & { windowId: string; requestId: number };
   sessionId?: string;
   writable?: boolean;
   payload: RightPanelPayload | null;
@@ -54,6 +56,27 @@ export function useRightPanel(
     setStored((current) => ({ scope, value: typeof update === "function" ? update(current.scope === scope ? current.value : null) : update }));
   };
   const [loading, setLoading] = useState(false);
+  const [fileToOpen, setFileToOpen] = useState<RightPanelController["fileToOpen"]>();
+  const fileRequestRef = useRef(0);
+  useEffect(() => {
+    const open = (event: Event) => {
+      const target = (event as CustomEvent<OpenPanelFile>).detail;
+      if (target.sessionId !== sessionId || (target.threadId ?? sessionId) !== (ownerThreadId ?? sessionId)) return;
+      const requestId = ++fileRequestRef.current;
+      void (async () => {
+        const current = await getRightPanel(target.sessionId, ownerThreadId);
+        const existing = current.windows.find((item) => item.kind === "files");
+        const panelWindow = existing ?? (await createFilesWindow(target.sessionId, ownerThreadId)).window;
+        const next = await updateRightPanel(target.sessionId, { collapsed: false, active_window_id: panelWindow.id }, ownerThreadId);
+        if (scopeRef.current !== scope || requestId !== fileRequestRef.current) return;
+        requestRef.current += 1;
+        setPayload(next);
+        setFileToOpen({ ...target, windowId: panelWindow.id, requestId });
+      })().catch((error) => void showErrorMessage(message, error));
+    };
+    window.addEventListener("praxis-open-panel-file", open);
+    return () => window.removeEventListener("praxis-open-panel-file", open);
+  }, [sessionId, ownerThreadId, scope, message]);
   const hydrateRef = useRef(onHydrate);
   const forgetRef = useRef(onForget);
   const requestRef = useRef(0);
@@ -82,7 +105,7 @@ export function useRightPanel(
         setPayload(next);
         return Promise.all(next.windows.filter((item) => item.kind === "side_chat").map(hydrateRef.current));
       })
-      .catch((error) => { if (active) void message.error({ content: <ErrorDisplay error={error} /> }); });
+      .catch((error) => { if (active) void showErrorMessage(message, error); });
     return () => { active = false; };
   }, [sessionId, ownerThreadId, invalidation]);
 
@@ -167,7 +190,7 @@ export function useRightPanel(
     });
   };
 
-  return { sessionId, writable, payload, loading, createWindow, closeWindow, renameWindow, setActive, setLayout };
+  return { sessionId, writable, payload, loading, createWindow, closeWindow, renameWindow, setActive, setLayout, fileToOpen };
 }
 
 const creationItems = (
@@ -238,12 +261,12 @@ export default function RightPanel({
   const [titleDraft, setTitleDraft] = useState("");
   const payload = controller.payload;
   const run = (kind: "side_chat" | "terminal" | "files") => void controller.createWindow(kind).catch((error) => {
-    void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
+    void showErrorMessage(message, error);
   });
   const saveTitle = (window: RightPanelWindow) => {
     setEditingId(null);
     void controller.renameWindow(window, titleDraft).catch((error) => {
-      void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
+      void showErrorMessage(message, error);
     });
   };
   const tabs = (payload?.windows ?? []).map((window) => ({
@@ -272,7 +295,7 @@ export default function RightPanel({
     children: window.kind === "terminal"
       ? <TerminalPane panelWindow={window} readOnly={controller.writable === false} />
       : window.kind === "files"
-        ? <FilesPane panelWindow={window} active={active && payload?.state.active_window_id === window.id} readOnly={controller.writable === false} />
+        ? <FilesPane panelWindow={window} active={active && payload?.state.active_window_id === window.id} readOnly={controller.writable === false} fileToOpen={controller.fileToOpen?.windowId === window.id ? controller.fileToOpen : undefined} />
         : renderSideChat(window),
   }));
   const extra = (
@@ -323,7 +346,7 @@ export default function RightPanel({
         if (window) void (async () => {
           if (window.kind === "files" && !await allowFilePanelClose(window.id)) return;
           await controller.closeWindow(window);
-        })().catch((error) => void message.error({ content: <ErrorDisplay error={error} />, duration: 0 }));
+        })().catch((error) => void showErrorMessage(message, error));
       }}
     />
   );

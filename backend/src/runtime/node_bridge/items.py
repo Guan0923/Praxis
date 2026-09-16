@@ -36,6 +36,25 @@ class _ItemProjectionMixin:
         self.protected_item_count = 0
         self._record_completed_item(len(self.assistant.selected_messages) - 1, 0)
         self._ensure_assistant_message()
+        requested = (
+            self._trace_mode_requests.pop(0)
+            if self._trace_mode_requests
+            else {
+                "old_mode": self._trace_effective_mode,
+                "new_mode": mode,
+                "source": "turn_initialization",
+                "requested_at": self.runtime.services.clock() if self.runtime is not None else None,
+            }
+        )
+        self._trace_effective_mode = mode
+        self._record_trace_event(
+            "mode_changed",
+            "mode_switch",
+            {
+                **requested,
+                "effective_at": self.runtime.services.clock() if self.runtime is not None else None,
+            },
+        )
 
     def _initialize_collaboration_mode(self) -> None:
         current = self.assistant
@@ -51,8 +70,13 @@ class _ItemProjectionMixin:
             ),
             None,
         )
+        self._trace_effective_mode = next(
+            (mode for mode in ("agent", "plan") if previous == collaboration_mode_prompt(mode)), None
+        )
         if previous != collaboration_mode_prompt(self.running_mode):
             self._append_collaboration_mode(self.running_mode)
+        else:
+            self._trace_effective_mode = self.running_mode
 
     def _drain_collaboration_modes(self, *, item_finished: bool = False) -> None:
         if not self._pending_modes or self.closed or self.assistant is None:
@@ -130,6 +154,30 @@ class _ItemProjectionMixin:
             ]
             self.assistant_blocks[self._stream_item_index] = item
             self._stream_text = item["text"]
+        self.last_node = self.assistant
+
+    def _update_reasoning_summary(self, key: str, text: str) -> None:
+        self._begin_stream_item("reasoning")
+        self._ensure_assistant_message()
+        if self._stream_item_index is None:
+            self._stream_item_index = len(self.assistant_blocks)
+            item = {"type": "reasoning", "text": text, "summary": text, "summary_key": key, "status": "running"}
+            self.assistant_blocks.append(item)
+            self.assistant = self.writer.append_items(
+                self.assistant, [item], message_idx=self.assistant_message_idx, persist=True
+            )
+        else:
+            self.assistant = self.writer.set_reasoning_summary(
+                self.assistant,
+                message_idx=self.assistant_message_idx,
+                item_idx=self._stream_item_index,
+                key=key,
+                text=text,
+            )
+            self.assistant_blocks[self._stream_item_index] = self.assistant.selected_messages[
+                self.assistant_message_idx
+            ]["content"][self._stream_item_index]
+        self._stream_text = self.assistant_blocks[self._stream_item_index]["text"]
         self.last_node = self.assistant
 
     def _finish_stream_item(self, item_type: str | None = None, *, status: str = "success") -> None:
@@ -287,6 +335,7 @@ class _ItemProjectionMixin:
         if running not in {"agent", "plan"}:
             raise RuntimeStateValidationError("running_mode must be agent or plan.")
         mode_changed = running != self.running_mode
+        previous_mode = self.running_mode
         self.provider_name, self.model_config = provider_name, model
         self.permission_mode, self.running_mode = permission, running
         if self.assistant is None:
@@ -299,6 +348,15 @@ class _ItemProjectionMixin:
             pending = self.runtime.services.pending_runtime_config
             self.runtime.services.pending_runtime_config = pending.merged(config) if pending is not None else config
         if mode_changed:
+            request = {
+                "old_mode": previous_mode,
+                "new_mode": running,
+                "source": "runtime_config",
+                "requested_at": self.runtime.services.clock() if self.runtime is not None else None,
+                "effective_at": None,
+            }
+            self._trace_mode_requests.append(request)
+            self._record_trace_event("mode_change_requested", "mode_switch", request)
             self._pending_modes.append(running)
             self._drain_collaboration_modes()
         return self.assistant

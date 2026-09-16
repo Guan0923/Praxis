@@ -66,19 +66,24 @@
   flex-shrink: 0;
 }
 
-.sidebar-ordinary-history {
-  display: flex;
+.sidebar-history-scroll {
   flex: 1 1 auto;
-  flex-direction: column;
   min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
+.sidebar-ordinary-history,
 .sidebar-project-history {
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  max-height: 40%;
-  flex-shrink: 1;
+  flex: none;
+}
+
+.sidebar-section-toggle {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
 }
 
 .sidebar-utility-section {

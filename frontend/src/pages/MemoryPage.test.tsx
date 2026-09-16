@@ -81,9 +81,29 @@ describe("Memory settings management", () => {
     render(<MemorySettingsSection />);
 
     expect(await screen.findByText("Concise reports")).toBeInTheDocument();
+    expect(screen.queryByText(/^任务（/)).not.toBeInTheDocument();
+    expect(mocks.listMemoryJobs).not.toHaveBeenCalled();
+    expect(screen.queryByText("实际注入记录")).not.toBeInTheDocument();
+    expect(mocks.listMemoryInjectionHistory).not.toHaveBeenCalled();
     const memorySwitch = screen.getByRole("switch", { name: "启用记忆" });
     await user.click(memorySwitch);
     await waitFor(() => expect(mocks.updateMemoryConfig).toHaveBeenCalledWith({ ...config, enabled: true }));
+  });
+
+  it("paginates memory items and clamps the page after refresh", async () => {
+    const user = userEvent.setup();
+    mocks.listMemoryItems.mockResolvedValue(Array.from({ length: 11 }, (_, index) => ({
+      ...item, memory_id: "memory_" + index, title: "Entry " + (index + 1),
+    })));
+    render(<MemorySettingsSection />);
+    expect(await screen.findByText("Entry 1")).toBeInTheDocument();
+    expect(screen.queryByText("Entry 11")).not.toBeInTheDocument();
+    await user.click(screen.getByTitle("2"));
+    expect(await screen.findByText("Entry 11")).toBeInTheDocument();
+    expect(screen.queryByText("Entry 1")).not.toBeInTheDocument();
+    mocks.listMemoryItems.mockResolvedValue([item]);
+    await user.click(screen.getByRole("button", { name: /刷\s*新/ }));
+    expect(await screen.findByText("Concise reports")).toBeInTheDocument();
   });
 
   it("requires the exact confirmation before clearing", async () => {

@@ -1,11 +1,12 @@
-import { memo, useLayoutEffect, useRef } from "react";
+import { memo, useId, useLayoutEffect, useMemo, useRef } from "react";
 import MarkdownIt from "markdown-it";
 import type { Token } from "markdown-it";
 import texmath from "markdown-it-texmath";
 import { MATHML_NAMESPACE, loadMathJax, supportsNativeMathML } from "../math";
 import type { MathJaxBrowserInstance } from "../math/mathjax.d";
 import { MATH_SOURCE_SELECTOR, copySelectionWithMarkdown, selectFormula } from "./latexClipboard";
-import { IncrementalMarkdown } from "./incrementalMarkdown";
+import { IncrementalMarkdown, type MarkdownBlock } from "./incrementalMarkdown";
+import { VirtualBlock, useChatViewport } from "../pages/chat/ChatViewport";
 import { reconcileMarkdown, type RenderedMarkdownBlock } from "./markdownDom";
 
 const MATH_SOURCE_ATTRIBUTE = "data-latex-source";
@@ -280,8 +281,8 @@ export function renderMarkdown(text: string): string {
   return markdown.render(text || "");
 }
 
-function MarkdownContent({ text, className = "", itemId = "", running = false }: {
-  text: string; className?: string; itemId?: string; running?: boolean;
+function MarkdownBody({ text, className = "", itemId = "", running = false, parsed }: {
+  text: string; className?: string; itemId?: string; running?: boolean; parsed?: MarkdownBlock[];
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const state = useRef({ itemId, parser: new IncrementalMarkdown(markdown), rendered: new Map<number, RenderedMarkdownBlock>() });
@@ -293,14 +294,14 @@ function MarkdownContent({ text, className = "", itemId = "", running = false }:
       root.replaceChildren();
       state.current = { itemId, parser: new IncrementalMarkdown(markdown), rendered: new Map() };
     }
-    const blocks = state.current.parser.update(text, running);
+    const blocks = parsed ?? state.current.parser.update(text, running);
     state.current.rendered = reconcileMarkdown(root, blocks, state.current.rendered, disposeMath);
     for (const formula of formulasWithin(root)) {
       disposedFormulas.delete(formula);
       if (formula.dataset.mathRenderer || typesetQueues.has(formula)) continue;
       void enqueueMathJaxTypesetting(formula, () => formula.isConnected && !disposedFormulas.has(formula)).catch(() => undefined);
     }
-  }, [text, running, itemId]);
+  }, [text, running, itemId, parsed]);
   useLayoutEffect(() => {
     const root = rootRef.current;
     return () => { if (root) disposeMath(root); };
@@ -324,6 +325,35 @@ function MarkdownContent({ text, className = "", itemId = "", running = false }:
       onCopyCapture={(event) => copySelectionWithMarkdown(event.nativeEvent, event.currentTarget)}
     />
   );
+}
+
+const MarkdownSlice = memo(function MarkdownSlice({ block, itemId }: { block: MarkdownBlock; itemId: string }) {
+  const parsed = useMemo(() => [block], [block]);
+  return <MarkdownBody text={block.source} parsed={parsed} itemId={itemId} className="markdown-virtual-body" />;
+});
+
+function VirtualMarkdown({ text, itemId, running, className }: {
+  text: string; itemId: string; running: boolean; className: string;
+}) {
+  const parser = useMemo(() => new IncrementalMarkdown(markdown), [itemId]);
+  const blocks = useMemo(() => parser.update(text, running), [parser, text, running]);
+  return <div className={"markdown markdown-virtual " + className}>
+    {blocks.map((block, index) => <VirtualBlock key={block.start} id={itemId + ":" + block.start} revision={block}
+      estimate={Math.max(28, (Math.ceil(block.source.length / 65) + block.source.split("\n").length - 1) * 22 + 10)}
+      pinned={running && index === blocks.length - 1}>
+      <MarkdownSlice block={block} itemId={itemId + ":" + block.start} />
+    </VirtualBlock>)}
+  </div>;
+}
+
+function MarkdownContent({ text, className = "", itemId = "", running = false }: {
+  text: string; className?: string; itemId?: string; running?: boolean;
+}) {
+  const viewport = useChatViewport();
+  const fallbackId = useId();
+  return viewport?.enabled
+    ? <VirtualMarkdown text={text} className={className} itemId={itemId || fallbackId} running={running} />
+    : <MarkdownBody text={text} className={className} itemId={itemId} running={running} />;
 }
 
 export default memo(MarkdownContent);

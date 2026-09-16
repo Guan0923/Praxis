@@ -103,7 +103,7 @@ export default function AgentShell(props: AgentShellProps) {
     setVisited((current) => current.has(props.page) ? current : new Set([...current, props.page]));
     if (props.page !== "chat" && visited.has("chat")) setChatWasHidden(true);
   }, [props.page, visited]);
-  const [previewPanelWidth, setPreviewPanelWidth] = useState(DEFAULT_RIGHT_PANEL_WIDTH);
+  const [previewPanelWidth, setPreviewPanelWidth] = useState<number | string>("50%");
   const rawPanelWidthRef = useRef(DEFAULT_RIGHT_PANEL_WIDTH);
   const panel = useRightPanel(
     props.current?.sessionId,
@@ -117,10 +117,9 @@ export default function AgentShell(props: AgentShellProps) {
     else setMobileSidebarOpen(false);
   }, [isMobile]);
   useEffect(() => {
-    const width = panel.payload?.state.width || DEFAULT_RIGHT_PANEL_WIDTH;
-    rawPanelWidthRef.current = width;
-    setPreviewPanelWidth(width);
-  }, [props.current?.id, panel.payload?.state.width]);
+    rawPanelWidthRef.current = 0;
+    setPreviewPanelWidth("50%");
+  }, [props.current?.id, panel.payload?.state.collapsed]);
   const userBackendRequest = <T,>(request: () => T): T => {
     props.sandboxHealth.notifyUserBackendRequest();
     return request();

@@ -1,11 +1,11 @@
+import io
 import socket
+import zipfile
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from backend.planning import RuleBasedPlanner
-from backend.runtime import AgentRunner
 from backend.tools import ConfirmationRequired, DdgrWebSearch, SafeWebFetcher, ToolError, ToolRegistry
 from backend.tools.web.html import ReadableHtmlParser
 
@@ -69,7 +69,9 @@ def test_ddgr_search_uses_html_endpoint_and_formats_results() -> None:
 
 
 def test_ddgr_search_rejects_invalid_input_and_bad_pages() -> None:
-    search = DdgrWebSearch(session=FakeSession([FakeResponse(200, {"Content-Type": "text/html"}, b"not html")]))
+    search = DdgrWebSearch(
+        session=FakeSession([FakeResponse(200, {"Content-Type": "text/html"}, b"not html") for _ in range(2)])
+    )
 
     with pytest.raises(ToolError, match="query"):
         search.search("")
@@ -80,7 +82,7 @@ def test_ddgr_search_rejects_invalid_input_and_bad_pages() -> None:
 
 
 def test_ddgr_search_reports_http_202_instead_of_empty_results() -> None:
-    search = DdgrWebSearch(session=FakeSession([FakeResponse(202, {}, b"Accepted")]))
+    search = DdgrWebSearch(session=FakeSession([FakeResponse(202, {}, b"Accepted") for _ in range(2)]))
 
     with pytest.raises(ToolError, match="HTTP status 202"):
         search.search("python")
@@ -99,6 +101,51 @@ def test_web_search_requires_confirmation_when_registered(tmp_path: Path) -> Non
 
     with pytest.raises(ConfirmationRequired):
         tools.invoke("web_fetch", {"url": "https://example.com/"})
+
+
+def test_search_falls_back_to_lite_after_challenge() -> None:
+    responses = [
+        FakeResponse(202, {}, b"challenge"),
+        FakeResponse(
+            200,
+            {},
+            b'<a class="result-link" href="https://example.com/">Example</a>'
+            b'<td class="result-snippet">Useful result</td>',
+        ),
+    ]
+    session = FakeSession(responses.copy())
+    output = DdgrWebSearch(session=session).search("example")
+    assert "Useful result" in output and "https://example.com/" in output
+    assert session.calls[1][0] == "https://lite.duckduckgo.com/lite/"
+    assert all(response.closed for response in responses)
+
+
+def test_fetch_zip_previews_text_without_extracting_paths() -> None:
+    body = io.BytesIO()
+    with zipfile.ZipFile(body, "w") as archive:
+        archive.writestr("../../README.md", "# Heading\n\nReadable content")
+        archive.writestr("image.bin", b"\x00\xff")
+    response = FakeResponse(200, {"Content-Type": "application/zip"}, body.getvalue())
+    output = SafeWebFetcher(session=FakeSession([response]), resolver=public_resolver).fetch(
+        "https://example.com/a.zip"
+    )
+    assert "Readable content" in output and "image.bin" in output
+    assert "binary or unsupported" in output and response.closed
+
+
+def test_fetch_rejects_oversized_expanded_zip() -> None:
+    body = io.BytesIO()
+    with zipfile.ZipFile(body, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("large.txt", b"x" * 8_000_001)
+    response = FakeResponse(200, {"Content-Type": "application/zip"}, body.getvalue())
+    with pytest.raises(ToolError, match="expanded size"):
+        SafeWebFetcher(session=FakeSession([response]), resolver=public_resolver).fetch("https://example.com/a.zip")
+
+
+def test_fetch_preserves_markdown_lines() -> None:
+    response = FakeResponse(200, {"Content-Type": "text/markdown"}, b"# Title\n\n- item")
+    output = SafeWebFetcher(session=FakeSession([response]), resolver=public_resolver).fetch("https://example.com/a.md")
+    assert "# Title\n\n- item" in output
 
 
 def test_web_fetch_extracts_static_html_with_safety_limits() -> None:
@@ -122,7 +169,7 @@ def test_web_fetch_extracts_static_html_with_safety_limits() -> None:
             "https://example.com/docs",
             {
                 "headers": {
-                    "Accept": "text/html, text/plain, application/json",
+                    "Accept": ", ".join(sorted(SafeWebFetcher._ALLOWED_CONTENT_TYPES)),
                     "User-Agent": "Praxis/0.1 (+https://example.invalid/praxis)",
                 },
                 "allow_redirects": False,
@@ -245,17 +292,6 @@ def test_web_fetch_rejects_unsupported_content_and_invalid_url() -> None:
         fetcher.fetch("https://example.com/report.pdf")
     with pytest.raises(ToolError, match="http or https"):
         fetcher.fetch("file:///secret.txt")
-
-
-def test_rule_planner_generates_web_tool_calls() -> None:
-    planner = RuleBasedPlanner()
-    runner = AgentRunner(planner, ToolRegistry())
-
-    search = planner.decide(runner.new_runtime(task="search Python docs")).tool_messages[0]
-    fetch = planner.decide(runner.new_runtime(task="抓取网页 https://example.com/docs")).tool_messages[0]
-
-    assert (search.name, search.arguments) == ("web_search", {"query": "Python docs"})
-    assert (fetch.name, fetch.arguments) == ("web_fetch", {"url": "https://example.com/docs"})
 
 
 class _FakeSocket:

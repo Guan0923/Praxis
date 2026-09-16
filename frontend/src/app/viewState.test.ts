@@ -37,4 +37,19 @@ describe("backend view state", () => {
     await loadView("cached/cached");
     expect(requestJson).not.toHaveBeenCalled();
   });
+  it("does not rerender field subscribers for reading changes or unrelated expansion", async () => {
+    receiveView(saved("selectors"));
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders++;
+      return useViewState("selectors/selectors", (value) => value.expanded.tool ?? false);
+    });
+    const before = renders;
+    act(() => patchView("selectors/selectors", { reading: { top: 200, offset: 0, atBottom: false }, expanded: { other: true } }, 10000));
+    expect(renders).toBe(before);
+    act(() => patchView("selectors/selectors", { expanded: { tool: true } }, 10000));
+    expect(result.current.value).toBe(true);
+    vi.mocked(requestJson).mockResolvedValueOnce({ ...saved("selectors", 2), expanded: { tool: true } });
+    await act(() => flushView("selectors/selectors"));
+  });
 });

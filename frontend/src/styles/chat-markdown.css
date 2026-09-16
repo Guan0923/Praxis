@@ -12,7 +12,12 @@
   margin: 0;
 }
 
-.markdown > :last-child {
+.markdown:not(.markdown-virtual-body) > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-virtual-body { display: flow-root; }
+.markdown-virtual > [data-virtual-block]:last-child .markdown-virtual-body > :last-child {
   margin-bottom: 0;
 }
 

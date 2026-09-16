@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useSyncExternalStore } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ApiError, requestJson } from "../api/transport/request";
 import type { FileReference } from "../types";
 import type { PendingUpload } from "../pages/chat/contracts";
@@ -106,31 +106,47 @@ export function clearViewStateCache() {
   for (const value of entries.values()) if (value.timer) clearTimeout(value.timer);
   entries.clear();
 }
-export function useViewState(key: string) {
+const allFields = (value: ViewState) => value;
+export function useViewState<T = ViewState>(key: string, select: (value: ViewState) => T = allFields as (value: ViewState) => T,
+  equal: (left: T, right: T) => boolean = Object.is) {
   const current = entry(key);
-  const value = useSyncExternalStore((listener) => { current.listeners.add(listener); return () => { current.listeners.delete(listener); }; }, () => current.value);
+  const cached = useRef<{ value: T; loaded: boolean; error?: Error }>();
+  const subscribe = useCallback((listener: () => void) => {
+    current.listeners.add(listener);
+    return () => { current.listeners.delete(listener); };
+  }, [current]);
+  const snapshot = () => {
+    const value = select(current.value);
+    const previous = cached.current;
+    if (!previous || !equal(previous.value, value) || previous.loaded !== current.loaded || previous.error !== current.error) {
+      cached.current = { value, loaded: current.loaded, error: current.error };
+    }
+    return cached.current!;
+  };
+  const result = useSyncExternalStore(subscribe, snapshot);
   useEffect(() => {
     void loadView(key).catch(() => undefined);
-    return () => { void flushView(key); };
   }, [key]);
-  return { value, loaded: current.loaded, error: current.error };
+  return result;
 }
 export function useSavedExpansion(id: string, fallback = false): [boolean, (value: boolean) => void] {
   const key = useContext(ViewStateContext);
-  const { value } = useViewState(key);
+  const { value } = useViewState(key, (state) => state.expanded[id] ?? fallback);
   const [local, setLocal] = useState(fallback);
   if (!key) return [local, setLocal];
-  return [value.expanded[id] ?? fallback, (open) => {
+  return [value, (open) => {
     const current = entry(key);
     patchView(key, { expanded: { ...current.value.expanded, [id]: open } });
   }];
 }
 export function useSavedExpansionKeys(prefix: string): [string[], (keys: string[]) => void] {
   const key = useContext(ViewStateContext);
-  const { value } = useViewState(key);
+  const { value } = useViewState(key,
+    (state) => Object.keys(state.expanded).filter((id) => id.startsWith(prefix) && state.expanded[id]),
+    (left, right) => left.length === right.length && left.every((id, index) => id === right[index]));
   const [local, setLocal] = useState<string[]>([]);
   if (!key) return [local, setLocal];
-  return [Object.keys(value.expanded).filter((id) => id.startsWith(prefix) && value.expanded[id]), (keys) => {
+  return [value, (keys) => {
     const expanded = { ...entry(key).value.expanded };
     for (const id of Object.keys(expanded)) if (id.startsWith(prefix)) delete expanded[id];
     for (const id of keys) expanded[id] = true;

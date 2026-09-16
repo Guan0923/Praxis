@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import threading
 import time
@@ -559,7 +560,7 @@ def _required_absolute_paths(values: Mapping[str, Any], name: str) -> tuple[Path
 def _timeout(value: object) -> float | None:
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 600:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
         raise SandboxInitializationError("Broker process timeout is invalid")
     return float(value)
 

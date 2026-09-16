@@ -18,16 +18,26 @@ from backend.domain import (
     PlanningError,
     RunState,
     SystemMessage,
+    TodoItem,
+    TodoSnapshot,
     ToolMessage,
     ToolSpec,
     UserMessage,
+    todo_snapshot_context,
 )
 from backend.domain.runtime_state import RuntimeState as TurnState
 from backend.planning.context_management import ContextManager
 from backend.planning.llm import LLMPlanner
 from backend.planning.llm.requests import COMPACTION_INSTRUCTION
 from backend.planning.rule_based import RuleBasedPlanner
-from backend.providers import ChatCompletions, LLMClient, ModelConfig, ModelConfigurationError, ModelTransportError
+from backend.providers import (
+    ChatCompletions,
+    LLMClient,
+    ModelConfig,
+    ModelConfigurationError,
+    ModelRequestError,
+    ModelTransportError,
+)
 from backend.runtime import AgentRunner, ConversationService
 from backend.runtime.core.config import RunnerSettings
 from backend.runtime.core.context import AgentRuntime, PreparedResponse
@@ -121,12 +131,13 @@ def test_context_manager_preserves_incomplete_messages_and_pending_tools() -> No
     assert not any(event.kind.startswith("context_compaction") for event in runtime_events(runtime))
 
 
-def test_automatic_compaction_compresses_only_completed_history() -> None:
+def test_automatic_compaction_includes_current_turn() -> None:
     runtime = runtime_for(
         [
             UserMessage(content="old question"),
             AssistantMessage(content="old answer"),
             UserMessage(content="current"),
+            AssistantMessage(content="current progress"),
         ],
         turn_start_index=2,
     )
@@ -139,6 +150,7 @@ def test_automatic_compaction_compresses_only_completed_history() -> None:
     )
 
     assert transcripts and "old question" in transcripts[0] and "old answer" in transcripts[0]
+    assert "current progress" in transcripts[0]
     assert runtime.state.messages == [
         SystemMessage(name="context_summary", content=f"{CHECKPOINT_PREAMBLE}\n\nold exchange summary"),
         UserMessage(content="current"),
@@ -219,6 +231,18 @@ def test_automatic_compaction_includes_current_todo_snapshot_in_the_triggering_r
     assert target_turn_id in (messages[1].content or "")
 
 
+def test_todo_checkpoint_keeps_unfinished_and_last_three_completed_items() -> None:
+    snapshot = TodoSnapshot(
+        revision=8,
+        todos=(TodoItem("pending", "still needed", "pending"),)
+        + tuple(TodoItem(str(index), str(index), "completed") for index in range(5)),
+    )
+    context = todo_snapshot_context("source", "target", snapshot)
+    payload = json.loads(context.split("\n", 1)[1])
+    assert [todo["id"] for todo in payload["todos"]] == ["pending", "2", "3", "4"]
+    assert len(snapshot.todos) == 6
+
+
 def test_summary_failure_keeps_original_history_and_records_failure() -> None:
     original = [
         UserMessage(content="old"),
@@ -245,7 +269,7 @@ def test_uncompressible_current_request_over_context_size_fails_without_deleting
     original = [UserMessage(content="current")]
     runtime = runtime_for(original, turn_start_index=0)
 
-    with pytest.raises(PlanningError, match="cannot be compacted before it finishes"):
+    with pytest.raises(PlanningError, match="could not reduce"):
         ContextManager(FakeEstimator([100])).prepare(
             runtime,
             SystemMessage(content="system"),
@@ -253,7 +277,26 @@ def test_uncompressible_current_request_over_context_size_fails_without_deleting
         )
 
     assert runtime.state.messages == original
-    assert not any(event.kind.startswith("context_compaction") for event in runtime_events(runtime))
+    assert any(event.kind == "context_compaction_failed" for event in runtime_events(runtime))
+
+
+@pytest.mark.parametrize("estimated", [80, 100])
+def test_single_turn_compacts_at_threshold_and_can_compact_again(estimated: int) -> None:
+    runtime = runtime_for(
+        [UserMessage(content="current"), AssistantMessage(content="tool work already done")],
+        turn_start_index=0,
+    )
+    transcripts: list[str] = []
+    manager = ContextManager(FakeEstimator([estimated, 20, estimated, 20]))
+    for _ in range(2):
+        manager.prepare(
+            runtime,
+            SystemMessage(content="system"),
+            summarize=lambda transcript: transcripts.append(transcript) or "progress summary",
+        )
+    assert "tool work already done" in transcripts[0]
+    assert "progress summary" in transcripts[1]
+    assert runtime.state.messages[-1] == UserMessage(content="current")
 
 
 def test_manual_compaction_summarizes_all_finished_history_and_tool_results() -> None:
@@ -784,12 +827,99 @@ def test_context_manager_publishes_usage_before_and_after_compression() -> None:
     assert all(event.data["target_tokens"] == 80 for event in usage)
 
 
-def test_context_manager_uses_input_estimate_without_output_reservation() -> None:
+@pytest.mark.parametrize("input_tokens,compacted", [(677_526, False), (799_999, False), (800_000, True)])
+def test_context_manager_compacts_on_input_not_configured_output(input_tokens: int, compacted: bool) -> None:
+    class BudgetEstimator:
+        context_size = 1_000_000
+
+        def estimate_input_tokens(self, messages, _tools, _parameters) -> int:
+            if any(getattr(message, "name", None) == "context_summary" for message in messages):
+                return 100_000
+            return input_tokens
+
+        def estimate_tokens(self, messages, tools, parameters) -> int:
+            return self.estimate_input_tokens(messages, tools, parameters) + 384_000
+
+    runtime = runtime_for([UserMessage(content="current")], turn_start_index=0)
+    runtime.state.model_snapshot["output_length"] = 384_000
+    calls = []
+
+    def summarize(transcript: str) -> str:
+        calls.append(transcript)
+        return "checkpoint"
+
+    ContextManager(BudgetEstimator()).prepare(runtime, SystemMessage(content="system"), summarize=summarize)
+    assert bool(calls) == compacted
+    assert runtime.exchange.context["estimated_input_tokens"] == (100_000 if compacted else input_tokens)
+
+
+def test_real_http_output_budget_shrinks_then_recovers_without_changing_config() -> None:
+    with _local_compaction_sse_server(["done"]) as server:
+        config = ModelConfig(
+            "local-test-key",
+            f"http://127.0.0.1:{server.server_port}/v1",
+            "local-budget-model",
+            max_tokens=38_400,
+            context_size=100_000,
+        )
+        client = LLMClient(config)
+        runtime = runtime_for([UserMessage(content="x" * 270_000)], turn_start_index=0)
+        runtime.exchange.messages = list(runtime.state.messages)
+        runtime.exchange.stream = True
+        estimated = client.estimate_input_tokens(runtime.exchange.messages, [], {})
+        client.run(runtime)
+        runtime.exchange.messages = [UserMessage(content="short")]
+        client.run(runtime)
+    assert server.request_payloads[0]["max_tokens"] == 84_000 - estimated
+    assert server.request_payloads[1]["max_tokens"] == 38_400
+    assert runtime.state.model_snapshot["output_length"] == config.max_tokens == 38_400
+
+
+@pytest.mark.parametrize("protocol", ["chat_completions", "responses", "messages"])
+@pytest.mark.parametrize("input_tokens", [677_526, 839_999, 840_000, 840_001])
+def test_output_budget_applies_to_final_payload_before_transport(monkeypatch, protocol, input_tokens) -> None:
+    class Transport:
+        payload = None
+
+        def post_json(self, _url, _headers, payload, _timeout, **_kwargs):
+            self.payload = payload
+            return {
+                "choices": [{"message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "done"}]}],
+                "content": [{"type": "text", "text": "done"}],
+                "stop_reason": "end_turn",
+            }
+
+    transport = Transport()
+    config = ModelConfig(
+        "local-test-key",
+        "http://127.0.0.1",
+        "budget-model",
+        max_tokens=384_000,
+        context_size=1_000_000,
+        protocol=protocol,
+    )
+    client = LLMClient(config, transport=transport)
+    monkeypatch.setattr(client, "estimate_input_tokens", lambda *_args: input_tokens)
+    runtime = runtime_for([UserMessage(content="current")], turn_start_index=0)
+    runtime.exchange.messages = list(runtime.state.messages)
+    if input_tokens >= 840_000:
+        with pytest.raises(ModelRequestError, match="No safe output budget"):
+            client.run(runtime)
+        assert transport.payload is None
+    else:
+        client.run(runtime)
+        key = "max_output_tokens" if protocol == "responses" else "max_tokens"
+        assert transport.payload[key] == 840_000 - input_tokens
+        assert runtime.state.model_snapshot["output_length"] == 384_000
+
+
+def test_context_manager_reports_input_without_output_reservation() -> None:
     class SplitEstimator:
         context_size = 100
 
         def estimate_tokens(self, _messages, _tools, _parameters) -> int:
-            return 95
+            return 94
 
         def estimate_input_tokens(self, _messages, _tools, _parameters) -> int:
             return 90
@@ -798,7 +928,7 @@ def test_context_manager_uses_input_estimate_without_output_reservation() -> Non
     events = []
     runtime.services.publish = events.append
 
-    ContextManager(SplitEstimator()).prepare(
+    ContextManager(SplitEstimator(), target_ratio=0.95).prepare(
         runtime,
         SystemMessage(content="system"),
         summarize=lambda _transcript: "unused",

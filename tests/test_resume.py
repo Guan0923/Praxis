@@ -59,7 +59,7 @@ class PlanHandoffPlanner:
                     ToolMessage(
                         name=REQUEST_PLAN_REVIEW_NAME,
                         call_id="review_1",
-                        arguments={"plan": "Implement the reviewed change."},
+                        arguments={"plan_name": "test-plan", "plan": "Implement the reviewed change."},
                     )
                 ]
             )

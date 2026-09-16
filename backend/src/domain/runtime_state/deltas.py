@@ -46,6 +46,14 @@ def apply_turn_delta(payload: dict[str, Any], frame: Mapping[str, Any]) -> None:
                 if item.get("type") not in {"text", "reasoning"} or not isinstance(delta, str):
                     raise ValueError("Invalid text append")
                 item["text"] += delta
+                if item["type"] == "reasoning" and isinstance(item.get("summary"), str):
+                    item["summary"] += delta
+            elif kind == "set_reasoning_summary":
+                item = items[item_idx]
+                fields = {name: operation[name] for name in ("text", "summary", "summary_key")}
+                if item.get("type") != "reasoning" or not all(isinstance(value, str) for value in fields.values()):
+                    raise ValueError("Invalid reasoning summary")
+                item.update(fields)
             elif kind == "set_item_status" and operation["status"] in ITEM_STATUSES:
                 items[item_idx]["status"] = operation["status"]
             else:

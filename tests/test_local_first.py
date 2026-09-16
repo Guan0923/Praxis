@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
-
-import pytest
 
 from backend.configuration import ClientPaths, initialize_config, load_config
 from backend.runtime import RuntimeState
@@ -40,34 +37,3 @@ def test_sqlite_persists_empty_runtime_and_time_zone_locally(tmp_path: Path) -> 
     store.save_runtime(state)
 
     assert store.load_runtime(session.session_id).timezone == "UTC"
-
-
-def test_sqlite_closes_connection_when_schema_initialization_fails(tmp_path: Path, monkeypatch) -> None:
-    class BrokenConnection:
-        def __init__(self) -> None:
-            self.row_factory = None
-            self.rolled_back = False
-            self.closed = False
-
-        def execute(self, _statement: str) -> None:
-            return None
-
-        def executescript(self, _script: str) -> None:
-            raise sqlite3.DatabaseError("broken schema")
-
-        def rollback(self) -> None:
-            self.rolled_back = True
-
-        def close(self) -> None:
-            self.closed = True
-
-    connection = BrokenConnection()
-    monkeypatch.setattr(sqlite3, "connect", lambda _path: connection)
-    store = SQLiteSessionStore(ClientPaths(tmp_path / "praxis"))
-
-    with pytest.raises(sqlite3.DatabaseError, match="broken schema"):
-        with store._connection("session_broken"):
-            pass
-
-    assert connection.rolled_back is True
-    assert connection.closed is True

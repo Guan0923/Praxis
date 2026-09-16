@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from backend.domain import redact_sensitive_text, safe_error_message
 from backend.domain.memory import MemoryJob, MemoryJobKind, MemoryJobStatus, MemorySettings
 from backend.jobs import AdmissionPolicy, JobLane, QueueMode, ThreadJob
 from backend.providers import ModelConfigurationError, ModelTransportError
@@ -285,16 +286,39 @@ class MemoryAutomationService:
             self.settings.retry_base_seconds * (2 ** max(job.attempts - 1, 0)),
         )
         retry_at = (self._clock() + timedelta(seconds=delay)).isoformat()
+        diagnostics = getattr(exc, "diagnostics", {}) or {}
+        details = {
+            "error": f"{exc.__class__.__name__}:{safe_error_message(exc)}",
+            "status_code": getattr(exc, "status_code", None),
+            "retryable": getattr(exc, "retryable", None),
+            **{
+                name: diagnostics[name]
+                for name in ("response_detail", "request_id", "provider_name", "model", "operation")
+                if name in diagnostics
+            },
+        }
+        failure = " | ".join(
+            f"{name}={redact_sensitive_text(str(value)).replace(chr(10), ' ').replace(chr(13), ' ')[:500]}"
+            for name, value in details.items()
+            if value is not None
+        )
         try:
             self._state.memory_store.fail_job(
                 job.job_id,
                 self._worker_id,
-                f"{exc.__class__.__name__}:{str(exc)[:200]}",
+                failure,
                 retry_at=retry_at,
             )
         except (MemoryConflictError, MemoryNotFoundError):
             pass
-        logger.warning("memory job failed safely: %s", exc.__class__.__name__)
+        logger.warning(
+            "memory job failed safely job_id=%s source_id=%s attempt=%s/%s details=%s",
+            job.job_id,
+            job.source_id,
+            job.attempts,
+            job.max_attempts,
+            failure,
+        )
 
 
 class _MemoryWorkCancelled(RuntimeError):

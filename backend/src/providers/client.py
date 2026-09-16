@@ -7,6 +7,7 @@ import json
 import logging
 import time
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from threading import Event
 from time import perf_counter
 from typing import Any
@@ -14,14 +15,22 @@ from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
-from backend.domain import AssistantMessage, ChatMessage, ModelOutputError, ToolSpec, safe_error_message
+from backend.domain import (
+    AssistantMessage,
+    ChatMessage,
+    ModelOutputError,
+    ToolSpec,
+    redact_sensitive_text,
+    safe_error_message,
+)
+from backend.domain.context_budget import DEFAULT_COMPACTION_RATIO
 from backend.runtime.core.context import AgentRuntime, PreparedResponse
 from backend.runtime.core.events import RuntimeEvent
 from backend.runtime.persistence.recording import model_error_data, model_request_data, model_response_data
 
 from .adapters import ProviderAdapter
 from .config import ModelConfig
-from .errors import ModelConfigurationError, ModelRequestError, ModelTransportError
+from .errors import ModelConfigurationError, ModelRequestError, ModelResponseError, ModelTransportError
 from .protocols import ChatCompletionsAdapter, MessagesAdapter, ResponsesAdapter
 from .token_usage import TokenUsageTracker
 from .transport import JsonHttpTransport, _RecordedStream
@@ -169,7 +178,7 @@ class LLMClient:
             runtime.exchange.exchange_id = runtime.next_exchange_id()
         publish = runtime.services.publish or (lambda _event: None)
         max_transport_retries = runtime.state.runner_settings.max_transport_retries
-        for attempt in range(max_transport_retries + 1):
+        for attempt in range(max(max_transport_retries, 3) + 1):
             try:
                 prepared = self._run_once(runtime, attempt=attempt + 1, config_snapshot=config_snapshot)
                 self._last_request_diagnostics["transport_attempts"] = attempt + 1
@@ -177,20 +186,31 @@ class LLMClient:
             except ModelOutputError as exc:
                 self._publish_request_failure(runtime, exc, publish)
                 raise
-            except ModelTransportError as exc:
+            except (ModelTransportError, ModelResponseError) as exc:
                 if runtime.operation_interrupted():
                     raise
-                if exc.retryable and attempt < max_transport_retries:
-                    delay = exc.retry_after if exc.retry_after is not None else 0.5 * (2**attempt)
+                if isinstance(exc, ModelResponseError):
+                    if not exc.is_connection_interruption:
+                        self._publish_request_failure(runtime, exc, publish)
+                        raise
+                    max_transport_retries = 3
+                    retryable, retry_after, status_code = True, None, None
+                else:
+                    retryable, retry_after, status_code = exc.retryable, exc.retry_after, exc.status_code
+                if retryable and attempt < max_transport_retries:
+                    delay = retry_after if retry_after is not None else 0.5 * (2**attempt)
                     publish(
                         RuntimeEvent(
                             "model_retry",
                             safe_error_message(exc),
                             {
+                                "exchange_id": runtime.exchange.exchange_id,
+                                "error_type": type(exc).__name__,
+                                "error_report": model_error_data(runtime.state, runtime.exchange, exc)["error_report"],
                                 "attempt": attempt + 1,
                                 "max_transport_retries": max_transport_retries,
                                 "delay_seconds": delay,
-                                "status_code": exc.status_code,
+                                "status_code": status_code,
                             },
                         )
                     )
@@ -208,14 +228,21 @@ class LLMClient:
                         if unregister is not None:
                             unregister()
                     continue
+                response_detail = str(exc.diagnostics.get("response_detail") or "")
+                if self.config.api_key:
+                    response_detail = response_detail.replace(self.config.api_key, "[REDACTED]")
+                response_detail = redact_sensitive_text(response_detail)[:500]
                 logger.warning(
-                    "model transport failed provider=%s model=%s operation=%s status_code=%s error_type=%s message=%s",
+                    "model transport failed provider=%s model=%s operation=%s status_code=%s error_type=%s message=%s session_id=%s exchange_id=%s response_detail=%s",
                     runtime.state.provider,
                     runtime.state.model,
                     runtime.exchange.operation,
-                    exc.status_code,
+                    status_code,
                     type(exc).__name__,
                     safe_error_message(exc),
+                    runtime.state.session_id,
+                    runtime.exchange.exchange_id,
+                    json.dumps(response_detail, ensure_ascii=False),
                 )
                 self._publish_request_failure(runtime, exc, publish)
                 raise
@@ -223,6 +250,25 @@ class LLMClient:
                 self._publish_request_failure(runtime, exc, publish)
                 raise
         raise AssertionError("Transport retry loop ended without an outcome.")
+
+    def _limit_output_budget(self, runtime: AgentRuntime, payload: dict[str, Any]) -> None:
+        output_key = "max_output_tokens" if "max_output_tokens" in payload else "max_tokens"
+        if output_key not in payload:
+            return
+        snapshot = runtime.request_config().get("model_snapshot") or {}
+        context_size = min(self.config.context_size, int(snapshot.get("context_length", self.config.context_size)))
+        # Count input only; cap the payload after adapters resolve snapshot overrides.
+        input_tokens = self.estimate_input_tokens(
+            runtime.exchange.messages or runtime.state.messages,
+            runtime.exchange.allowed_tools,
+            {"max_tokens": 0},
+        )
+        compaction_threshold = int(context_size * DEFAULT_COMPACTION_RATIO)
+        available = compaction_threshold + compaction_threshold // 20 - input_tokens
+        if available < 1:
+            raise ModelRequestError("No safe output budget remains; compact the input before sending this request.")
+        payload[output_key] = min(int(payload[output_key]), available)
+        runtime.exchange.context["estimated_input_tokens"] = input_tokens
 
     @staticmethod
     def _publish_request_failure(runtime: AgentRuntime, error: ModelRequestError, publish) -> None:
@@ -246,14 +292,60 @@ class LLMClient:
         if runtime.exchange.exchange_id is None:
             runtime.exchange.exchange_id = runtime.next_exchange_id()
         publish = runtime.services.publish or (lambda _event: None)
-        self._begin_token_usage(runtime)
         diagnostics = self._request_diagnostics(runtime.exchange.stream)
         started = perf_counter()
+        started_at = datetime.now(UTC).isoformat()
+        logger.info(
+            "model request started session_id=%s exchange_id=%s attempt=%s started_at=%s model=%s stream=%s timeout_seconds=%s",
+            runtime.state.session_id,
+            runtime.exchange.exchange_id,
+            attempt,
+            started_at,
+            self.config.model,
+            runtime.exchange.stream,
+            self.llm.timeout_seconds,
+        )
         raw: dict[str, Any] | Iterator[dict[str, Any]] | None = None
         recorded_stream: _RecordedStream | None = None
         completed = False
         try:
             payload = self.llm.prepare_request(runtime)
+            self._limit_output_budget(runtime, payload)
+            self._begin_token_usage(runtime)
+            request_headers = self.llm.headers
+            if logger.isEnabledFor(logging.INFO):
+                body = json.dumps(payload, ensure_ascii=False, default=str)
+                safe_headers = {}
+                secrets = [self.config.api_key]
+                for name, value in request_headers.items():
+                    if any(word in name.lower() for word in ("auth", "cookie", "key", "token", "secret", "credential")):
+                        safe_headers[name] = "[REDACTED]"
+                        secrets.append(value)
+                    else:
+                        safe_headers[name] = value
+                preview = body
+                for secret in sorted(set(secrets), key=len, reverse=True):
+                    if secret:
+                        preview = preview.replace(secret, "[REDACTED]")
+                        safe_headers = {
+                            name: value.replace(secret, "[REDACTED]") for name, value in safe_headers.items()
+                        }
+                preview = redact_sensitive_text(preview)
+                logger.info(
+                    "model request payload session_id=%s exchange_id=%s attempt=%s details=%s",
+                    runtime.state.session_id,
+                    runtime.exchange.exchange_id,
+                    attempt,
+                    json.dumps(
+                        {
+                            "headers": safe_headers,
+                            "body_chars": len(body),
+                            "body_prefix": preview[:500],
+                            "body_suffix": preview[-500:],
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
             runtime.exchange.wire_request = copy.deepcopy(payload)
             runtime.exchange.transport_metadata = {
                 **diagnostics,
@@ -271,7 +363,7 @@ class LLMClient:
             if runtime.exchange.stream:
                 source = self.transport.stream_json(
                     self.llm.endpoint,
-                    self.llm.headers,
+                    request_headers,
                     payload,
                     self.llm.timeout_seconds,
                     cancel_requested=runtime.operation_interrupted,
@@ -282,7 +374,7 @@ class LLMClient:
             else:
                 raw = self.transport.post_json(
                     self.llm.endpoint,
-                    self.llm.headers,
+                    request_headers,
                     payload,
                     self.llm.timeout_seconds,
                     cancel_requested=runtime.operation_interrupted,
@@ -290,12 +382,14 @@ class LLMClient:
                 )
             runtime.exchange.raw_response = raw
             previous_reasoning = runtime.exchange.on_reasoning
+            previous_reasoning_summary = runtime.exchange.on_reasoning_summary
             previous_content = runtime.exchange.on_content
             self._track_stream_output(runtime, previous_reasoning, previous_content)
             try:
                 prepared = self.llm.prepare_response(runtime)
             finally:
                 runtime.exchange.on_reasoning = previous_reasoning
+                runtime.exchange.on_reasoning_summary = previous_reasoning_summary
                 runtime.exchange.on_content = previous_content
             self._complete_token_usage(runtime, prepared.usage, prepared.message)
             completed = True
@@ -319,6 +413,25 @@ class LLMClient:
             )
             raise
         finally:
+            if not completed:
+                outcome = "failed"
+            else:
+                outcome = "completed"
+            ended_at = datetime.now(UTC).isoformat()
+            duration_ms = round((perf_counter() - started) * 1000, 3)
+            logger.info(
+                "model request ended session_id=%s exchange_id=%s attempt=%s started_at=%s ended_at=%s duration_ms=%s outcome=%s",
+                runtime.state.session_id,
+                runtime.exchange.exchange_id,
+                attempt,
+                started_at,
+                ended_at,
+                duration_ms,
+                outcome,
+            )
+            runtime.exchange.transport_metadata.update(
+                request_started_at=started_at, request_ended_at=ended_at, duration_ms=duration_ms
+            )
             if not completed:
                 self._usage_tracker().discard_unconfirmed(runtime)
             if not completed and runtime.exchange.stream and raw is not None:

@@ -254,12 +254,14 @@ class RequestMixin:
     def _summarize_history(self, runtime: AgentRuntime, transcript: str) -> str:
         previous_usage = runtime.state.turn_usage
         previous_on_reasoning = runtime.exchange.on_reasoning
+        previous_on_reasoning_summary = runtime.exchange.on_reasoning_summary
         previous_on_content = runtime.exchange.on_content
         try:
             # Compaction is an internal model request.  Stream it so the
             # provider read timeout remains an inactivity timeout, while
             # keeping summary chunks out of the user-visible Turn stream.
             runtime.exchange.on_reasoning = None
+            runtime.exchange.on_reasoning_summary = None
             runtime.exchange.on_content = None
             runtime.exchange.context["trace_base_system_prompt"] = COMPACTION_INSTRUCTION
             runtime.exchange.context["trace_user_preferences"] = self.user_preferences
@@ -279,6 +281,7 @@ class RequestMixin:
             )
         finally:
             runtime.exchange.on_reasoning = previous_on_reasoning
+            runtime.exchange.on_reasoning_summary = previous_on_reasoning_summary
             runtime.exchange.on_content = previous_on_content
             runtime.state.turn_usage = previous_usage
         content = prepared.message.content

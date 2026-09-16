@@ -15,7 +15,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.connection import HTTPConnection, HTTPSConnection
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
-from backend.domain import safe_error_message
+from backend.domain import redact_sensitive_text, safe_error_message
 
 from .errors import ModelTransportError
 
@@ -305,7 +305,7 @@ def _response_detail(response: Any) -> str:
             detail = getattr(response, "body")
             if isinstance(detail, bytes):
                 detail = detail.decode("utf-8", errors="replace")
-    return detail[:500].replace("\n", " ").strip()
+    return redact_sensitive_text(detail)[:500].replace("\n", " ").strip()
 
 
 def _transport_error(error: requests.RequestException, *, stream_started: bool = False) -> ModelTransportError:
@@ -331,7 +331,7 @@ def _transport_error(error: requests.RequestException, *, stream_started: bool =
     )
     return ModelTransportError(
         safe_error_message(error),
-        retryable=retryable and not stream_started,
+        retryable=retryable,
         status_code=status_code if isinstance(status_code, int) else None,
         retry_after=retry_after,
         stream_started=stream_started,

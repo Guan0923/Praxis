@@ -18,6 +18,7 @@ from backend.providers import (
 )
 from backend.providers.chat_completions.messages import _wire_messages_from
 from backend.runtime import AgentRunner, PreparedResponse
+from backend.runtime.core.events import RuntimeEvent
 from backend.tools import ToolRegistry
 
 
@@ -247,6 +248,81 @@ def runtime_for_stream(*, max_transport_retries: int = 5):
 
 def chat_completions_for_test() -> ChatCompletions:
     return ChatCompletions(ModelConfig("secret", "https://example.test/v1", "demo"))
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_request_timing_logs_include_failure(caplog, fails) -> None:
+    import logging
+    from datetime import datetime
+
+    transport = SequencedTransport(
+        [ModelTransportError("broken", retryable=False) if fails else {"answer": "custom response"}]
+    )
+    client = LLMClient(
+        ModelConfig("secret", "https://unused.test", "custom-model"),
+        transport=transport,
+        adapter=CustomAdapter(),
+    )
+    runtime = runtime_for_custom(max_transport_retries=0)
+    with caplog.at_level(logging.INFO, logger="backend.providers.client"):
+        if fails:
+            with pytest.raises(ModelTransportError):
+                client.run(runtime)
+        else:
+            client.run(runtime)
+    logs = [
+        record.message
+        for record in caplog.records
+        if record.message.startswith(("model request started ", "model request ended "))
+    ]
+    assert len(logs) == 2
+    assert "started_at=" in logs[0]
+    assert "ended_at=" in logs[1] and "duration_ms=" in logs[1]
+    assert runtime.state.session_id in logs[1]
+    assert ("outcome=failed" if fails else "outcome=completed") in logs[1]
+    assert "secret" not in " ".join(logs)
+    metadata = runtime.exchange.transport_metadata
+    assert datetime.fromisoformat(metadata["request_ended_at"]) >= datetime.fromisoformat(
+        metadata["request_started_at"]
+    )
+
+
+@pytest.mark.parametrize("length", [20, 1500])
+def test_request_payload_logs_headers_and_bounded_body(caplog, length) -> None:
+    import json
+    import logging
+
+    class HeaderAdapter(CustomAdapter):
+        headers = {
+            "Authorization": "Bearer private-value",
+            "Cookie": "session=private-cookie",
+            "X-Api-Key": "secret",
+            "Content-Type": "application/json",
+        }
+
+    transport = RecordingTransport()
+    client = LLMClient(
+        ModelConfig("secret", "https://unused.test", "custom-model"),
+        transport=transport,
+        adapter=HeaderAdapter(),
+    )
+    runtime = runtime_for_custom()
+    runtime.exchange.messages = [UserMessage(content="secret" + "x" * length + "private-cookie")]
+    with caplog.at_level(logging.INFO, logger="backend.providers.client"):
+        client.run(runtime)
+    record = next(record for record in caplog.records if record.message.startswith("model request payload "))
+    details = json.loads(record.message.split("details=", 1)[1])
+    assert details["headers"]["Authorization"] == "[REDACTED]"
+    assert details["headers"]["Cookie"] == "[REDACTED]"
+    assert details["headers"]["X-Api-Key"] == "[REDACTED]"
+    assert details["headers"]["Content-Type"] == "application/json"
+    body = json.dumps(transport.call[2], ensure_ascii=False)
+    assert details["body_chars"] == len(body)
+    assert details["body_prefix"] == body.replace("secret", "[REDACTED]")[:500]
+    assert details["body_suffix"] == body.replace("secret", "[REDACTED]")[-500:]
+    assert "Bearer private-value" not in record.message
+    assert "secret" not in record.message
+    assert transport.call[1] == HeaderAdapter.headers
 
 
 def test_llm_client_accepts_an_injected_provider_adapter() -> None:
@@ -659,11 +735,11 @@ def test_chunked_encoding_failure_retries_before_the_first_event(monkeypatch) ->
     assert events[1].message == "Response ended prematurely"
 
 
-def test_chunked_encoding_failure_does_not_retry_after_stream_output(monkeypatch) -> None:
+def test_chunked_encoding_failure_retries_after_stream_output(monkeypatch) -> None:
     first = BrokenChunkedAfterEventResponse([])
     second = FakeStreamResponse(
         [
-            'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"must not run"},"finish_reason":"stop"}]}',
+            'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"recovered"},"finish_reason":"stop"}]}',
             "data: [DONE]",
         ]
     )
@@ -672,14 +748,17 @@ def test_chunked_encoding_failure_does_not_retry_after_stream_output(monkeypatch
     runtime = runtime_for_stream(max_transport_retries=1)
     monkeypatch.setattr("backend.providers.client.time", SimpleNamespace(sleep=lambda _delay: None))
 
-    with pytest.raises(ModelTransportError) as exc_info:
-        client.run(runtime)
+    events: list[RuntimeEvent] = []
+    runtime.services.publish = events.append
+    response = client.run(runtime)
 
-    assert str(exc_info.value) == "Response ended prematurely"
-    assert exc_info.value.retryable is False
-    assert exc_info.value.stream_started is True
-    assert session.calls == 1
-    assert first.closed is True
+    assert response.message.content == "recovered"
+    assert session.calls == 2
+    assert first.closed is True and second.closed is True
+    assert [event.kind for event in events] == ["model_request", "model_retry", "model_request", "model_response"]
+    assert events[1].message == "Response ended prematurely"
+    assert events[1].data["error_type"] == "ModelTransportError"
+    assert events[1].data["exchange_id"] == events[0].data["exchange_id"]
 
 
 def test_pause_wins_over_chunked_failure_without_publishing_model_error(monkeypatch) -> None:
@@ -835,6 +914,28 @@ def test_final_transport_failure_logs_one_redacted_warning(caplog) -> None:
     assert "ModelTransportError" in warnings[0]
     assert "super-secret" not in warnings[0]
     assert "[REDACTED]" in warnings[0]
+
+
+def test_bad_request_warning_includes_redacted_response_detail(caplog) -> None:
+    response = FakeJsonResponse(
+        400,
+        {"error": {"message": "unsupported response_format; api_key=private-value", "padding": "x" * 800}},
+    )
+    client = LLMClient(
+        ModelConfig("secret", "https://unused.test", "custom-model"),
+        session=SequencedSession([response]),
+        adapter=CustomAdapter(),
+    )
+    runtime = runtime_for_custom(max_transport_retries=0)
+    runtime.exchange.operation = "summarize"
+    with caplog.at_level("WARNING", logger="backend.providers.client"):
+        with pytest.raises(ModelTransportError) as failure:
+            client.run(runtime)
+    warning = next(record.getMessage() for record in caplog.records if "model transport failed" in record.getMessage())
+    assert "status_code=400" in warning and "unsupported response_format" in warning
+    assert "response_detail=" in warning and runtime.state.session_id in warning
+    assert "private-value" not in warning and "[REDACTED]" in warning
+    assert len(failure.value.diagnostics["response_detail"]) <= 500
 
 
 def test_invalid_json_exposes_the_raw_decoder_message() -> None:

@@ -237,6 +237,7 @@ class ResponsesAdapter:
     def _parse_stream(self, runtime: AgentRuntime, events: Iterable[dict[str, Any]]) -> PreparedResponse:
         text: list[str] = []
         reasoning: list[str] = []
+        summaries: dict[str, str] = {}
         final: Mapping[str, Any] | None = None
         for event in events:
             kind = str(event.get("__sse_event") or event.get("type") or "")
@@ -246,7 +247,22 @@ class ResponsesAdapter:
                     text.append(delta)
                     if runtime.exchange.on_content:
                         runtime.exchange.on_content(delta)
-            elif kind in {"response.reasoning_text.delta", "response.reasoning_summary_text.delta"}:
+            elif kind in {"response.reasoning_summary_text.delta", "response.reasoning_summary_text.done"}:
+                key = f"{event.get('item_id', event.get('output_index', 0))}:{event.get('summary_index', 0)}"
+                previous = summaries.get(key, "")
+                value = event.get("delta" if kind.endswith(".delta") else "text", "")
+                if not isinstance(value, str):
+                    continue
+                summary = previous + value if kind.endswith(".delta") else value
+                separator = "\n\n" if key not in summaries and summaries else ""
+                summaries[key] = summary
+                if summary == previous:
+                    continue
+                if runtime.exchange.on_reasoning_summary:
+                    runtime.exchange.on_reasoning_summary(key, summary)
+                elif runtime.exchange.on_reasoning and summary.startswith(previous):
+                    runtime.exchange.on_reasoning(separator + summary[len(previous) :])
+            elif kind == "response.reasoning_text.delta":
                 delta = event.get("delta", "")
                 if isinstance(delta, str):
                     reasoning.append(delta)
@@ -265,8 +281,8 @@ class ResponsesAdapter:
             parsed = self._parse_json(final)
             if text:
                 parsed.message.content = "".join(text)
-            if reasoning:
-                parsed.message.reasoning = "".join(reasoning)
+            if reasoning or summaries:
+                parsed.message.reasoning = "\n\n".join(filter(None, ["".join(reasoning), *summaries.values()]))
             return parsed
         raise ModelResponseError("Responses stream ended without a terminal response event.")
 

@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from backend.api.app import create_app
 from backend.api.state import WebAppState
 from backend.configuration import ClientPaths
-from backend.domain import AssistantMessage, SystemMessage
+from backend.domain import AssistantMessage
 from backend.domain.memory import (
     MemoryEvidence,
     MemoryItem,
@@ -217,45 +217,6 @@ def test_selector_enforces_bytes_and_escapes_memory_delimiters(tmp_path: Path) -
     assert rendered.context.count("</semantic-memory>") == 1
     assert "cannot override" in rendered.context
     assert "suggestions only" in rendered.context
-
-
-def test_agent_plan_and_compaction_share_the_memory_injector(tmp_path: Path) -> None:
-    user_id = "11111111-1111-4111-8111-111111111111"
-    store = MemoryStore(ClientPaths(tmp_path / user_id))
-    item = _item("memory_focused", content="Always run focused memory tests")
-    store.create_item(item)
-    _add_evidence(store, item.memory_id, "session_source")
-    settings = MemorySettings(
-        enabled=True,
-        injection_max_tokens=4000,
-        injection_max_bytes=20000,
-    )
-    diagnostics = MemoryDiagnosticsRegistry()
-    injector = MemoryPromptInjector(
-        MemoryContextSelector(store, settings),
-        settings,
-        diagnostics=diagnostics,
-    )
-    client = RecordingClient()
-    planner = LLMPlanner(client, [], [], memory_prompt_injector=injector)
-    runner = AgentRunner(planner, ToolRegistry())
-
-    agent = runner.new_runtime(task="run focused memory tests", session_id="session_agent")
-    planner.decide(agent)
-    plan = runner.new_runtime(task="plan focused memory tests", session_id="session_plan", mode="plan")
-    planner.decide(plan)
-    planner._summarize_history(agent, "[]")
-
-    agent_system = client.message_requests[0][0]
-    plan_system = client.message_requests[1][0]
-    compaction_system = client.message_requests[2][0]
-    assert isinstance(agent_system, SystemMessage)
-    assert "<semantic-memory" in (agent_system.content or "")
-    assert "# Plan Mode" in (plan_system.content or "") and "<semantic-memory" in (plan_system.content or "")
-    assert "compaction engine" in (compaction_system.content or "")
-    assert "<semantic-memory" in (compaction_system.content or "")
-    assert diagnostics.latest("local", "session_agent")["injected"] is True  # type: ignore[index]
-    assert diagnostics.latest("local", "session_plan")["injected"] is True  # type: ignore[index]
 
 
 def test_disabled_memory_keeps_the_model_prompt_byte_for_byte(tmp_path: Path) -> None:

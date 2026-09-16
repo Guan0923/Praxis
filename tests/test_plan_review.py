@@ -5,7 +5,7 @@ import pytest
 from backend.domain import AssistantMessage, SkillSnapshot, ToolMessage, UserMessage
 from backend.runtime import AgentRunner
 from backend.runtime.core.contracts import InterruptDecision
-from backend.runtime.planning.review import REQUEST_PLAN_REVIEW_NAME, parse_plan_review
+from backend.runtime.planning.review import REQUEST_PLAN_REVIEW_NAME, parse_plan_review, save_plan_review
 from backend.tools import ToolRegistry
 
 PLAN = "# Plan title\n\n## Summary\nMake the requested change."
@@ -15,7 +15,7 @@ def review_call(plan: str, call_id: str = "review_1") -> ToolMessage:
     return ToolMessage(
         name=REQUEST_PLAN_REVIEW_NAME,
         call_id=call_id,
-        arguments={"plan": plan},
+        arguments={"plan_name": "test-plan", "plan": plan},
     )
 
 
@@ -30,16 +30,92 @@ class ScriptedPlanPlanner:
 
 
 def test_plan_review_parser_accepts_non_empty_markdown_without_enforcing_headings() -> None:
-    assert parse_plan_review({"plan": "  Change one thing.  "}) == "Change one thing."
+    assert parse_plan_review({"plan_name": "test-plan", "plan": "  Change one thing.  "}) == "Change one thing."
+
+
+def test_plan_review_creates_parents_and_overwrites_markdown(tmp_path: Path) -> None:
+    workspace = tmp_path / "new-workspace"
+    save_plan_review({"plan_name": "implementation", "plan": PLAN}, str(workspace))
+    target = workspace / "plan" / "implementation.md"
+    assert target.read_text(encoding="utf-8") == PLAN
+    save_plan_review({"plan_name": "implementation.md", "plan": "Updated plan"}, str(workspace))
+    assert target.read_text(encoding="utf-8") == "Updated plan"
+    assert list(target.parent.iterdir()) == [target]
+
+
+@pytest.mark.parametrize("name", ["", "../escape", "nested/name", "C:\\escape", "CON", "bad:name", ".."])
+def test_plan_review_rejects_unsafe_names(name: str, tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        save_plan_review({"plan_name": name, "plan": PLAN}, str(tmp_path))
+    assert not (tmp_path / "plan").exists()
+
+
+def test_plan_review_requires_workspace() -> None:
+    with pytest.raises(ValueError, match="workspace"):
+        save_plan_review({"plan_name": "implementation", "plan": PLAN}, None)
+
+
+@pytest.mark.parametrize("choice", ["implement", "implement_and_compaction", "stay_in_plan_mode"])
+def test_review_reads_edited_file_after_user_decision(tmp_path: Path, choice: str) -> None:
+    planner = ScriptedPlanPlanner([AssistantMessage(tool_messages=[review_call(PLAN)])])
+    runner = AgentRunner(planner, ToolRegistry(tmp_path), workspace_root=str(tmp_path))
+    revised = "# Revised plan\n\nUse the saved file, not the original arguments."
+
+    def decide(request):
+        (tmp_path / request.data["plan_path"]).write_text(revised, encoding="utf-8")
+        return InterruptDecision(choice)
+
+    runtime = runner.new_runtime(task="Plan", mode="plan", interrupt=decide)
+    result = runner.run(runtime)
+    assert result.final_answer == revised
+    assert result.actions[0].content == revised
+    if choice != "stay_in_plan_mode":
+        assert result.handoff.task == f"<approved_plan>\n{revised}\n</approved_plan>"
+        assert result.handoff.compact_before == (choice == "implement_and_compaction")
+
+
+def test_missing_plan_file_blocks_handoff(tmp_path: Path) -> None:
+    planner = ScriptedPlanPlanner([AssistantMessage(tool_messages=[review_call(PLAN)])])
+    runner = AgentRunner(planner, ToolRegistry(tmp_path), workspace_root=str(tmp_path))
+
+    def decide(request):
+        (tmp_path / request.data["plan_path"]).unlink()
+        return InterruptDecision("implement")
+
+    result = runner.run(runner.new_runtime(task="Plan", mode="plan", interrupt=decide))
+    assert result.status == "failed"
+    assert result.handoff is None
+
+
+def test_plan_review_write_failure_does_not_open_review(tmp_path: Path) -> None:
+    (tmp_path / "plan").write_text("not a directory", encoding="utf-8")
+    planner = ScriptedPlanPlanner(
+        [
+            AssistantMessage(tool_messages=[review_call(PLAN)]),
+            AssistantMessage(content="Unable to save plan."),
+        ]
+    )
+    runner = AgentRunner(planner, ToolRegistry(tmp_path), workspace_root=str(tmp_path))
+    requests = []
+    runtime = runner.new_runtime(
+        task="Plan the change",
+        mode="plan",
+        interrupt=lambda request: requests.append(request) or InterruptDecision("implement"),
+    )
+    runner.run(runtime)
+    assert not requests
+    assert runtime.run.actions[0].status == "failed"
+    assert (tmp_path / "plan").read_text(encoding="utf-8") == "not a directory"
 
 
 @pytest.mark.parametrize(
     "arguments",
     [
-        {"plan": ""},
-        {"plan": "   "},
+        {"plan_name": "test-plan", "plan": ""},
+        {"plan_name": "test-plan", "plan": "   "},
+        {"plan": PLAN},
         {},
-        {"plan": PLAN, "extra": True},
+        {"plan_name": "test-plan", "plan": PLAN, "extra": True},
     ],
 )
 def test_plan_review_parser_rejects_invalid_arguments(arguments: dict[str, object]) -> None:
@@ -49,7 +125,7 @@ def test_plan_review_parser_rejects_invalid_arguments(arguments: dict[str, objec
 
 def test_valid_plan_review_opens_existing_review_and_preserves_one_control_message(tmp_path: Path) -> None:
     planner = ScriptedPlanPlanner([AssistantMessage(tool_messages=[review_call(PLAN)])])
-    runner = AgentRunner(planner, ToolRegistry(tmp_path))
+    runner = AgentRunner(planner, ToolRegistry(tmp_path), workspace_root=str(tmp_path))
     requests = []
     skill = SkillSnapshot("demo", "Demo", "Instructions", ".praxis/skills/demo", "abc")
     runtime = runner.new_runtime(
@@ -64,24 +140,25 @@ def test_valid_plan_review_opens_existing_review_and_preserves_one_control_messa
     assert result.status == "completed"
     assert result.final_answer == PLAN
     assert result.handoff is not None
-    assert result.handoff.task == PLAN
+    assert result.handoff.task == f"<approved_plan>\n{PLAN}\n</approved_plan>"
     assert result.handoff.active_skills == (skill,)
     assert [request.kind for request in requests] == ["plan"]
     assert requests[0].data["plan"] == PLAN
+    assert (tmp_path / "plan" / "test-plan.md").read_text(encoding="utf-8") == PLAN
     assert runtime.state.messages[0] == UserMessage(content="Plan the change")
     saved = next(message for message in runtime.state.messages if isinstance(message, AssistantMessage))
     assert isinstance(saved, AssistantMessage)
     assert saved.content is None
     assert len(saved.tool_messages) == 1
-    assert saved.tool_messages[0].arguments == {"plan": PLAN}
+    assert saved.tool_messages[0].arguments == {"plan_name": "test-plan", "plan": PLAN}
     assert saved.tool_messages[0].status == "succeeded"
-    assert saved.tool_messages[0].content == "Plan submitted for review."
+    assert saved.tool_messages[0].content == PLAN
 
 
 def test_plan_review_tool_lifecycle_and_review_approval_share_call_id(tmp_path: Path) -> None:
     events = []
     planner = ScriptedPlanPlanner([AssistantMessage(tool_messages=[review_call(PLAN, "review_call")])])
-    runner = AgentRunner(planner, ToolRegistry(tmp_path))
+    runner = AgentRunner(planner, ToolRegistry(tmp_path), workspace_root=str(tmp_path))
     runtime = runner.new_runtime(
         task="Plan the change",
         mode="plan",
@@ -112,7 +189,7 @@ def test_blank_plan_is_retryable_then_valid_plan_opens_review(tmp_path: Path) ->
             AssistantMessage(tool_messages=[review_call(PLAN, "review_good")]),
         ]
     )
-    runner = AgentRunner(planner, ToolRegistry(tmp_path))
+    runner = AgentRunner(planner, ToolRegistry(tmp_path), workspace_root=str(tmp_path))
     requests = []
     runtime = runner.new_runtime(
         task="Plan the change",
@@ -150,7 +227,7 @@ def test_plan_review_uses_serial_lane_alongside_execution_tools(tmp_path: Path) 
             AssistantMessage(content="I can explain the options without opening review."),
         ]
     )
-    runner = AgentRunner(planner, ToolRegistry(tmp_path))
+    runner = AgentRunner(planner, ToolRegistry(tmp_path), workspace_root=str(tmp_path))
     requests = []
     runtime = runner.new_runtime(
         task="Discuss the change",
@@ -176,7 +253,7 @@ def test_repeated_invalid_plan_review_calls_continue_until_model_recovers(tmp_pa
             AssistantMessage(content="The plan could not be prepared."),
         ]
     )
-    runner = AgentRunner(planner, ToolRegistry(tmp_path))
+    runner = AgentRunner(planner, ToolRegistry(tmp_path), workspace_root=str(tmp_path))
     runtime = runner.new_runtime(
         task="Plan the change",
         mode="plan",
@@ -203,7 +280,7 @@ def test_streamed_plan_with_tool_call_is_retained_and_final_plan_is_marked_strea
     tmp_path: Path,
 ) -> None:
     events = []
-    runner = AgentRunner(StreamingPlanPlanner(), ToolRegistry(tmp_path))
+    runner = AgentRunner(StreamingPlanPlanner(), ToolRegistry(tmp_path), workspace_root=str(tmp_path))
     runtime = runner.new_runtime(
         task="Plan the change",
         mode="plan",

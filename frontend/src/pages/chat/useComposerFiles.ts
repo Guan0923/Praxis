@@ -28,7 +28,8 @@ export function useComposerFiles({
   onTextChanged,
 }: ComposerFilesOptions) {
   const key = viewKey(sessionId, threadId ?? conversationId);
-  const saved = useViewState(key);
+  const saved = useViewState(key, (state) => [state.draft, state.references, state.uploads] as const,
+    (left, right) => left.every((value, index) => value === right[index]));
   const [input, rawSetInput] = useState("");
   const [references, rawSetReferences] = useState<FileReference[]>([]);
   const [fileTriggerState, setFileTriggerState] = useState<FileTrigger | null>(null);

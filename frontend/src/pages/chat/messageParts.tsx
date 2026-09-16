@@ -1,7 +1,9 @@
 import { ErrorDisplay } from "../../components/ErrorDisplay";
-import { Alert, BorderBeam, Collapse, App as AntApp, message as staticMessage } from "antd";
+import { BorderBeam, Collapse, App as AntApp, message as staticMessage } from "antd";
 import { BranchesOutlined, CopyOutlined, EditOutlined, FileTextOutlined, ToolOutlined } from "@ant-design/icons";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import MarkdownIt from "markdown-it";
+import { VirtualBlock } from "./ChatViewport";
 import type { ChatMessage, DecisionRequest, DisplayMode, FileReference, ToolEvent, TurnItem } from "../../types";
 import { fileSourceLabels } from "../../types/files";
 import { effectiveDisplayMode } from "../../app/displayMode";
@@ -11,6 +13,7 @@ import IconAction from "../../components/IconAction";
 import MarkdownContent from "../../components/MarkdownContent";
 import ShimmerText from "../../components/ShimmerText";
 import AssistantIcon from "../../components/AssistantIcon";
+import PlanFileContent from "../../components/PlanFileContent";
 
 export async function copyText(value: string): Promise<void> {
   const clipboard = typeof window !== "undefined" ? window.navigator.clipboard : navigator.clipboard;
@@ -127,8 +130,11 @@ export function summarizeReasoningTail(value: string, limit = 250): string {
   return characters.length > limit ? `…${characters.slice(-limit).join("")}` : normalized;
 }
 
-function callId(ev: ToolEvent): string {
-  return typeof ev.data?.call_id === "string" ? ev.data.call_id : "";
+function toolPayloadText(value: unknown): string {
+  if (typeof value === "string") {
+    try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; }
+  }
+  return jsonText(value);
 }
 
 function isUserDenied(value: { failure_code?: unknown }): boolean {
@@ -144,7 +150,7 @@ export function ToolLine({ ev, display, active = false }: { ev: ToolEvent; displ
         <ToolOutlined aria-hidden="true" />
         <b>{tool}</b>
         <span className="tool-status failed">已拒绝</span>
-        {display === "developer" && callId(ev) ? <span className="tool-call-id">call ID: {callId(ev)}</span> : null}
+
       </div>
     );
   }
@@ -154,9 +160,9 @@ export function ToolLine({ ev, display, active = false }: { ev: ToolEvent; displ
       <div className={active ? "tool-line is-active" : "tool-line"}>
         <ToolOutlined aria-hidden="true" />
         <b>{active ? `正在调用 ${tool}` : `调用 ${tool}`}</b>
-        {display === "verbose" && !active ? <span className="mono">{jsonText(ev.data?.arguments)}</span> : null}
-        {display === "developer" && callId(ev) ? <span className="tool-call-id">call ID: {callId(ev)}</span> : null}
-        {display === "developer" ? <pre className="tool-payload">{jsonText(ev.data)}</pre> : null}
+        {display === "verbose" ? <pre className="tool-payload">{toolPayloadText(ev.data?.arguments)}</pre> : null}
+
+
       </div>
     );
   }
@@ -165,9 +171,9 @@ export function ToolLine({ ev, display, active = false }: { ev: ToolEvent; displ
     return (
       <div className="tool-result">
         <div className="tool-result-label"><FileTextOutlined /> {ev.data?.tool ? String(ev.data.tool) : "工具"} 结果</div>
-        {display === "developer" && callId(ev) ? <div className="tool-call-id">call ID: {callId(ev)}</div> : null}
-        {display === "minimal" ? null : <pre>{jsonText(result)}</pre>}
-        {display === "developer" ? <pre className="tool-payload">{jsonText(ev.data)}</pre> : null}
+
+        {display === "minimal" ? null : <pre className="tool-payload">{toolPayloadText(result)}</pre>}
+
       </div>
     );
   }
@@ -216,25 +222,30 @@ function alignRuntimeSummaryTail(viewport: HTMLSpanElement | null) {
   viewport.scrollLeft = Math.max(0, viewport.scrollWidth - viewport.clientWidth);
 }
 
-function RuntimeSummaryLabel({ text }: { text: string }) {
+const summaryMarkdown = new MarkdownIt({ html: false, breaks: false, linkify: false })
+  .disable(["image", "link", "autolink"]);
+
+function RuntimeSummaryLabel({ text, followTail = true }: { text: string; followTail?: boolean }) {
   const viewportRef = useRef<HTMLSpanElement>(null);
+  const html = useMemo(() => summaryMarkdown.renderInline(text), [text]);
 
   useLayoutEffect(() => {
-    alignRuntimeSummaryTail(viewportRef.current);
-  }, [text]);
+    if (followTail) alignRuntimeSummaryTail(viewportRef.current);
+    else if (viewportRef.current) viewportRef.current.scrollLeft = 0;
+  }, [text, followTail]);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
-    if (!viewport || typeof ResizeObserver === "undefined") return;
+    if (!followTail || !viewport || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => alignRuntimeSummaryTail(viewport));
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, []);
+  }, [followTail]);
 
   return (
-    <span className="runtime-summary-viewport" ref={viewportRef}>
+    <span className={followTail ? "runtime-summary-viewport" : "runtime-summary-viewport is-summary"} ref={viewportRef}>
       <span className="runtime-summary-track">
-        <span className="runtime-summary-text">{text}</span>
+        <span className="runtime-summary-text" dangerouslySetInnerHTML={{ __html: html }} />
       </span>
     </span>
   );
@@ -250,9 +261,10 @@ function runtimeItemLabel(item: TurnItem, expanded: boolean, active: boolean) {
       ? <RuntimeStatusLabel text={runtimeActiveLabel(item)} />
       : <span className="runtime-static-label">{runtimeCompletedLabel(item)}</span>;
   }
-  const summary = summarizeReasoningTail(String(item.text ?? ""));
+  const isSummary = typeof item.summary === "string";
+  const summary = isSummary ? String(item.summary).trim() : summarizeReasoningTail(String(item.text ?? ""));
   if (summary) {
-    return <RuntimeSummaryLabel text={summary} />;
+    return <RuntimeSummaryLabel text={summary} followTail={!isSummary} />;
   }
   return active
     ? <RuntimeStatusLabel text={runtimeActiveLabel(item)} shimmer />
@@ -276,7 +288,7 @@ function runtimeItemBody(item: TurnItem, display: DisplayMode, active: boolean) 
   return <ToolLine ev={event} display={display} active={active && item.type === "tool_call"} />;
 }
 
-function RuntimeItemCollapse({
+const RuntimeItemCollapse = memo(function RuntimeItemCollapse({
   item,
   itemKey,
   display,
@@ -306,7 +318,7 @@ function RuntimeItemCollapse({
       }]}
     />
   );
-}
+});
 
 function MinimalRuntimeStatus({ item }: { item: TurnItem }) {
   const label = runtimeActiveLabel(item, true);
@@ -435,120 +447,159 @@ function visibleAssistantItems(items: TurnItem[] | undefined): TurnItem[] {
   return (items ?? []).filter((item) => !HIDDEN_ASSISTANT_ITEM_TYPES.has(item.type));
 }
 
-function OrderedAssistantItems({
-  msg,
-  items,
-  configuredDisplay,
-  onDecision,
-}: {
-  msg: ChatMessage;
-  items: TurnItem[];
-  configuredDisplay: DisplayMode;
+type AssistantItemProps = {
+  item: TurnItem; identity: string; expansionKey: string; active: boolean; running: boolean; display: DisplayMode;
+  sessionId?: string; threadId?: string; decision?: DecisionRequest; groupItems?: TurnItem[]; showPlan: boolean;
   onDecision: (request: DecisionRequest, choice: string, options?: { supplement?: string; answers?: Record<string, string[]> }) => Promise<void>;
+};
+
+const OrderedAssistantItem = memo(function OrderedAssistantItem({
+  item, identity, expansionKey, active, running, display, sessionId, threadId, decision, groupItems, showPlan, onDecision,
+}: AssistantItemProps) {
+  const content = (() => {
+    const groupId = parallelGroupId(item);
+    if (item.type === "tool_result" && item.tool === "request_plan_review" && item.status === "success" && typeof item.plan_path === "string" && sessionId) {
+      return <PlanFileContent key={identity} sessionId={sessionId} threadId={threadId} path={item.plan_path} />;
+    }
+    if (groupId && ["tool_call", "tool_result"].includes(item.type)) {
+      if (display === "minimal") {
+        return active ? <MinimalRuntimeStatus key={identity} item={item} /> : null;
+      }
+      return (
+        <ParallelToolGroup
+          key={identity}
+          items={groupItems ?? []}
+          groupId={groupId}
+          itemKey={expansionKey}
+          display={display}
+          active={Boolean(running)}
+        />
+      );
+    }
+    if (item.type === "retry") {
+      return <RetryItem key={identity} item={item} active={active && item.status === "running"} />;
+    }
+    if (["reasoning", "tool_call", "tool_result"].includes(item.type)) {
+      if (display === "minimal") return active ? <MinimalRuntimeStatus key={identity} item={item} /> : null;
+      return <RuntimeItemCollapse key={identity} item={item} itemKey={identity} display={display} active={active} />;
+    }
+    if (item.type === "text" || item.type === "bash") {
+      const value = String(item.text ?? "");
+      return value ? <div className="runtime-item-response" data-item-type={item.type} key={identity}><MarkdownContent text={value} itemId={identity} running={Boolean(running && item.status === "running")} /></div> : null;
+    }
+    if (item.type === "error") {
+      return <div key={identity} className="runtime-item-response" data-item-type="error"><ErrorDisplay error={item.message ?? "Execution failed."} report={item.error_report} /></div>;
+    }
+    if (item.type === "subagent" && item.event === "agent_report") {
+      const value = String(item.text ?? "");
+      const failed = item.report_status === "failed";
+      return value ? (
+        <div className={`runtime-agent-report${failed ? " failed" : ""}`} data-item-type="subagent" data-report-status={failed ? "failed" : "success"} key={identity}>{value}</div>
+      ) : null;
+    }
+    if (decision && (item.type === "approval" || item.type === "question") && decision.decision_id === item.decision_id) {
+      return (
+        <div data-item-type={item.type} key={identity}>
+          <DecisionCard request={decision} sessionId={sessionId} threadId={threadId} showPlan={showPlan} onSubmit={(choice, options) => onDecision(decision, choice, options)} />
+        </div>
+      );
+    }
+    if (item.type === "approval") {
+      if (item.event !== "approval_resolved" || !["allowed", "denied"].includes(String(item.approval_status))) return null;
+      const denied = item.approval_status === "denied";
+      const tool = String(item.tool ?? "工具");
+      return (
+        <div
+          className={`tool-line runtime-approval-status${denied ? " failed" : ""}`}
+          data-item-type="approval"
+          key={identity}
+        >
+          <ToolOutlined aria-hidden="true" />
+          <span>{`${denied ? "已拒绝" : "已允许"} ${tool}`}</span>
+        </div>
+      );
+    }
+    const value = String(item.text ?? "");
+    return value ? <div className="runtime-business-item" data-item-type={item.type} key={identity}><MarkdownContent text={value} /></div> : null;
+  })();
+  if (!content || item.type === "text" || item.type === "bash") return content;
+  return <VirtualBlock id={identity} estimate={40} revision={item}
+    pinned={Boolean(running && (active || item.status === "running" || groupItems?.some((candidate) => candidate.status === "running"))) || Boolean(decision)}>
+    {content}
+  </VirtualBlock>;
+});
+
+function OrderedAssistantItems({ msg, sessionId, threadId, items, configuredDisplay, onDecision }: {
+  msg: ChatMessage; sessionId?: string; threadId?: string; items: TurnItem[];
+  configuredDisplay: DisplayMode; onDecision: AssistantItemProps["onDecision"];
 }) {
   const display = effectiveDisplayMode(configuredDisplay);
-  const version = msg.itemVersion ?? 0;
-  return (
-    <div className="runtime-items">
-      {msg.compactionNotice ? <div className="runtime-compaction-notice">上下文已压缩</div> : null}
-      {items.map((item, index) => {
-        const identity = `${msg.id}:${version}:${index}`;
-        const active = Boolean(msg.running && index === items.length - 1);
-        const groupId = parallelGroupId(item);
-        if (groupId && ["tool_call", "tool_result"].includes(item.type)) {
-          const first = items.findIndex((candidate) => parallelGroupId(candidate) === groupId);
-          if (first !== index) return null;
-          if (display === "minimal") {
-            return active ? <MinimalRuntimeStatus key={identity} item={item} /> : null;
-          }
-          return (
-            <ParallelToolGroup
-              key={`${msg.id}:${groupId}`}
-              items={items}
-              groupId={groupId}
-              itemKey={`${msg.id}:${groupId}`}
-              display={display}
-              active={Boolean(msg.running)}
-            />
-          );
-        }
-        if (item.type === "retry") {
-          return <RetryItem key={identity} item={item} active={active && item.status === "running"} />;
-        }
-        if (["reasoning", "tool_call", "tool_result"].includes(item.type)) {
-          if (display === "minimal") return active ? <MinimalRuntimeStatus key={identity} item={item} /> : null;
-          return <RuntimeItemCollapse key={identity} item={item} itemKey={identity} display={display} active={active} />;
-        }
-        if (item.type === "text" || item.type === "bash") {
-          const value = String(item.text ?? "");
-          return value ? <div className="runtime-item-response" data-item-type={item.type} key={identity}><MarkdownContent text={value} itemId={identity} running={item.status === "running"} /></div> : null;
-        }
-        if (item.type === "error") {
-          return <Alert key={identity} className="error-text" type="error" showIcon title={<ErrorDisplay error={item.message ?? "Execution failed."} report={item.error_report} />} />;
-        }
-        if (item.type === "subagent" && item.event === "agent_report") {
-          const value = String(item.text ?? "");
-          const failed = item.report_status === "failed";
-          return value ? (
-            <div className={`runtime-agent-report${failed ? " failed" : ""}`} data-item-type="subagent" data-report-status={failed ? "failed" : "success"} key={identity}>{value}</div>
-          ) : null;
-        }
-        const decision = msg.decision;
-        if (decision && (item.type === "approval" || item.type === "question") && decision.decision_id === item.decision_id) {
-          return (
-            <div data-item-type={item.type} key={identity}>
-              <DecisionCard request={decision} onSubmit={(choice, options) => onDecision(decision, choice, options)} />
-            </div>
-          );
-        }
-        if (item.type === "approval") {
-          if (item.event !== "approval_resolved" || !["allowed", "denied"].includes(String(item.approval_status))) return null;
-          const denied = item.approval_status === "denied";
-          const tool = String(item.tool ?? "工具");
-          return (
-            <div
-              className={`tool-line runtime-approval-status${denied ? " failed" : ""}`}
-              data-item-type="approval"
-              key={identity}
-            >
-              <ToolOutlined aria-hidden="true" />
-              <span>{`${denied ? "已拒绝" : "已允许"} ${tool}`}</span>
-            </div>
-          );
-        }
-        const value = String(item.text ?? "");
-        return value ? <div className="runtime-business-item" data-item-type={item.type} key={identity}><MarkdownContent text={value} /></div> : null;
-      })}
-    </div>
-  );
+  const previousGroups = useRef(new Map<string, TurnItem[]>());
+  const groups = useMemo(() => {
+    const next = new Map<string, TurnItem[]>();
+    for (const item of items) {
+      const id = parallelGroupId(item);
+      if (!id) continue;
+      const group = next.get(id) ?? [];
+      group.push(item);
+      next.set(id, group);
+    }
+    for (const [id, group] of next) {
+      const old = previousGroups.current.get(id);
+      if (old && old.length === group.length && old.every((item, index) => item === group[index])) next.set(id, old);
+    }
+    return next;
+  }, [items]);
+  useLayoutEffect(() => { previousGroups.current = groups; }, [groups]);
+  const showPlan = !items.some((entry) => entry.type === "tool_result" && entry.status === "success"
+    && entry.plan_path === msg.decision?.plan_path && Boolean(msg.decision?.plan_path));
+  return <div className="runtime-items">
+    {msg.compactionNotice ? <div className="runtime-compaction-notice">上下文已压缩</div> : null}
+    {items.map((item, index) => {
+      const groupId = parallelGroupId(item);
+      const groupItems = groupId ? groups.get(groupId) : undefined;
+      const planResult = item.type === "tool_result" && item.tool === "request_plan_review" && item.status === "success" && typeof item.plan_path === "string";
+      if (!planResult && groupItems && ["tool_call", "tool_result"].includes(item.type) && groupItems[0] !== item) return null;
+      const identity = msg.id + ":" + (msg.itemVersion ?? 0) + ":" + (!planResult && groupId || index);
+      const decision = msg.decision && item.decision_id === msg.decision.decision_id ? msg.decision : undefined;
+      return <OrderedAssistantItem key={identity} identity={identity} expansionKey={groupId ? msg.id + ":" + groupId : identity} item={item}
+        active={Boolean(msg.running && index === items.length - 1)} running={Boolean(msg.running)}
+        display={display} sessionId={sessionId} threadId={threadId} decision={decision}
+        groupItems={groupItems} showPlan={decision ? showPlan : false} onDecision={onDecision} />;
+    })}
+  </div>;
 }
 
-export function AssistantMessage({
+export const AssistantMessage = memo(function AssistantMessage({
   msg,
+  sessionId,
+  threadId,
   display,
   onDecision,
   busy,
   onFork,
 }: {
   msg: ChatMessage;
+  sessionId?: string;
+  threadId?: string;
   display: DisplayMode;
   onDecision: (request: DecisionRequest, choice: string, options?: { supplement?: string; answers?: Record<string, string[]> }) => Promise<void>;
   busy: boolean;
-  onFork?: () => void;
+  onFork?: (messageId: string) => void;
 }) {
   const hasItems = msg.items !== undefined;
-  const visibleItems = visibleAssistantItems(msg.items);
+  const visibleItems = useMemo(() => visibleAssistantItems(msg.items), [msg.items]);
   const hasDecisionItem = Boolean(msg.decision && visibleItems.some((item) => item.decision_id === msg.decision?.decision_id));
   const hasErrorItem = visibleItems.some((item) => item.type === "error");
   const frame = (
     <div className={msg.running ? "assistant-run-frame is-running" : "assistant-run-frame"}>
-      {hasItems ? <OrderedAssistantItems msg={msg} items={visibleItems} configuredDisplay={display} onDecision={onDecision} /> : null}
-      {!hasDecisionItem && msg.decision ? <DecisionCard request={msg.decision} onSubmit={(choice, options) => onDecision(msg.decision!, choice, options)} /> : null}
-      {!hasErrorItem && msg.error ? <Alert className="error-text" type="error" showIcon title={<ErrorDisplay error={msg.error} report={msg.error_report} />} /> : null}
-      {!hasItems && msg.content ? <MarkdownContent text={msg.content} /> : null}
+      {hasItems ? <OrderedAssistantItems msg={msg} sessionId={sessionId} threadId={threadId} items={visibleItems} configuredDisplay={display} onDecision={onDecision} /> : null}
+      {!hasDecisionItem && msg.decision ? <DecisionCard request={msg.decision} sessionId={sessionId} threadId={threadId} onSubmit={(choice, options) => onDecision(msg.decision!, choice, options)} /> : null}
+      {!hasErrorItem && msg.error ? <div className="runtime-item-response" data-item-type="error"><ErrorDisplay error={msg.error} report={msg.error_report} /></div> : null}
+      {!hasItems && msg.content ? <MarkdownContent text={msg.content} itemId={msg.id} running={Boolean(msg.running)} /> : null}
       {!msg.error && (!hasItems || visibleItems.length === 0) && !msg.content && msg.running && !msg.decision ? <div className="thinking" role="status" aria-label="思考中" data-state="thinking" aria-live="polite"><span className="dot" /><span className="dot" /><span className="dot" /></div> : null}
       {display !== "minimal" && (msg.status || (msg.metrics && msg.metrics.duration_ms != null)) ? <div className="meta">{msg.status ?? ""}{msg.status && msg.metrics && msg.metrics.duration_ms != null ? " · " : ""}{msg.metrics && msg.metrics.duration_ms != null ? `${(msg.metrics.duration_ms / 1000).toFixed(1)}s · ${msg.metrics.model_calls ?? 0} 次模型调用 · ${msg.metrics.tool_calls ?? 0} 次工具调用` : null}</div> : null}
-      <MessageActions msg={msg} busy={busy} onFork={onFork} />
+      <MessageActions msg={msg} busy={busy} onFork={onFork ? () => onFork(msg.id) : undefined} />
     </div>
   );
   return (
@@ -560,5 +611,5 @@ export function AssistantMessage({
       </div>
     </div>
   );
-}
+});
 import { useSavedExpansion, useSavedExpansionKeys } from "../../app/viewState";

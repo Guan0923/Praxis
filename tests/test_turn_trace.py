@@ -390,18 +390,18 @@ def test_preinitialization_skill_item_is_not_backfilled_and_stream_item_is_appen
 
     baseline = store.load_turn_trace(turn.session_id, turn.id, 0)
     assert baseline is not None
-    assert [item.role for item in baseline.items] == ["user", "developer"]
+    assert [item.role for item in baseline.items] == ["runtime", "user", "developer"]
 
     bridge.handle(RuntimeEvent("thinking_start", "", {}))
     bridge.handle(RuntimeEvent("thinking_delta", "part one", {}))
     bridge.handle(RuntimeEvent("thinking_delta", " part two", {}))
     during_stream = store.load_turn_trace(turn.session_id, turn.id, 0)
-    assert during_stream is not None and during_stream.last_sequence == 2
+    assert during_stream is not None and during_stream.last_sequence == baseline.last_sequence
 
     bridge.handle(RuntimeEvent("thinking_end", "", {}))
     completed = store.load_turn_trace(turn.session_id, turn.id, 0)
     assert completed is not None
-    assert completed.last_sequence == 3
+    assert completed.last_sequence == baseline.last_sequence + 1
     assert completed.items[-1].item == {
         "type": "reasoning",
         "text": "part one part two",
@@ -426,7 +426,7 @@ def test_tool_call_result_and_steering_are_appended_in_canonical_order(tmp_path:
         )
     )
     running = store.load_turn_trace(turn.session_id, turn.id, 0)
-    assert running is not None and running.last_sequence == 2
+    assert running is not None and running.last_sequence == 3
 
     bridge.handle(
         RuntimeEvent(
@@ -444,9 +444,10 @@ def test_tool_call_result_and_steering_are_appended_in_canonical_order(tmp_path:
     )
     trace = store.load_turn_trace(turn.session_id, turn.id, 0)
     assert trace is not None
-    assert [item.item["type"] for item in trace.items] == ["text", "text", "tool_call", "tool_result", "text"]
-    assert [item.role for item in trace.items] == ["user", "developer", "assistant", "assistant", "user"]
-    assert trace.items[2].item["status"] == "success"
+    messages = [item for item in trace.items if item.role != "runtime"]
+    assert [item.item["type"] for item in messages] == ["text", "text", "tool_call", "tool_result", "text"]
+    assert [item.role for item in messages] == ["user", "developer", "assistant", "assistant", "user"]
+    assert messages[2].item["status"] == "success"
 
     duplicate = store.append_turn_trace_item(
         turn.session_id,
@@ -458,7 +459,8 @@ def test_tool_call_result_and_steering_are_appended_in_canonical_order(tmp_path:
         item=trace.items[-1].item,
         completed_at="later",
     )
-    assert duplicate is not None and duplicate.last_sequence == trace.last_sequence
+    assert duplicate is not None and duplicate.last_sequence == trace.last_sequence + 1
+    assert duplicate.items[-1].item == trace.items[-1].item
 
 
 def test_model_retry_is_audited_after_the_next_attempt_starts(tmp_path: Path) -> None:
@@ -475,7 +477,8 @@ def test_model_retry_is_audited_after_the_next_attempt_starts(tmp_path: Path) ->
     )
     during_delay = store.load_turn_trace(turn.session_id, turn.id, 0)
     assert during_delay is not None
-    assert [item.role for item in during_delay.items] == ["user", "developer"]
+    assert [item.role for item in during_delay.items] == ["runtime", "user", "developer", "runtime"]
+    assert during_delay.items[-1].item["event"] == "model_retry"
 
     bridge.handle(RuntimeEvent("model_request", "Model decision request"))
     trace = store.load_turn_trace(turn.session_id, turn.id, 0)
@@ -556,13 +559,15 @@ def test_child_turn_ignores_predecision_items_until_its_trace_is_initialized(tmp
     assert runtime.services.turn_trace_initialized is False
 
     bridge.handle(RuntimeEvent("skills_selected", "audit", {"skills": ["audit"], "source": "llm"}))
-    assert store.load_turn_trace(child.session_id, child.id, child.current_data_idx) is None
+    pending = store.load_turn_trace(child.session_id, child.id, child.current_data_idx)
+    assert pending is not None and not pending.context.initialized_at
+    assert pending.items[0].item["event"] == "mode_changed"
 
     initialize_trace(runtime)
     trace = store.load_turn_trace(child.session_id, child.id, child.current_data_idx)
     assert trace is not None
-    assert [item.role for item in trace.items] == ["user", "developer"]
-    assert trace.items[0].item["text"] == "follow up"
+    assert [item.role for item in trace.items] == ["runtime", "user", "developer"]
+    assert trace.items[1].item["text"] == "follow up"
 
 
 def test_trace_initialization_failure_prevents_transport(tmp_path: Path) -> None:

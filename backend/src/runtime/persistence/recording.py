@@ -81,6 +81,9 @@ def model_request_data(state: RuntimeState, exchange: RuntimeExchange) -> dict[s
     """Return provider-neutral data needed to replay a prepared model request."""
 
     parameters = dict(state.request_parameters)
+    snapshot = exchange.context.get("runtime_config_snapshot")
+    if isinstance(snapshot, Mapping) and isinstance(snapshot.get("request_parameters"), Mapping):
+        parameters = dict(snapshot["request_parameters"])
     overrides = exchange.context.get("request_parameters")
     if isinstance(overrides, Mapping):
         parameters.update(overrides)
@@ -89,7 +92,7 @@ def model_request_data(state: RuntimeState, exchange: RuntimeExchange) -> dict[s
         "exchange_id": exchange.exchange_id,
         "operation": exchange.operation,
         "provider": state.provider,
-        "model": state.model,
+        "model": parameters.get("model") or state.model,
         "output_mode": exchange.output_mode,
         "stream": exchange.stream,
         "request_parameters": parameters,
@@ -225,7 +228,44 @@ def turn_trace_audit_value(value: Any) -> Any:
 def _persistent_value(value: Any, include_full_messages: bool, key: str | None = None) -> Any:
     if key == "error_report":
         return normalize_error_report(value)
-    if key is not None and _SENSITIVE_KEY.search(key):
+    if (
+        key is not None
+        and _SENSITIVE_KEY.search(key)
+        and not (
+            (value is None or isinstance(value, (int, float)) and not isinstance(value, bool))
+            and key
+            in {
+                "input_tokens",
+                "output_tokens",
+                "total_tokens",
+                "cached_tokens",
+                "reasoning_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "cached_input_tokens",
+                "estimated_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+                "prompt_tokens",
+                "completion_tokens",
+                "estimated_tokens_before",
+                "estimated_tokens_after",
+                "target_tokens",
+                "estimated_input_tokens",
+                "max_tokens",
+                "max_output_tokens",
+                "max_completion_tokens",
+            }
+            or isinstance(value, Mapping)
+            and key
+            in {
+                "input_tokens_details",
+                "output_tokens_details",
+                "prompt_tokens_details",
+                "completion_tokens_details",
+            }
+        )
+    ):
         return "[REDACTED]"
     if isinstance(value, Mapping):
         return {

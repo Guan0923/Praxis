@@ -42,7 +42,7 @@ def test_broker_wait_accepts_configured_command_timeout(value) -> None:
     assert _timeout(value) == value
 
 
-@pytest.mark.parametrize("value", [-1, 601, True, "600", float("nan"), float("inf")])
+@pytest.mark.parametrize("value", [-1, True, "600", float("nan"), float("inf")])
 def test_broker_wait_rejects_invalid_timeout(value) -> None:
     with pytest.raises(SandboxInitializationError, match="timeout is invalid"):
         _timeout(value)

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RightPanelPayload, RightPanelWindow } from "../../types";
 import RightPanel, { RightPanelLauncher, type RightPanelController, useRightPanel } from "./RightPanel";
+import { openPanelFile } from "./fileEvents";
 
 const api = vi.hoisted(() => ({
   getRightPanel: vi.fn(),
@@ -233,6 +234,22 @@ function HookHarness({ sessionId, threadId }: { sessionId: string; threadId?: st
   const controller = useRightPanel(sessionId, "turn-main", vi.fn(), vi.fn(), threadId);
   return <output>{controller.payload?.state.session_id ?? "loading"}</output>;
 }
+
+it("opens a requested plan in the current thread's existing files window", async () => {
+  const filesWindow = { ...sideWindow("files-1", "Files"), kind: "files" as const };
+  api.getRightPanel.mockResolvedValue(payload([filesWindow], true));
+  api.updateRightPanel.mockResolvedValue(payload([filesWindow], false));
+  function OpenHarness() {
+    const controller = useRightPanel("session", "turn", vi.fn(), vi.fn(), "thread");
+    return <><button onClick={() => openPanelFile({ sessionId: "session", threadId: "thread", source: "workspace", path: "workspace:plan/test.md" })}>open plan</button>
+      <output>{controller.fileToOpen?.path}</output></>;
+  }
+  render(<App><OpenHarness /></App>);
+  fireEvent.click(screen.getByText("open plan"));
+  expect(await screen.findByText("workspace:plan/test.md")).toBeInTheDocument();
+  expect(api.updateRightPanel).toHaveBeenCalledWith("session", { collapsed: false, active_window_id: "files-1" }, "thread");
+  expect(api.createFilesWindow).not.toHaveBeenCalled();
+});
 
 it("hides the previous panel immediately when switching between conversations in one Session", async () => {
   api.getRightPanel.mockResolvedValueOnce({ ...payload([]), state: { ...payload([]).state, session_id: "main-panel" } });

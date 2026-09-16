@@ -204,6 +204,19 @@ describe("AppSidebar utility navigation", () => {
     await waitFor(() => expect(item).toHaveClass("ant-collapse-item-active"));
     await user.click(item?.querySelector(".ant-collapse-header") as HTMLElement);
     await waitFor(() => expect(item).not.toHaveClass("ant-collapse-item-active"));
+
+    const projectToggle = screen.getByRole("button", { name: "项目对话" });
+    const ordinaryToggle = screen.getByRole("button", { name: "无项目对话" });
+    await user.click(projectToggle);
+    expect(projectToggle).toHaveAttribute("aria-expanded", "false");
+    expect(document.querySelector(".project-history-list")).not.toBeVisible();
+    expect(ordinaryToggle).toHaveAttribute("aria-expanded", "true");
+    await user.click(ordinaryToggle);
+    expect(ordinaryToggle).toHaveAttribute("aria-expanded", "false");
+    await user.click(projectToggle);
+    await user.click(ordinaryToggle);
+    expect(document.querySelector(".project-history-list")).toBeVisible();
+    expect(ordinaryToggle).toHaveAttribute("aria-expanded", "true");
   });
 
   it("sorts project and ordinary groups independently", async () => {

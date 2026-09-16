@@ -172,7 +172,7 @@ describe("UserSettingsModal", () => {
     expect(screen.queryByRole("menuitem", { name: "云同步" })).not.toBeInTheDocument();
   });
 
-  it("normalizes a legacy DeepSeek provider name to the neutral default", async () => {
+  it("preserves the saved DeepSeek provider name", async () => {
     const legacyProvider = {
       ...settings.provider_config,
       provider: "deepseek",
@@ -188,7 +188,7 @@ describe("UserSettingsModal", () => {
     await screen.findByDisplayValue("旧名字");
     await userEvent.click(screen.getByRole("menuitem", { name: "Provider 与模型" }));
 
-    expect(screen.getByText(/default · demo/)).toBeInTheDocument();
+    expect(screen.getByText(/deepseek · demo/)).toBeInTheDocument();
   });
 
   it("adds a Provider with token limits and an Ant Design Temperature slider", async () => {
@@ -241,6 +241,14 @@ describe("UserSettingsModal", () => {
       tokenizer_model: "",
       api_key: "",
     }));
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Provider 与模型" }));
+    await userEvent.click(screen.getByText(/local · new-model/));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "最大输出 token local" }), { target: { value: "4096" } });
+    expect(screen.getByRole("textbox", { name: "配置名称 local" })).toHaveValue("local");
+    expect(screen.getByRole("combobox", { name: "模型 local" })).toHaveValue("new-model");
+    expect(screen.getByRole("spinbutton", { name: "上下文窗口 local" })).toHaveValue(65536);
+    expect(screen.getByRole("slider", { name: "Temperature local" })).toHaveAttribute("aria-valuenow", "0.7");
   });
 
   it("updates all model parameters for the current Provider and publishes the saved state", async () => {

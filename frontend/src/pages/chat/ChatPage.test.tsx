@@ -615,18 +615,18 @@ describe("ChatPage bottom anchoring", () => {
 });
 
 describe("ChatPage Todo panel lifecycle", () => {
-  it("keeps an incomplete running Todo expanded without a close action", () => {
+  it("keeps an incomplete running Todo expanded without a close action", async () => {
     render(<TodoHarness status="in_progress" running />);
 
-    expect(screen.getByText("任务清单")).toBeVisible();
+    expect(await screen.findByText("任务清单")).toBeVisible();
     expect(screen.getByText("完成 Todo 面板")).toBeVisible();
     expect(screen.queryByRole("button", { name: "关闭任务清单" })).not.toBeInTheDocument();
     expect(document.querySelector(".composer")).toHaveClass("has-todo");
   });
 
-  it("removes the panel and layout space as soon as every Todo completes", () => {
+  it("removes the panel and layout space as soon as every Todo completes", async () => {
     const view = render(<TodoHarness status="in_progress" running />);
-    expect(screen.getByText("任务清单")).toBeVisible();
+    expect(await screen.findByText("任务清单")).toBeVisible();
 
     view.rerender(<TodoHarness status="completed" running />);
 
@@ -634,9 +634,9 @@ describe("ChatPage Todo panel lifecycle", () => {
     expect(document.querySelector(".composer")).not.toHaveClass("has-todo");
   });
 
-  it("resets a user-open panel to collapsed when its incomplete Turn ends", () => {
+  it("resets a user-open panel to collapsed when its incomplete Turn ends", async () => {
     const view = render(<TodoHarness status="in_progress" running />);
-    const header = screen.getByText("任务清单").closest(".ant-collapse-header");
+    const header = (await screen.findByText("任务清单")).closest(".ant-collapse-header");
     expect(header).not.toBeNull();
     fireEvent.click(header!);
     fireEvent.click(header!);
@@ -648,15 +648,22 @@ describe("ChatPage Todo panel lifecycle", () => {
     expect(screen.getByRole("button", { name: "关闭任务清单" })).toBeVisible();
   });
 
-  it("offers manual cleanup only after an incomplete Turn ends", () => {
-    render(<TodoHarness status="pending" running={false} />);
+  it("persists manual cleanup after an incomplete Turn ends across a page reload", async () => {
+    const view = render(<TodoHarness status="pending" running={false} />);
 
-    expect(screen.getByText("任务清单")).toBeVisible();
+    expect(await screen.findByText("任务清单")).toBeVisible();
     expect(screen.queryByText("完成 Todo 面板")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "关闭任务清单" }));
 
     expect(screen.queryByText("任务清单")).not.toBeInTheDocument();
     expect(document.querySelector(".composer")).not.toHaveClass("has-todo");
+    await waitFor(() => expect(viewFixtures.get("/api/view-state/session-todo/session-todo")?.expanded)
+      .toMatchObject({ "todo-panel:turn-todo": false }));
+    view.unmount();
+    clearViewStateCache();
+    render(<TodoHarness status="pending" running={false} />);
+    await act(async () => {});
+    expect(screen.queryByText("任务清单")).not.toBeInTheDocument();
   });
 
   it("does not fall back to a stale Todo Turn while a new active Turn is loading", () => {

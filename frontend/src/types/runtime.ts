@@ -115,9 +115,9 @@ export interface TurnTraceContext {
 
 export interface TurnTraceItem {
   sequence: number;
-  message_idx: number;
-  item_idx: number;
-  role: "user" | "assistant" | "developer";
+  message_idx: number | null;
+  item_idx: number | null;
+  role: "user" | "assistant" | "developer" | "runtime";
   item: TurnItem;
   completed_at: string;
 }
@@ -138,6 +138,7 @@ export type TurnDeltaOperation =
   | { op: "append_message"; data_idx: number; message_idx: number; message: TurnMessage }
   | { op: "append_item"; data_idx: number; message_idx: number; item_idx: number; item: TurnItem }
   | { op: "append_text"; data_idx: number; message_idx: number; item_idx: number; delta: string }
+  | { op: "set_reasoning_summary"; data_idx: number; message_idx: number; item_idx: number; text: string; summary: string; summary_key: string }
   | { op: "set_item_status"; data_idx: number; message_idx: number; item_idx: number; status: TurnItem["status"] };
 
 export interface RuntimeNodeSnapshotFrame {

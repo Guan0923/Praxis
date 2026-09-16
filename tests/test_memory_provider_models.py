@@ -14,6 +14,17 @@ class _Response:
     status_code = 200
     headers: dict[str, str] = {}
 
+    def iter_lines(self, **_kwargs):
+        for content in ('{"candidates":', " []}"):
+            yield (
+                "data: " + json.dumps({"choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}]})
+            ).encode()
+        yield b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}'
+        yield b"data: [DONE]"
+
+    def close(self) -> None:
+        pass
+
     @staticmethod
     def raise_for_status() -> None:
         return None
@@ -40,8 +51,8 @@ class _Session:
     def __init__(self) -> None:
         self.closed = False
 
-    @staticmethod
-    def post(*_args, **_kwargs) -> _Response:
+    def post(self, *_args, **kwargs) -> _Response:
+        self.payload = kwargs["json"]
         return _Response()
 
     def close(self) -> None:
@@ -72,4 +83,6 @@ def test_provider_memory_model_closes_transport_after_valid_json(monkeypatch) ->
     result = provider_models.ProviderMemoryModel(config).extract_episodic(request)
 
     assert result == {"candidates": []}
+    assert session.payload["stream"] is True
+    assert "response_format" not in session.payload
     assert session.closed is True

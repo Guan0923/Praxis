@@ -80,11 +80,7 @@ class ExecutionWorkflow:
             todo_retry = (
                 not incomplete
                 and not response.tool_messages
-                and check_todo_finalization(
-                    runtime,
-                    response,
-                    content_streamed=streamed.content,
-                )
+                and check_todo_finalization(runtime)
             )
             if not todo_retry:
                 _publish_assistant_message(runtime, response, streamed)

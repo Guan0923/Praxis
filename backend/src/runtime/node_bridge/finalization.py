@@ -102,6 +102,20 @@ class _FinalizationMixin:
         except Exception as exc:
             self._mark_persistence_failure(exc)
             return None
+        self._close_trace_request(
+            final_answer or code or status,
+            status="interrupted" if status == "paused" else "failed" if status == "failed" else "unknown",
+        )
+        self._record_trace_event(
+            "turn_finished",
+            "run_control",
+            {
+                "status": status,
+                "reason": final_answer or code or status,
+                "category": category,
+                "code": code,
+            },
+        )
         self.closed = True
         return self.last_node
 

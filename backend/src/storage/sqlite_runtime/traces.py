@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import Any
 
 from backend.domain.runtime_state import RuntimeState
-from backend.domain.turn_trace import TurnTrace, TurnTraceItem
+from backend.domain.turn_trace import TurnTrace, TurnTraceContext, TurnTraceItem
 
 
 class SQLiteTurnTraceMixin:
@@ -34,7 +34,21 @@ class SQLiteTurnTraceMixin:
             if payload is not None:
                 stored = TurnTrace.from_dict(payload)
                 self._validate_turn(stored, turn)
-                return stored
+                if stored.context.initialized_at:
+                    return stored
+                trace = replace(
+                    stored,
+                    context=trace.context,
+                    items=[
+                        *stored.items,
+                        *(
+                            replace(item, sequence=stored.last_sequence + index + 1)
+                            for index, item in enumerate(trace.items)
+                        ),
+                    ],
+                    last_sequence=stored.last_sequence + len(trace.items),
+                    updated_at=trace.updated_at,
+                )
             self._put_json_object(
                 connection,
                 session_id,
@@ -51,45 +65,54 @@ class SQLiteTurnTraceMixin:
         turn_id: str,
         data_idx: int,
         *,
-        message_idx: int,
-        item_idx: int,
+        message_idx: int | None,
+        item_idx: int | None,
         role: str,
         item: dict[str, Any],
         completed_at: str,
     ) -> TurnTrace | None:
-        """Append one terminal Item, or no-op before the Trace is initialized."""
+        """Append an audit record; message positions never determine identity."""
 
         object_id = f"{turn_id}:{data_idx}"
         with self._connection_for_existing(session_id, write=True) as connection:
             self._assert_writable(connection)
             payload = self._json_object(connection, session_id, self._TRACE_NAMESPACE, object_id)
-            if payload is None:
-                return None
-            trace = TurnTrace.from_dict(payload)
             node = self._json_object(connection, session_id, "runtime_node", turn_id)
             if node is None:
                 raise ValueError(f"Unknown Turn: {turn_id}")
             turn = RuntimeState.from_dict(node)
+            is_event = role == "runtime" and item.get("type") == "runtime_event"
+            if payload is None:
+                if not is_event:
+                    return None
+                trace = TurnTrace(
+                    turn_id=turn_id,
+                    thread_id=turn.thread_id,
+                    data_idx=data_idx,
+                    context=TurnTraceContext("", [], [], ""),
+                    items=[],
+                    last_sequence=0,
+                    updated_at=completed_at,
+                )
+            else:
+                trace = TurnTrace.from_dict(payload)
             self._validate_turn(trace, turn)
-            if not 0 <= message_idx < len(turn.data[data_idx]):
-                raise ValueError("Trace message_idx is out of range.")
-            message = turn.data[data_idx][message_idx]
-            content = message.get("content", [])
-            if not 0 <= item_idx < len(content):
-                raise ValueError("Trace item_idx is out of range.")
-            if message.get("role") != role:
-                raise ValueError("Trace Item role does not match its Turn.")
-            if content[item_idx].get("status") not in {"success", "failed"}:
-                raise ValueError("Only terminal Turn Items can be traced.")
-            if item.get("status") not in {"success", "failed"}:
-                raise ValueError("Only terminal audit Items can be persisted.")
-
-            coordinate = (message_idx, item_idx)
-            existing = next((entry for entry in trace.items if entry.coordinate == coordinate), None)
-            if existing is not None:
-                if existing.role != role or existing.item != item:
-                    raise ValueError("A traced Item coordinate cannot change content.")
-                return trace
+            if is_event:
+                if message_idx is not None or item_idx is not None:
+                    raise ValueError("Runtime events do not have message positions.")
+            else:
+                if message_idx is None or not 0 <= message_idx < len(turn.data[data_idx]):
+                    raise ValueError("Trace message_idx is out of range.")
+                message = turn.data[data_idx][message_idx]
+                content = message.get("content", [])
+                if item_idx is None or not 0 <= item_idx < len(content):
+                    raise ValueError("Trace item_idx is out of range.")
+                if message.get("role") != role:
+                    raise ValueError("Trace Item role does not match its Turn.")
+                if content[item_idx].get("status") not in {"success", "failed"}:
+                    raise ValueError("Only terminal Turn Items can be traced.")
+                if item.get("status") not in {"success", "failed"}:
+                    raise ValueError("Only terminal audit Items can be persisted.")
 
             sequence = trace.last_sequence + 1
             entry = TurnTraceItem(

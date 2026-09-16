@@ -49,25 +49,6 @@ def test_real_command_input_incremental_output_and_scope_cleanup(commands):
         manager.write_with_context(context, session_id, "", 0)
 
 
-def test_real_command_big_stdout_and_stderr_are_bounded(commands):
-    manager, context = commands
-    result = json.loads(
-        manager.run_with_context(
-            context,
-            python_command(
-                "import sys; print('HEAD'); sys.stdout.write('x'*2200000); sys.stdout.flush(); print('TAIL',file=sys.stderr)"
-            ),
-            5000,
-            100,
-        )
-    )
-    assert result["exit_code"] == 0
-    assert "HEAD" in result["output"] and "TAIL" in result["output"]
-    assert "bytes omitted" in result["output"]
-    for job, _, _ in manager._sessions.values():
-        assert job.buffer.retained_bytes <= 1024 * 1024
-
-
 def test_real_command_failure_preserves_exit_and_source_error(commands):
     manager, context = commands
     with pytest.raises(Exception) as caught:

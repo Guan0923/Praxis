@@ -127,6 +127,9 @@
   justify-content: flex-end;
 }
 
+.message.user > [data-virtual-block] { width: 100%; }
+.message.user > [data-virtual-block] > .message-content { margin-left: auto; }
+
 .message-content {
   display: flex;
   flex-direction: column;

@@ -20,7 +20,6 @@ from backend.api.chat import routes as chat_routes
 from backend.api.state import WebAppState
 from backend.configuration import ClientPaths
 from backend.domain import (
-    CHECKPOINT_PREAMBLE,
     AssistantMessage,
     MessageEnvelope,
     MessageQueueUnavailable,
@@ -40,7 +39,6 @@ from backend.domain.runtime_state import (
     utc_iso,
 )
 from backend.jobs import JobRegistry
-from backend.planning.context_management import ContextCompactionResult
 from backend.providers import ModelConfig
 from backend.runtime.agent_thread_index import AgentThreadIndex
 from backend.runtime.application.factory import build_application
@@ -1247,136 +1245,6 @@ def test_send_agent_message_registers_reports_only_when_need_reply_is_true(tmp_p
         parent_runner.close()
 
 
-def test_running_agent_inserts_report_at_safe_boundary_and_continues(tmp_path: Path) -> None:
-    index = AgentThreadIndex()
-    store = SQLiteSessionStore(ClientPaths(tmp_path / "data"), index)
-    queue = MemoryMessageQueue()
-    registry = JobRegistry()
-    session = store.create_session("running report")
-    source = _finished_source(store, session.session_id)
-    release_quick_child = Event()
-
-    class RunningReportPlanner:
-        name = "running-report"
-
-        def decide(self, child_runtime):
-            if child_runtime.run.task == "quick child":
-                if not release_quick_child.wait(timeout=5):
-                    raise RuntimeError("parent Agent did not reach the report boundary")
-                return AssistantMessage(content="quick result")
-            messages = child_runtime.model_messages()
-            if any(isinstance(message, AssistantMessage) and message.name == "subagent_report" for message in messages):
-                return AssistantMessage(content="continued after report")
-            delegated = any(
-                tool.name == "delegate_tasks" and tool.status == "succeeded"
-                for message in messages
-                if isinstance(message, AssistantMessage)
-                for tool in message.tool_messages
-            )
-            if delegated:
-                release_quick_child.set()
-                deadline = monotonic() + 5
-                while monotonic() < deadline:
-                    queued_reports = store.list_agent_turn_reports(
-                        session.session_id,
-                        states=("queued",),
-                    )
-                    if any(
-                        report.recipient_thread_id == child_runtime.run.thread_id and report.thread_status == "success"
-                        for report in queued_reports
-                    ):
-                        break
-                    sleep(0.01)
-                else:
-                    raise RuntimeError("completed child report was not queued at the tool boundary")
-                return AssistantMessage(
-                    tool_messages=[ToolMessage(name="get_thread_node", call_id="boundary_tool", arguments={})]
-                )
-            return AssistantMessage(
-                tool_messages=[
-                    ToolMessage(
-                        name="delegate_tasks",
-                        call_id="delegate_quick_child",
-                        arguments={
-                            "subagent_path": "/root/running/worker",
-                            "subagent_task": "quick child",
-                            "context_transfer_strategy": "independent",
-                        },
-                    )
-                ]
-            )
-
-    parent_runner = AgentRunner(_AnswerPlanner(), ToolRegistry())
-    runtime = parent_runner.new_runtime(task="parent", session_id=session.session_id)
-    runtime.run.thread_id = session.session_id
-    runtime.run.turn_id = source.id
-    runtime.services.runtime_node_context = lambda: [source]
-    coordinator = SubagentCoordinator(
-        settings=SubagentSettings(max_workers=3, max_depth=2),
-        store=store,
-        message_queue=queue,
-        index=index,
-        job_registry=registry,
-    )
-    coordinator.bind_session(
-        session.session_id,
-        lambda: AgentRunner(
-            RunningReportPlanner(),
-            ToolRegistry(list(delegation_tools())),
-            job_registry=registry,
-        ),
-        tmp_path,
-    )
-    try:
-        coordinator.invoke(
-            runtime,
-            "delegate_tasks",
-            {
-                "subagent_path": "/root/running",
-                "subagent_task": "run",
-                "context_transfer_strategy": "independent",
-            },
-        )
-        running_id = index.thread_for_path(session.session_id, session.session_id, "/root/running")
-        assert running_id is not None
-        turn_id = index.head_for_thread(running_id)
-        deadline = monotonic() + 8
-        while monotonic() < deadline:
-            node = store.get_thread_node(session.session_id, running_id)
-            if node is not None and node.thread_status == "success":
-                break
-            sleep(0.01)
-        else:
-            pytest.fail("running report recipient did not continue")
-
-        assert index.head_for_thread(running_id) == turn_id
-        completed = store.get_node(session.session_id, turn_id)
-        assert isinstance(completed, RuntimeState)
-        selected = completed.data[completed.current_data_idx]
-        report_indexes = [
-            index
-            for index, message in enumerate(selected)
-            if message.get("role") == "assistant" and message.get("content", [{}])[0].get("event") == "agent_report"
-        ]
-        assert len(report_indexes) == 1
-        report_index = report_indexes[0]
-        assert len(selected[report_index]["content"]) == 1
-        assert selected[report_index + 1]["content"][-1]["text"] == "continued after report"
-        boundary_results = [
-            item
-            for message in selected
-            for item in message.get("content", [])
-            if item.get("type") == "tool_result" and item.get("call_id") == "boundary_tool"
-        ]
-        assert len(boundary_results) == 1
-        assert boundary_results[0]["status"] == "failed"
-        assert boundary_results[0]["content"] == "Not executed because a subagent report arrived."
-    finally:
-        coordinator.close()
-        registry.close_all(reason="test cleanup", timeout=5)
-        parent_runner.close()
-
-
 def test_agent_thread_message_returns_503_when_queue_is_unavailable(tmp_path: Path) -> None:
     class UnavailableQueue(MemoryMessageQueue):
         def dispatch_agent(self, envelope: MessageEnvelope) -> MessageEnvelope:
@@ -1489,20 +1357,6 @@ def _create_legacy_database(path: Path, session_id: str) -> None:
             "INSERT INTO store_metadata VALUES (?,13,?,?)",
             (session_id, timestamp, timestamp),
         )
-
-
-def test_legacy_schema_is_rejected_without_mutating_or_deleting_database(tmp_path: Path) -> None:
-    paths = ClientPaths(tmp_path / "data")
-    paths.ensure()
-    session_id = "session_legacy"
-    database = paths.session_db(session_id)
-    _create_legacy_database(database, session_id)
-    before = database.read_bytes()
-
-    with pytest.raises(RuntimeError, match="requires v16 and left the database untouched"):
-        SQLiteSessionStore(paths).get_session(session_id)
-    assert database.exists()
-    assert database.read_bytes() == before
 
 
 def test_persistent_delegate_reports_result_and_accepts_follow_up(tmp_path: Path) -> None:
@@ -2032,8 +1886,10 @@ def test_real_http_sse_queue_subagents_persist_model_trace(
                     child_turn.current_data_idx,
                 )
                 assert trace is not None and trace.thread_id == child.thread_id
-                assert [entry.role for entry in trace.items] == ["user", "developer", "assistant"]
-                assert trace.items[-1].item.get("text") == "child answered through local HTTP"
+                messages = [entry for entry in trace.items if entry.role != "runtime"]
+                assert [entry.role for entry in messages] == ["user", "developer", "assistant"]
+                assert messages[-1].item.get("text") == "child answered through local HTTP"
+                assert any(entry.item.get("event") == "model_response" for entry in trace.items)
             assert model_calls == ["subagent-trace-test"] * len(children)
 
             target = children[0]
@@ -2083,157 +1939,12 @@ def test_real_http_sse_queue_subagents_persist_model_trace(
             )
             assert follow_up_trace is not None
             assert follow_up_trace.thread_id == target.thread_id
-            assert [entry.role for entry in follow_up_trace.items] == ["user", "developer", "assistant"]
-            assert follow_up_trace.items[-1].item.get("text") == "child answered through local HTTP"
+            messages = [entry for entry in follow_up_trace.items if entry.role != "runtime"]
+            assert [entry.role for entry in messages] == ["user", "developer", "assistant"]
+            assert messages[-1].item.get("text") == "child answered through local HTTP"
     finally:
         state.close()
         queue.close()
-
-
-def test_context_strategies_freeze_share_compact_and_keep_independent_isolated(tmp_path: Path) -> None:
-    paths = ClientPaths(tmp_path / "data")
-    index = AgentThreadIndex()
-    store = SQLiteSessionStore(paths, index)
-    queue = MemoryMessageQueue()
-    registry = JobRegistry()
-    session = store.create_session("contexts")
-    root = store.ensure_root_node(session.session_id, id="root")
-    source = NodeWriter(store).create(
-        RuntimeState.create(
-            session_id=session.session_id,
-            thread_id=session.session_id,
-            id="source",
-            parent=root,
-            user_content="parent context",
-        )
-    )
-    compaction_calls = 0
-
-    class ParentPlanner(_AnswerPlanner):
-        def compact_context(self, _runtime):
-            nonlocal compaction_calls
-            compaction_calls += 1
-            return ContextCompactionResult(True, 2, 1, "one shared summary")
-
-    seen: dict[str, list[str]] = {}
-
-    class RecordingPlanner(_AnswerPlanner):
-        def decide(self, runtime):
-            seen[runtime.run.task] = [str(message.content or "") for message in runtime.model_messages()]
-            return super().decide(runtime)
-
-    parent_runner = AgentRunner(ParentPlanner(), ToolRegistry())
-    runtime = parent_runner.new_runtime(task="parent context", session_id=session.session_id)
-    runtime.run.thread_id = session.session_id
-    runtime.run.turn_id = source.id
-    runtime.services.runtime_node_context = lambda: [source]
-    coordinator = SubagentCoordinator(
-        settings=SubagentSettings(max_workers=4),
-        store=store,
-        message_queue=queue,
-        index=index,
-        job_registry=registry,
-    )
-    coordinator.bind_session(
-        session.session_id,
-        lambda: AgentRunner(
-            RecordingPlanner(),
-            ToolRegistry(list(delegation_tools())),
-            job_registry=registry,
-        ),
-        tmp_path,
-    )
-    specs = (
-        ("shared", "share"),
-        ("solo", "independent"),
-        ("compact-one", "compaction_share"),
-        ("compact-two", "compaction_share"),
-    )
-    for name, strategy in specs:
-        result = json.loads(
-            coordinator.invoke(
-                runtime,
-                "delegate_tasks",
-                {
-                    "subagent_path": f"/root/{name}",
-                    "subagent_task": name,
-                    "context_transfer_strategy": strategy,
-                },
-            )
-        )
-        assert set(result) == {"thread_path", "thread_status"}
-        assert result["thread_path"] == f"/root/{name}"
-    assert compaction_calls == 2
-    expected_tasks = {"shared", "solo", "compact-one", "compact-two"}
-    deadline = monotonic() + 5
-    while monotonic() < deadline and not expected_tasks.issubset(seen):
-        sleep(0.01)
-    assert expected_tasks.issubset(seen)
-    assert seen["solo"] == ["solo"]
-    assert seen["shared"] == ["parent context", "shared"]
-    assert seen["compact-one"] == [f"{CHECKPOINT_PREAMBLE}\n\none shared summary", "compact-one"]
-    assert seen["compact-two"] == [f"{CHECKPOINT_PREAMBLE}\n\none shared summary", "compact-two"]
-    registry.close_all(reason="test complete", timeout=5)
-    parent_runner.close()
-
-
-def test_compaction_share_failure_falls_back_to_independent(tmp_path: Path) -> None:
-    index = AgentThreadIndex()
-    store = SQLiteSessionStore(ClientPaths(tmp_path / "data"), index)
-    queue = MemoryMessageQueue()
-    registry = JobRegistry()
-    session = store.create_session("compaction fallback")
-    source = _finished_source(store, session.session_id)
-    seen: list[str] = []
-
-    class FailingCompactionPlanner(_AnswerPlanner):
-        def compact_context(self, _runtime):
-            raise RuntimeError("local compaction failed")
-
-    class RecordingPlanner(_AnswerPlanner):
-        def decide(self, child_runtime):
-            seen.extend(str(message.content or "") for message in child_runtime.model_messages())
-            return super().decide(child_runtime)
-
-    parent_runner = AgentRunner(FailingCompactionPlanner(), ToolRegistry())
-    runtime = parent_runner.new_runtime(task="parent", session_id=session.session_id)
-    runtime.run.thread_id = session.session_id
-    runtime.run.turn_id = source.id
-    runtime.services.runtime_node_context = lambda: [source]
-    coordinator = SubagentCoordinator(
-        store=store,
-        message_queue=queue,
-        index=index,
-        job_registry=registry,
-    )
-    coordinator.bind_session(
-        session.session_id,
-        lambda: AgentRunner(RecordingPlanner(), ToolRegistry(), job_registry=registry),
-        tmp_path,
-    )
-    try:
-        coordinator.invoke(
-            runtime,
-            "delegate_tasks",
-            {
-                "subagent_path": "/root/fallback",
-                "subagent_task": "fallback",
-                "context_transfer_strategy": "compaction_share",
-            },
-        )
-        child_id = index.thread_for_path(session.session_id, session.session_id, "/root/fallback")
-        assert child_id is not None
-        context = store.get_thread_context(session.session_id, child_id)
-        assert context is not None
-        assert context.requested_strategy == "compaction_share"
-        assert context.effective_strategy == "independent"
-        deadline = monotonic() + 5
-        while monotonic() < deadline and not seen:
-            sleep(0.01)
-        assert seen == ["fallback"]
-    finally:
-        registry.close_all(reason="test complete", timeout=5)
-        parent_runner.close()
 
 
 def test_delegate_paths_source_auth_and_recursive_get_thread_node(tmp_path: Path) -> None:

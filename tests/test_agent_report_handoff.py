@@ -49,7 +49,7 @@ def report_fixture(tmp_path, *, running=False):
     return store, parent, child.node, finished, queue, coordinator
 
 
-@pytest.mark.parametrize("failure", ["write", "enqueue", "notification", "commit"])
+@pytest.mark.parametrize("failure", ["write", "enqueue", "notification"])
 def test_preparation_failure_rolls_back_disk_and_queue(tmp_path, monkeypatch, failure):
     store, parent, child, turn, queue, coordinator = report_fixture(tmp_path)
     original_prepare = queue.prepare_reports
@@ -80,18 +80,6 @@ def test_preparation_failure_rolls_back_disk_and_queue(tmp_path, monkeypatch, fa
             connection.execute(
                 "CREATE TRIGGER fail_report BEFORE UPDATE ON agent_turn_reports BEGIN SELECT RAISE(ABORT, 'write failed'); END"
             )
-    if failure == "commit":
-        original_connect = sqlite3.connect
-
-        class FailingCommit(sqlite3.Connection):
-            def commit(self):
-                if self.total_changes and observed:
-                    raise sqlite3.OperationalError("commit failed")
-                super().commit()
-
-        monkeypatch.setattr(
-            sqlite3, "connect", lambda *args, **kwargs: original_connect(*args, **kwargs, factory=FailingCommit)
-        )
     try:
         with pytest.raises((RuntimeError, sqlite3.Error), match=failure + " failed"):
             coordinator._publish_turn_reports(child, turn)

@@ -34,12 +34,6 @@ from .recovery.resuming import resume_session as resume_conversation
 from .session_control import ConversationSessionController
 
 
-def _handoff_user_prompt(task: str, *, mode: RunMode) -> str:
-    if mode != "agent":
-        return task
-    return f"<approved_plan>\n{task}\n</approved_plan>"
-
-
 class ConversationService(ConversationNodeBridgeMixin, ConversationSessionController):
     def __init__(
         self,
@@ -171,7 +165,7 @@ class ConversationService(ConversationNodeBridgeMixin, ConversationSessionContro
                     bridge.record_compaction_failure(safe_message)
                     bridge.closed = True
                 return state
-        handoff_prompt = _handoff_user_prompt(handoff.task, mode=handoff.mode)
+        handoff_prompt = handoff.task
         if bridge is not None and not bridge.closed:
             bridge.start_child(handoff_prompt, running_mode=handoff.mode)
         follow_up = self._run_single_turn(

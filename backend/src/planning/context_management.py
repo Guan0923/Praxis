@@ -19,11 +19,11 @@ from backend.domain import (
     safe_error_message,
     todo_snapshot_context,
 )
+from backend.domain.context_budget import DEFAULT_COMPACTION_RATIO
 from backend.runtime.core.context import AgentRuntime
 from backend.runtime.core.events import RuntimeEvent
 
 _CONTEXT_SUMMARY_NAME = "context_summary"
-_DEFAULT_TARGET_RATIO = 0.8
 
 
 class TokenEstimator(Protocol):
@@ -57,9 +57,9 @@ class ContextCompactionResult:
 
 
 class ContextManager:
-    """Summarize completed conversation history without altering active work."""
+    """Summarize conversation history, including progress in the active turn."""
 
-    def __init__(self, estimator: TokenEstimator, target_ratio: float = _DEFAULT_TARGET_RATIO) -> None:
+    def __init__(self, estimator: TokenEstimator, target_ratio: float = DEFAULT_COMPACTION_RATIO) -> None:
         if estimator.context_size < 1:
             raise ValueError("context_size must be positive.")
         if not 0 < target_ratio < 1:
@@ -124,7 +124,7 @@ class ContextManager:
         request_parameters: dict[str, Any] | None = None,
         summarize: Callable[[str], str],
     ) -> list[ChatMessage]:
-        """Build a request, compacting only completed history when it would exceed the window."""
+        """Compact accumulated history while preserving the current task instruction."""
 
         suffix = list(extra or [])
         exposed_tools = list(tools or [])
@@ -138,14 +138,10 @@ class ContextManager:
             return messages
 
         boundary = min(max(runtime.run.turn_start_index, 0), len(source_history))
-        completed_history = source_history[:boundary]
-        if not completed_history:
-            if estimated_before >= self.estimator.context_size:
-                raise PlanningError(
-                    "The current turn exceeds the model context window and cannot be compacted before it finishes."
-                )
-            runtime.exchange.context["estimated_input_tokens"] = estimated_before
-            return messages
+        active_user = next(
+            (message for message in source_history[boundary:] if isinstance(message, UserMessage)),
+            UserMessage(content=runtime.run.task),
+        )
 
         compaction_turn_id: str | None = None
         todo_revision: int | None = None
@@ -165,8 +161,8 @@ class ContextManager:
 
         summary, compressed, estimated_after = self._summarize_candidate(
             runtime,
-            source=completed_history,
-            retained=source_history[boundary:],
+            source=source_history,
+            retained=[active_user],
             summarize=summarize,
             trigger="automatic",
             estimated_before=estimated_before,
@@ -183,19 +179,14 @@ class ContextManager:
         if history is None:
             self._replace_history(runtime, compressed, 1)
         else:
-            # Canonical callers keep the tree authoritative, but the runner
-            # still uses this boundary to distinguish completed history from
-            # the active turn on the next request.  Rebase it onto the
-            # compacted compatibility projection instead of the pre-summary
-            # node count.
-            runtime.run.turn_start_index = max(0, len(compressed) - len(source_history[boundary:]))
+            runtime.run.turn_start_index = 0
         self._record(
             runtime,
             "context_compaction_completed",
             "Conversation context compacted automatically",
             {
                 "trigger": "automatic",
-                "source_messages": len(completed_history),
+                "source_messages": len(source_history),
                 "previous_messages": previous_messages,
                 "remaining_messages": len(compressed),
                 "estimated_tokens_before": estimated_before,

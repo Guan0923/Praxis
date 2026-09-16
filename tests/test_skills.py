@@ -12,8 +12,6 @@ from backend.domain import (
     RunState,
     SkillSelection,
     SkillSnapshot,
-    ToolMessage,
-    UserMessage,
 )
 from backend.planning import LLMPlanner
 from backend.runtime import AgentRunner, PreparedResponse, build_application
@@ -435,36 +433,6 @@ class RecordingClient:
     def run(self, runtime) -> PreparedResponse:
         self.requests.append(list(runtime.exchange.messages))
         return self.responses.pop(0)
-
-
-def test_llm_skill_selection_uses_only_current_turn() -> None:
-    client = RecordingClient([PreparedResponse(AssistantMessage(content='{"skills":["demo"]}'))])
-    catalog = SkillCatalog((definition("demo"),))
-    planner = LLMPlanner(client, [], [])
-    history = [
-        UserMessage(content="Old task."),
-        AssistantMessage(
-            content="Old work.",
-            tool_messages=[
-                ToolMessage(
-                    name="old_tool",
-                    call_id="call_old",
-                    content="old result",
-                    status="succeeded",
-                )
-            ],
-        ),
-    ]
-    runtime = AgentRunner(
-        planner,
-        ToolRegistry(),
-        skill_catalog=catalog,
-    ).new_runtime(task="Use demo now.", messages=history)
-
-    selection = planner.select_skills(runtime)
-
-    assert selection.names == ("demo",)
-    assert [message.content for message in client.requests[0][1:]] == ["Use demo now."]
 
 
 @pytest.mark.parametrize("mode", ["agent", "plan"])

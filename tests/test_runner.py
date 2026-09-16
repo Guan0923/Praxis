@@ -8,23 +8,11 @@ from backend.domain import (
     AssistantMessage,
 )
 from backend.observability import JsonlRunLogger
-from backend.planning import RuleBasedPlanner
 from backend.providers import ModelRequestError
 from backend.runtime import LegacyAgentRunner as AgentRunner
 from backend.runtime.core.contracts import InterruptDecision
 from backend.runtime.planning.review import REQUEST_PLAN_REVIEW_NAME
 from backend.tools import ToolRegistry
-
-
-def test_runner_refuses_command_when_strict_sandbox_is_unhealthy(tmp_path: Path) -> None:
-    events = []
-    state = AgentRunner(RuleBasedPlanner(), ToolRegistry(tmp_path)).run(
-        "run command echo 96", lambda _: True, on_event=events.append
-    )
-
-    assert state.status == "cancelled"
-    assert state.tool_calls == 0
-    assert any(event.kind == "hook_completed" and event.data.get("decision") == "reject" for event in events)
 
 
 class ProviderFailurePlanner:
@@ -73,7 +61,7 @@ class PlanResearchPlanner:
                 return AgentAction(
                     type="tool_call",
                     tool=REQUEST_PLAN_REVIEW_NAME,
-                    arguments={"plan": "1. Read the note.\n2. Write the reviewed result."},
+                    arguments={"plan_name": "test-plan", "plan": "1. Read the note.\n2. Write the reviewed result."},
                 )
             return AgentAction(
                 type="tool_call",
@@ -93,7 +81,7 @@ def test_plan_mode_researches_read_only_tools_then_hands_off_to_default_executio
     (tmp_path / "note.txt").write_text("reviewed", encoding="utf-8")
     requests = []
 
-    state = AgentRunner(PlanResearchPlanner(tmp_path), ToolRegistry(tmp_path)).run(
+    state = AgentRunner(PlanResearchPlanner(tmp_path), ToolRegistry(tmp_path), workspace_root=str(tmp_path)).run(
         "review the note",
         mode="plan",
         interrupt=lambda request: (
@@ -132,21 +120,6 @@ class ConversationPlanner:
         if on_reasoning:
             on_reasoning("A greeting needs no tool.")
         return AgentAction(type="final_answer", answer="I am well.", reasoning="A greeting needs no tool.")
-
-
-def test_local_read_only_tool_skips_approval(tmp_path: Path) -> None:
-    (tmp_path / "note.txt").write_text("read safely", encoding="utf-8")
-    events = []
-    state = AgentRunner(RuleBasedPlanner(), ToolRegistry(tmp_path)).run(
-        f"read {tmp_path / 'note.txt'}",
-        lambda _: False,
-        on_event=events.append,
-        interrupt=lambda _request: InterruptDecision("cancel"),
-    )
-
-    assert state.status == "completed"
-    assert state.final_answer is not None and "read safely" in state.final_answer
-    assert "approval_requested" not in [event.kind for event in events]
 
 
 class PlanWriteAttemptPlanner:
@@ -256,13 +229,3 @@ class MemoryCheckpointStore:
 
     def save(self, state, reason: str) -> None:
         self.reasons.append(reason)
-
-
-def test_checkpointing_skips_high_volume_reasoning_events(tmp_path: Path) -> None:
-    store = MemoryCheckpointStore()
-    AgentRunner(ConversationPlanner(), ToolRegistry(tmp_path), checkpoints=store).run("How are you?", lambda _: False)
-
-    assert "thinking_start" not in store.reasons
-    assert "thinking_delta" not in store.reasons
-    assert "thinking_end" not in store.reasons
-    assert store.reasons == ["run_started", "response", "run_finished"]

@@ -18,13 +18,16 @@ from backend.domain.runtime_state import (
     TerminalErrorCategory,
 )
 
+from .audit import _TraceAuditMixin
 from .events import _EventProjectionMixin
 from .finalization import _FinalizationMixin
 from .items import _ItemProjectionMixin
 from .lifecycle import _LifecycleMixin
 
 
-class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _LifecycleMixin, _ItemProjectionMixin):
+class RuntimeEventNodeBridge(
+    _TraceAuditMixin, _EventProjectionMixin, _FinalizationMixin, _LifecycleMixin, _ItemProjectionMixin
+):
     """Keep the canonical Turn synchronized with an in-process AgentRuntime."""
 
     def __init__(
@@ -106,6 +109,12 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         self.runtime: Any = None
         self._runtime_config_lock = RLock()
         self._pending_modes: list[str] = []
+        self._trace_mode_requests: list[dict[str, Any]] = []
+        self._trace_effective_mode: str | None = None
+        self._trace_request: dict[str, Any] = {}
+        self._trace_request_open = False
+        self._trace_tools: dict[str, dict[str, Any]] = {}
+        self._trace_compaction: dict[str, Any] = {}
         self._model_request_active = False
 
     def bind_runtime(self, runtime: Any) -> None:
@@ -174,7 +183,9 @@ class RuntimeEventNodeBridge(_EventProjectionMixin, _FinalizationMixin, _Lifecyc
         load = getattr(self.store, "load_turn_trace", None)
         if callable(load):
             existing = load(node.session_id, node.id, node.current_data_idx)
-            self.runtime.services.turn_trace_initialized = existing is not None
+            self.runtime.services.turn_trace_initialized = existing is not None and bool(
+                existing.context.initialized_at
+            )
 
     def _latest_parent(self) -> RuntimeState | RuntimeRootState:
         nodes = [node for node in self.store.load_nodes(self.session_id) if node.thread_id == self.thread_id]

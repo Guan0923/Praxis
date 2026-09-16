@@ -25,7 +25,7 @@ DEFAULT_AGENT_CONFIG: dict[str, object] = {
     "timezone": DEFAULT_TIME_ZONE,
     "location_enabled": False,
 }
-SUPPORTED_DISPLAY_MODES = frozenset({"minimal", "medium", "verbose", "developer"})
+SUPPORTED_DISPLAY_MODES = frozenset({"minimal", "medium", "verbose"})
 
 DEFAULT_PROVIDER_CONFIG: dict[str, object] = {
     "id": "",
@@ -195,7 +195,7 @@ def normalize_agent_config(current: Mapping[str, object], values: Mapping[str, o
         if len(value) > limit:
             raise ValueError(f"{key} exceeds {limit} characters")
         if key == "display_mode" and value not in SUPPORTED_DISPLAY_MODES:
-            raise ValueError("display_mode must be minimal, medium, verbose, or developer")
+            raise ValueError("display_mode must be minimal, medium, or verbose")
         if key == "timezone":
             value = validate_time_zone(value)
         result[key] = value

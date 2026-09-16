@@ -229,6 +229,16 @@ export function useUserSettingsState({
         setSaved((current) => current ? { ...current, sandbox_config: sandbox } : current);
       } else if (section === "provider_add") {
         const provider = await addProviderConfig(providerAddDraft);
+        const draft: ProviderEditDraft = {
+          provider_name: provider.provider_name,
+          model: provider.model,
+          max_tokens: provider.max_tokens,
+          context_size: provider.context_size,
+          temperature: provider.temperature,
+          api_key: "",
+        };
+        setProviderDrafts((current) => ({ ...current, [provider.id]: draft }));
+        setSavedProviderDrafts((current) => ({ ...current, [provider.id]: draft }));
         const providers = [...settings.provider_configs, provider];
         updateSettings({ provider_configs: providers, ...(provider.is_active ? { provider_config: provider } : {}) });
         setSaved((current) => current ? {

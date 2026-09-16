@@ -133,7 +133,10 @@ class LocalSettingsStore:
 
     def agent_config(self) -> dict[str, object]:
         raw = self.config_store.read().get("agent")
-        return normalize_agent_config(DEFAULT_AGENT_CONFIG, raw if isinstance(raw, Mapping) else {})
+        values = dict(raw) if isinstance(raw, Mapping) else {}
+        if values.get("display_mode") == "developer":
+            values["display_mode"] = "verbose"
+        return normalize_agent_config(DEFAULT_AGENT_CONFIG, values)
 
     def update_agent_config(self, values: Mapping[str, object]) -> dict[str, object]:
         result = normalize_agent_config(self.agent_config(), values)

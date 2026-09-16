@@ -64,6 +64,10 @@ class _LifecycleMixin:
         self.closed = False
         self.assistant_message_idx = None
         self._pending_modes.clear()
+        self._trace_mode_requests.clear()
+        self._trace_request.clear()
+        self._trace_request_open = False
+        self._trace_tools.clear()
         self._model_request_active = False
         self._initialize_collaboration_mode()
         return self.assistant

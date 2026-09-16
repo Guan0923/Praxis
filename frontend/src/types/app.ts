@@ -1,7 +1,7 @@
 export type Page = "chat" | "trash" | "benchmark";
 export type ChatMode = "agent" | "plan";
 export type PermissionMode = "read_only" | "workspace_write" | "full_access";
-export type DisplayMode = "minimal" | "medium" | "verbose" | "developer";
+export type DisplayMode = "minimal" | "medium" | "verbose";
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type ThinkingMode = "enable" | "disable";
 

@@ -112,6 +112,31 @@ function clickTurnHeader(turnId: string): void {
 }
 
 describe("TracePage", () => {
+  it("keeps reused message positions independently expandable and shows runtime details", async () => {
+    const latest = turn("turn-retry", "2026-09-15T00:00:00Z");
+    vi.mocked(getTurnTrace).mockResolvedValue(response(latest, 1, {
+      items: [
+        traceItem(1, 1, 0, "assistant", { type: "text", text: "first attempt", status: "success" }),
+        traceItem(2, 1, 0, "assistant", { type: "text", text: "second attempt", status: "success" }),
+        { ...traceItem(3, 0, 0, "runtime", {
+          type: "runtime_event", event: "mode_changed", status: "success",
+          data: { old_mode: "agent", new_mode: "plan", source: "runtime_config" },
+        }), message_idx: null, item_idx: null },
+      ],
+    }));
+    render(<AntApp><TracePage turns={[latest]} /></AntApp>);
+    const first = (await screen.findByTitle("first attempt")).closest(".ant-collapse-item")!;
+    const second = screen.getByTitle("second attempt").closest(".ant-collapse-item")!;
+    fireEvent.click(first.querySelector(".ant-collapse-header")!);
+    expect(first).toHaveClass("ant-collapse-item-active");
+    expect(second).not.toHaveClass("ant-collapse-item-active");
+    fireEvent.click(second.querySelector(".ant-collapse-header")!);
+    expect(first).toHaveClass("ant-collapse-item-active");
+    expect(second).toHaveClass("ant-collapse-item-active");
+    fireEvent.click(screen.getByTitle("mode_changed"));
+    expect(await screen.findByText(/"old_mode": "agent"/)).toBeInTheDocument();
+  });
+
   it("labels collaboration instructions as Developer", async () => {
     const latest = turn("turn-mode", "2026-09-12T00:00:00Z");
     vi.mocked(getTurnTrace).mockResolvedValue(response(latest, 1, {

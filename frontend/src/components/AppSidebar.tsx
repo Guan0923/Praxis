@@ -1,6 +1,8 @@
 import {
   BarChartOutlined,
   DeleteOutlined,
+  DownOutlined,
+  RightOutlined,
   FolderOpenOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -82,6 +84,8 @@ export default function AppSidebar({
   const displayName = profile.display_name.trim() || "本地用户";
   const [savingScopes, setSavingScopes] = useState<Set<string>>(() => new Set());
   const [revealComplete, setRevealComplete] = useState(false);
+  const [projectsExpanded, setProjectsExpanded] = useState(true);
+  const [ordinaryExpanded, setOrdinaryExpanded] = useState(true);
   const groupActionQueues = useRef(new Map<string, Promise<void>>());
 
   function scopeKey(projectId: string | null): string {
@@ -220,40 +224,53 @@ export default function AppSidebar({
           </Button>
         </div>
 
-        <div className="sidebar-project-history sidebar-reveal-item" data-reveal-index="2">
-          <Typography.Text type="secondary" style={{ margin: "20px 8px 8px", fontSize: 12 }}>项目对话</Typography.Text>
-          <div className="project-history-list" style={{ minHeight: 0, overflowY: "auto" }}>
-            <Collapse
-              ghost
-              activeKey={expandedProjectIds}
-              onChange={(keys) => setExpandedProjectIds(Array.isArray(keys) ? keys.map(String) : [String(keys)])}
-              items={projectItems}
-            />
+        <div className="sidebar-history-scroll">
+          <div className="sidebar-project-history sidebar-reveal-item" data-reveal-index="2">
+            <div className="sidebar-section-heading">
+              <Button type="text" size="small" className="sidebar-section-toggle"
+                icon={projectsExpanded ? <DownOutlined /> : <RightOutlined />}
+                aria-label="项目对话" aria-expanded={projectsExpanded} onClick={() => setProjectsExpanded((value) => !value)}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>项目对话</Typography.Text>
+              </Button>
+            </div>
+            <div className="project-history-list" hidden={!projectsExpanded}>
+              <Collapse
+                ghost
+                activeKey={expandedProjectIds}
+                onChange={(keys) => setExpandedProjectIds(Array.isArray(keys) ? keys.map(String) : [String(keys)])}
+                items={projectItems}
+              />
+            </div>
           </div>
-        </div>
 
-        <div className="sidebar-ordinary-history sidebar-reveal-item" data-reveal-index="3">
-          <div className="sidebar-section-heading">
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>无项目对话</Typography.Text>
-            <ConversationSortButton
-              count={ordinaryConversations.length}
-              loading={ordinarySaving}
-              onSort={(sortBy) => void runGroupAction(null, () => onSort?.(null, sortBy) ?? Promise.resolve())}
-            />
+          <div className="sidebar-ordinary-history sidebar-reveal-item" data-reveal-index="3">
+            <div className="sidebar-section-heading">
+              <Button type="text" size="small" className="sidebar-section-toggle"
+                icon={ordinaryExpanded ? <DownOutlined /> : <RightOutlined />}
+                aria-label="无项目对话" aria-expanded={ordinaryExpanded} onClick={() => setOrdinaryExpanded((value) => !value)}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>无项目对话</Typography.Text>
+              </Button>
+              <ConversationSortButton
+                count={ordinaryConversations.length}
+                loading={ordinarySaving}
+                onSort={(sortBy) => void runGroupAction(null, () => onSort?.(null, sortBy) ?? Promise.resolve())}
+              />
+            </div>
+            <div hidden={!ordinaryExpanded}>
+              <SortableHistoryList
+                conversations={ordinaryConversations}
+                currentId={currentId}
+                pageIsChat={page === "chat"}
+                disabled={ordinarySaving || !onReorder}
+                onSelect={onSelect}
+                onRename={onRename}
+                onArchive={onArchive}
+                onDelete={onDelete}
+                onReorder={(orderedThreadIds) => runGroupAction(null, () => onReorder?.(null, orderedThreadIds) ?? Promise.resolve())}
+              />
+            </div>
           </div>
-          <div style={{ minHeight: 0, flex: 1, overflowY: "auto" }}>
-            <SortableHistoryList
-              conversations={ordinaryConversations}
-              currentId={currentId}
-              pageIsChat={page === "chat"}
-              disabled={ordinarySaving || !onReorder}
-              onSelect={onSelect}
-              onRename={onRename}
-              onArchive={onArchive}
-              onDelete={onDelete}
-              onReorder={(orderedThreadIds) => runGroupAction(null, () => onReorder?.(null, orderedThreadIds) ?? Promise.resolve())}
-            />
-          </div>
+
         </div>
 
         <div className="sidebar-utility-section sidebar-reveal-item" data-reveal-index="4">

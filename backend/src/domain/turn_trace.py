@@ -1,4 +1,4 @@
-"""Turn-version audit context and completed Item snapshots."""
+"""Turn-version execution audit and completed message snapshots."""
 
 from __future__ import annotations
 
@@ -36,18 +36,14 @@ class TurnTraceContext:
 
 @dataclass(frozen=True)
 class TurnTraceItem:
-    """One terminal canonical Turn Item, addressed by its stable coordinates."""
+    """One append-only audit record, identified by its sequence within a Turn version."""
 
     sequence: int
-    message_idx: int
-    item_idx: int
+    message_idx: int | None
+    item_idx: int | None
     role: str
     item: dict[str, Any]
     completed_at: str
-
-    @property
-    def coordinate(self) -> tuple[int, int]:
-        return self.message_idx, self.item_idx
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -64,8 +60,8 @@ class TurnTraceItem:
         item = value.get("item")
         return cls(
             sequence=int(value["sequence"]),
-            message_idx=int(value["message_idx"]),
-            item_idx=int(value["item_idx"]),
+            message_idx=int(value["message_idx"]) if value["message_idx"] is not None else None,
+            item_idx=int(value["item_idx"]) if value["item_idx"] is not None else None,
             role=str(value.get("role") or "assistant"),
             item=dict(item) if isinstance(item, Mapping) else {},
             completed_at=str(value.get("completed_at") or ""),

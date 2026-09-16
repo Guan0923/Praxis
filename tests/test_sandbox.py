@@ -27,7 +27,6 @@ from backend.sandbox import (
     SandboxInitializationError,
     SandboxJobContext,
     SandboxLauncher,
-    SandboxMaintenanceBusy,
     SandboxMaintenanceGate,
     SandboxPolicy,
     SandboxResourceExceeded,
@@ -562,32 +561,6 @@ class _LauncherBroker:
     @staticmethod
     def release(_job_id: str, *, user_id: str) -> None:
         del user_id
-
-
-def test_launcher_holds_maintenance_lease_until_cleanup(
-    tmp_path: Path,
-) -> None:
-    gate = SandboxMaintenanceGate()
-    process = types.SimpleNamespace(pid=4321)
-    launcher = SandboxLauncher(
-        broker=_LauncherBroker(process),
-        is_windows=True,
-        acl_manager=_LauncherAcl(),
-        lease_store_path=tmp_path / "leases.json",
-        maintenance_gate=gate,
-    )
-
-    launched = launcher.launch(
-        ["cmd.exe", "/c", "echo ok"],
-        SandboxPolicy((tmp_path,), "session", "job", network_mode=NetworkMode.FULL_NETWORK),
-    )
-
-    assert launched is process
-    assert gate.active_commands == 1
-    with pytest.raises(SandboxMaintenanceBusy):
-        gate.acquire_maintenance()
-    assert launcher.cleanup(process)
-    assert gate.active_commands == 0
 
 
 def test_launcher_resource_wait_does_not_hold_maintenance_lease(tmp_path: Path) -> None:

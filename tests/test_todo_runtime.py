@@ -224,7 +224,7 @@ def memory_store():
     store.close()
 
 
-def test_finalization_streams_candidate_and_appends_authoritative_unfinished_list(tmp_path: Path) -> None:
+def test_finalization_reminds_without_appending_unfinished_list(tmp_path: Path) -> None:
     store = MemoryTodoListStore()
     planner = FinalizationPlanner()
     events = []
@@ -245,9 +245,11 @@ def test_finalization_streams_candidate_and_appends_authoritative_unfinished_lis
     assert "discarded candidate" not in [
         message.content for message in result.history if isinstance(message, AssistantMessage)
     ]
-    assert result.final_answer is not None and result.final_answer.startswith("kept final")
-    assert "todo_" in result.final_answer
-    assert "[pending] unfinished" in result.final_answer
+    assert result.final_answer == "kept final"
+    assert [event.message for event in events if event.kind == "response_delta"] == [
+        "discarded candidate",
+        "kept final",
+    ]
 
 
 def test_completed_todos_end_without_a_finalization_pass(tmp_path: Path) -> None:
@@ -345,9 +347,11 @@ def test_pause_resume_keeps_todo_state_until_process_close(
     assert todo_store.persisted_turns
 
 
+@pytest.mark.parametrize("with_history", [False, True])
 def test_real_runtime_automatic_compaction_copies_todo_and_continues_with_the_new_turn(
     tmp_path: Path,
     memory_store: TrackingMemoryTodoListStore,
+    with_history: bool,
 ) -> None:
     todo_store = memory_store
     registry = build_tool_registry(tmp_path / "workspace")
@@ -363,8 +367,12 @@ def test_real_runtime_automatic_compaction_copies_todo_and_continues_with_the_ne
     )
     service = ConversationService(runner, sqlite_store)
 
-    seed = service.run_task("seed enough completed history", mode="agent")
-    assert seed.status == "completed"
+    if with_history:
+        seed = service.run_task("seed enough completed history", mode="agent")
+        assert seed.status == "completed"
+    else:
+        client.decisions = 1
+        client.estimates = [10, 100, 20, 10]
     completed = service.run_task("continue with Todo through automatic compaction", mode="agent")
 
     assert completed.status == "completed"

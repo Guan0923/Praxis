@@ -11,7 +11,7 @@ def web_tools(search: DdgrWebSearch, fetcher: SafeWebFetcher) -> tuple[Tool, ...
     return (
         Tool(
             "web_search",
-            "Searches the public web with DuckDuckGo and returns result titles, URLs, and available snippets.",
+            "Searches the public web using DuckDuckGo HTML with Lite fallback; returns titles, URLs, and snippets.",
             search.search,
             object_schema(
                 {
@@ -35,8 +35,9 @@ def web_tools(search: DdgrWebSearch, fetcher: SafeWebFetcher) -> tuple[Tool, ...
         Tool(
             "web_fetch",
             (
-                "Fetches an HTTP or HTTPS resource and returns readable content from HTML, plain-text, or JSON "
-                "responses."
+                "Fetches public HTTP/HTTPS HTML, text, JSON, Markdown, CSV, XML, or ZIP. "
+                "ZIP returns a file listing and text previews without extracting files to disk. "
+                "Limits: 200 ZIP entries, 8 MB expanded ZIP. Binary files are listed only."
             ),
             fetcher.fetch,
             object_schema(

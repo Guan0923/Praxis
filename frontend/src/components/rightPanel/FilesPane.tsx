@@ -1,4 +1,6 @@
-import { ErrorDisplay } from "../ErrorDisplay";
+import { showErrorMessage } from "../errorFeedback";
+import { notifyFileSaved, type OpenPanelFile } from "./fileEvents";
+import { registerFilePanelSave } from "./filePanelLifecycle";
 import {
   DeleteOutlined,
   DownloadOutlined,
@@ -235,12 +237,13 @@ function DirectoryPicker({ sessionId, selected, onSelect }: DirectoryPickerProps
 }
 
 interface FilesPaneProps {
+  fileToOpen?: OpenPanelFile & { requestId: number };
   panelWindow: RightPanelWindow;
   active: boolean;
   readOnly?: boolean;
 }
 
-export default function FilesPane({ panelWindow, active, readOnly = false }: FilesPaneProps) {
+export default function FilesPane({ panelWindow, active, readOnly = false, fileToOpen }: FilesPaneProps) {
   const { message, modal } = App.useApp();
   const screens = Grid.useBreakpoint();
   const isMobile = screens.md === false;
@@ -256,7 +259,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "failed" | "conflict">("idle");
   const [loadingFile, setLoadingFile] = useState(false);
   const [treeCollapsed, setTreeCollapsed] = useState(isMobile);
-  const [treeWidth, setTreeWidth] = useState(260);
+  const [treeWidth, setTreeWidth] = useState<number | string>("33.333333%");
   const [action, setAction] = useState<{ type: "new-file" | "new-directory" | "rename"; node: FileTreeNode } | null>(null);
   const [actionValue, setActionValue] = useState("");
   const [moveNode, setMoveNode] = useState<FileTreeNode | null>(null);
@@ -312,7 +315,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
     setDirty(false);
     setSaveState("idle");
     setTreeActiveKey(null);
-    void refreshRoots().catch((error) => void message.error({ content: <ErrorDisplay error={error} />, duration: 0 }));
+    void refreshRoots().catch((error) => void showErrorMessage(message, error));
   }, [message, refreshRoots]);
 
   useEffect(() => {
@@ -352,6 +355,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
           version: current.version,
           force,
         });
+        notifyFileSaved(sessionId, entry.source, entry.path);
         if (generation !== generationRef.current || saved.kind !== "text") return true;
         setDocument(saved);
         documentRef.current = saved;
@@ -371,6 +375,14 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
     saveQueueRef.current = saveQueueRef.current.then(run, run);
     return saveQueueRef.current;
   }, [readOnly, sessionId]);
+
+  useEffect(() => registerFilePanelSave(panelWindow.id, sessionId, async () => {
+    await saveQueueRef.current;
+    while (dirtyRef.current) {
+      if (!await saveNow()) return false;
+    }
+    return true;
+  }), [panelWindow.id, sessionId, saveNow]);
 
   const confirmDiscard = useCallback(() => new Promise<boolean>((resolve) => {
     modal.confirm({
@@ -427,11 +439,21 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
       dirtyRef.current = false;
       setSaveState("idle");
     } catch (error) {
-      if (generation === generationRef.current) void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
+      if (generation === generationRef.current) void showErrorMessage(message, error);
     } finally {
       if (generation === generationRef.current) setLoadingFile(false);
     }
   }, [finishBeforeLeave, message, sessionId]);
+
+  useEffect(() => {
+    if (!fileToOpen || fileToOpen.sessionId !== sessionId) return;
+    if (selectedRef.current?.source === fileToOpen.source && selectedRef.current.path === fileToOpen.path) return;
+    void openFile({
+      source: fileToOpen.source, path: fileToOpen.path,
+      name: fileToOpen.path.split("/").pop() ?? fileToOpen.path,
+      kind: "file", size: null, mtime: "", mime: null, is_image: false, version: null,
+    });
+  }, [fileToOpen, openFile, sessionId]);
 
   const clearSelectionIfAffected = useCallback((source: ManagedFileSource, path: string) => {
     const current = selectedRef.current;
@@ -479,7 +501,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
       await refreshCurrent();
       if (notify) void message.success("已刷新");
     } catch (error) {
-      if (notify) void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
+      if (notify) void showErrorMessage(message, error);
     }
   }, [message, refreshCurrent, refreshLoadedDirectories]);
 
@@ -542,7 +564,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
       setActionValue("");
       await refreshAll(false);
     } catch (error) {
-      void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
+      void showErrorMessage(message, error);
     }
   };
 
@@ -561,7 +583,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
       setMoveTarget(null);
       await refreshAll(false);
     } catch (error) {
-      void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
+      void showErrorMessage(message, error);
     }
   };
 
@@ -603,7 +625,7 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
               dirtyRef.current = true;
               setDirty(true);
             }
-            void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
+            void showErrorMessage(message, error);
           });
           return;
         }
@@ -759,8 +781,8 @@ export default function FilesPane({ panelWindow, active, readOnly = false }: Fil
     <div className="right-panel-files">
       {treeCollapsed ? contentPanel : isMobile ? treePanel : (
         <Splitter onResize={(sizes) => setTreeWidth(Number(sizes[1]) || treeWidth)}>
-          <Splitter.Panel min={220}>{contentPanel}</Splitter.Panel>
-          <Splitter.Panel size={treeWidth} min={180} max="55%">{treePanel}</Splitter.Panel>
+          <Splitter.Panel min={0}>{contentPanel}</Splitter.Panel>
+          <Splitter.Panel size={treeWidth} min={0} max="55%">{treePanel}</Splitter.Panel>
         </Splitter>
       )}
       <Modal

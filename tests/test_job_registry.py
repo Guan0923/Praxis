@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from datetime import UTC, datetime
+from uuid import UUID
 
 import pytest
 
@@ -65,6 +66,12 @@ def test_ids_are_unique_under_concurrent_allocation() -> None:
     for thread in threads:
         thread.join()
     assert len(values) == len(set(values)) == 80
+
+
+def test_job_ids_are_uuid4_across_registry_instances() -> None:
+    values = [registry().new_job_id() for _ in range(4)]
+    assert len(set(values)) == len(values)
+    assert all(UUID(value).version == 4 and str(UUID(value)) == value for value in values)
 
 
 def test_scope_owner_is_session_thread_and_run_only() -> None:

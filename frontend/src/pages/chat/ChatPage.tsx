@@ -1,5 +1,6 @@
+import { showErrorMessage } from "../../components/errorFeedback";
 import { ApiError } from "../../api/transport/request";
-import { ViewStateContext, useViewState, viewKey } from "../../app/viewState";
+import { ViewStateContext, flushView, patchView, useViewState, viewKey, viewSnapshot } from "../../app/viewState";
 import { getTurnPage } from "../../api/conversations/turns";
 import { withTurnPage } from "../../app/conversationProjection";
 import { ErrorDisplay } from "../../components/ErrorDisplay";
@@ -86,7 +87,8 @@ export default function ChatPage({
   });
   const conversation = agentThreadView.conversation;
   const savedKey = viewKey(conversation?.sessionId, conversation?.threadId);
-  const savedView = useViewState(savedKey);
+  useEffect(() => () => { void flushView(savedKey); }, [savedKey]);
+  const savedView = useViewState(savedKey, () => null);
   const ownership = useSessionOwnership(conversation?.sessionId);
   const sessionReadOnly = Boolean(conversation?.sessionId) && ownership !== "writable";
   useEffect(() => {
@@ -113,7 +115,6 @@ export default function ChatPage({
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const [commandTriggerState, setCommandTriggerState] = useState<CommandTrigger | null>(null);
   const [commandMenuDismissedFor, setCommandMenuDismissedFor] = useState<string | null>(null);
-  const [dismissedTodoPanels, setDismissedTodoPanels] = useState<Set<string>>(() => new Set());
   const [mainView, setMainView] = useState<ChatMainView>("chat");
 
   const [unboundMessages, setUnboundMessages] = useState<Record<string, ChatMessage>>({});
@@ -147,7 +148,7 @@ export default function ChatPage({
           && current.activeTurnId === head ? withTurnPage(current, page) : current);
       }
       const failure = error instanceof Error ? error : new Error(String(error));
-      void message.error({ content: <ErrorDisplay error={failure} /> });
+      void showErrorMessage(message, failure);
     } finally {
       historyRequestRef.current = null;
     }
@@ -220,18 +221,16 @@ export default function ChatPage({
 
   const todoTurnId = conversation?.activeTurnId ?? activeRuntimeNode?.id;
   const todo = useMemo(() => latestTodoList(messages, todoTurnId), [messages, todoTurnId]);
-  const todoPanelKey = `${conversation?.id ?? "draft"}:${todoTurnId ?? "no-turn"}`;
+  const todoPanelKey = `todo-panel:${todoTurnId ?? "no-turn"}`;
   const todoCompleted = todo !== null && todo.length > 0 && todo.every((item) => item.status === "completed");
-  const visibleTodo = todo?.length && !todoCompleted && !dismissedTodoPanels.has(todoPanelKey) ? todo : null;
+  const todoExpanded = useViewState(savedKey, (state) => state.expanded[todoPanelKey] !== false).value;
+  const visibleTodo = savedView.loaded && todo?.length && !todoCompleted
+    && todoExpanded ? todo : null;
   const todoClosable = Boolean(visibleTodo) && !busy;
   const closeTodoPanel = useCallback(() => {
-    setDismissedTodoPanels((current) => {
-      if (current.has(todoPanelKey)) return current;
-      const next = new Set(current);
-      next.add(todoPanelKey);
-      return next;
-    });
-  }, [todoPanelKey]);
+    patchView(savedKey, { expanded: { ...viewSnapshot(savedKey).expanded, [todoPanelKey]: false } });
+    void flushView(savedKey);
+  }, [savedKey, todoPanelKey]);
   const currentThreadId = activeRuntimeNode?.thread_id ?? conversation?.threadId ?? conversation?.sessionId;
   const traceTurns = (conversation?.runtimeNodes ?? []).filter(
     (node): node is RuntimeStateNode => isRuntimeTurnNode(node)
@@ -274,7 +273,7 @@ export default function ChatPage({
     onFork: agentThreadView.isSubagent ? undefined : onFork,
     onUpdate,
     runPrompt,
-    onError: (error) => { void message.error({ content: <ErrorDisplay error={error} />, duration: 0 }); },
+    onError: (error) => { void showErrorMessage(message, error); },
   });
   const {
     editingMessageId,
@@ -561,7 +560,7 @@ export default function ChatPage({
         await runPrompt(item.content, undefined, item.references, release, item);
       }
     } catch (error) {
-      void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
+      void showErrorMessage(message, error);
     } finally {
       release();
     }
@@ -623,7 +622,7 @@ export default function ChatPage({
             model: requestModel,
           });
         } catch (error) {
-          void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
+          void showErrorMessage(message, error);
         }
         return;
       }
@@ -642,7 +641,7 @@ export default function ChatPage({
         releaseSend,
       );
     } catch (error) {
-      void message.error({ content: <ErrorDisplay error={error} />, duration: 0 });
+      void showErrorMessage(message, error);
     } finally {
       releaseSend();
     }
@@ -711,6 +710,7 @@ export default function ChatPage({
           onRetrySend={(item) => void retryFailedMessage(item)}
           messages={messages}
           sessionId={conversation?.sessionId}
+          threadId={currentThreadId}
           display={display}
           interactionBusy={interactionBusy || sessionReadOnly || rewindPending}
           compactionPending={compactionPending}

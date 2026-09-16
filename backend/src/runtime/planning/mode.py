@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from backend.domain import AssistantMessage, RunHandoff
+from backend.domain import AssistantMessage, RunHandoff, safe_error_message
 
 from ..core.context import AgentRuntime
 from ..core.contracts import InterruptRequest
@@ -10,7 +10,7 @@ from ..core.events import RuntimeEvent
 from ..execution.lifecycle.cancellation import cancel_if_requested
 from ..execution.lifecycle.outcomes import cancel_run, complete_run, fail_run
 from ..execution.workflows import PlanProposalWorkflow
-from .review import REQUEST_PLAN_REVIEW_NAME
+from .review import REQUEST_PLAN_REVIEW_NAME, approved_plan, plan_review_path, read_plan_review
 
 
 class PlanModeWorkflow:
@@ -48,10 +48,12 @@ class PlanModeWorkflow:
         *,
         content_streamed: bool,
     ) -> None:
-        call_id = next(
-            (tool.call_id for tool in message.tool_messages if tool.name == REQUEST_PLAN_REVIEW_NAME),
-            "",
+        tool = next(
+            tool
+            for tool in reversed(message.tool_messages)
+            if tool.name == REQUEST_PLAN_REVIEW_NAME and tool.status == "succeeded"
         )
+        call_id = tool.call_id
         request = InterruptRequest(
             "plan",
             "Choose how to handle this plan.",
@@ -59,6 +61,7 @@ class PlanModeWorkflow:
                 "run_id": runtime.run.run_id,
                 "plan": proposal,
                 "call_id": call_id,
+                "plan_path": plan_review_path(tool.arguments),
             },
         )
         publish = runtime.services.publish or (lambda _event: None)
@@ -70,6 +73,19 @@ class PlanModeWorkflow:
         decision = runtime.services.interrupt(request)
         if cancel_if_requested(runtime):
             return
+        try:
+            proposal = read_plan_review(tool.arguments, runtime.state.workspace_root)
+        except (ValueError, OSError) as exc:
+            fail_run(runtime, f"Unable to read reviewed plan: {safe_error_message(exc)}")
+            return
+        tool.content = proposal
+        request.data["plan"] = proposal
+        publish(
+            RuntimeEvent(
+                "plan_review_updated", proposal, {"call_id": call_id, "plan_path": plan_review_path(tool.arguments)}
+            )
+        )
+        runtime.save()
         if decision.choice == "stay_in_plan_mode":
             runtime.state.running_mode = "plan"
             runtime.run.mode = "plan"
@@ -89,7 +105,7 @@ class PlanModeWorkflow:
         compact_before = decision.choice == "implement_and_compaction"
         runtime.run.handoff = RunHandoff(
             "agent",
-            proposal,
+            approved_plan(proposal),
             compact_before=compact_before,
             active_skills=tuple(runtime.run.active_skills),
         )

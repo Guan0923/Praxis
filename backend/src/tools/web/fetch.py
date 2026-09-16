@@ -1,10 +1,13 @@
-"""Public-only HTTP fetcher with bounded response handling."""
+"""Public-only HTTP fetcher with bounded readable output."""
 
 from __future__ import annotations
 
+import io
 import ipaddress
 import json
 import socket
+import zipfile
+import zlib
 from collections.abc import Callable, Mapping
 from typing import Any
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
@@ -99,10 +102,21 @@ class SafeWebFetcher:
     """
 
     _MAX_REDIRECTS = 3
-    _MAX_RESPONSE_BYTES = 2_000_000
     _MAX_OUTPUT_CHARS = 100_000
     _DEFAULT_OUTPUT_CHARS = 50_000
-    _ALLOWED_CONTENT_TYPES = {"text/html", "text/plain", "application/json"}
+    _ALLOWED_CONTENT_TYPES = {
+        "text/html",
+        "text/plain",
+        "application/json",
+        "text/markdown",
+        "text/csv",
+        "text/xml",
+        "application/xml",
+        "application/zip",
+        "application/x-zip-compressed",
+    }
+    _MAX_ARCHIVE_ENTRIES = 200
+    _MAX_EXPANDED_BYTES = 8_000_000
     _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
     _USER_AGENT = "Praxis/0.1 (+https://example.invalid/praxis)"
     _DOH_ADDRESS = "1.1.1.1"
@@ -146,11 +160,14 @@ class SafeWebFetcher:
                     allowed = ", ".join(sorted(self._ALLOWED_CONTENT_TYPES))
                     raise ToolError(f"Unsupported content type {content_type or 'missing'}; allowed types: {allowed}.")
                 try:
-                    body = self._read_limited_body(response)
+                    body = self._read_body(response)
                 except (requests.RequestException, urllib3.exceptions.HTTPError, OSError) as exc:
                     raise ToolError(f"Unable to read web response: {exc}") from exc
-                text = body.decode(response.encoding or "utf-8", errors="replace")
-                title, readable = self._extract_content(text, content_type)
+                if content_type in {"application/zip", "application/x-zip-compressed"}:
+                    title, readable = None, self._extract_zip(body)
+                else:
+                    text = body.decode(response.encoding or "utf-8", errors="replace")
+                    title, readable = self._extract_content(text, content_type)
                 readable = self._truncate_output(readable, max_chars)
                 header = f"Fetched URL: {current_url}\nContent type: {content_type}"
                 if title:
@@ -163,7 +180,7 @@ class SafeWebFetcher:
         raise ToolError(f"Web fetch exceeded the redirect limit of {self._MAX_REDIRECTS}.")
 
     def _request(self, url: str, addresses: list[str]) -> HttpResponse:
-        headers = {"Accept": "text/html, text/plain, application/json", "User-Agent": self._USER_AGENT}
+        headers = {"Accept": ", ".join(sorted(self._ALLOWED_CONTENT_TYPES)), "User-Agent": self._USER_AGENT}
         if self._session is not None:
             try:
                 return self._session.get(
@@ -196,7 +213,7 @@ class SafeWebFetcher:
                 self._verify_connected_peer(response)
                 if not 200 <= response.status_code < 300:
                     raise ToolError(f"Fixed DNS resolver returned HTTP status {response.status_code}.")
-                raw = self._read_limited_body(response)
+                raw = self._read_body(response)
                 payload = json.loads(raw.decode(response.encoding or "utf-8", errors="replace"))
             except (ToolError, ValueError, OSError) as exc:
                 raise ToolError(f"Unable to resolve web host through the fixed DNS resolver: {exc}") from exc
@@ -320,25 +337,64 @@ class SafeWebFetcher:
             raise ToolError("Redirect response did not include a Location header.")
         return self._normalise_url(urljoin(current_url, location))
 
-    def _read_limited_body(self, response: HttpResponse) -> bytes:
-        length = self._header(response.headers, "content-length")
-        if length:
-            try:
-                if int(length) > self._MAX_RESPONSE_BYTES:
-                    raise ToolError(f"Web response exceeds the {self._MAX_RESPONSE_BYTES}-byte limit.")
-            except ValueError:
-                pass
+    def _read_body(self, response: HttpResponse) -> bytes:
         chunks: list[bytes] = []
-        total = 0
         for chunk in response.iter_content(chunk_size=8192):
             if not chunk:
                 continue
-            chunk_bytes = chunk.encode("utf-8") if isinstance(chunk, str) else chunk
-            total += len(chunk_bytes)
-            if total > self._MAX_RESPONSE_BYTES:
-                raise ToolError(f"Web response exceeds the {self._MAX_RESPONSE_BYTES}-byte limit.")
-            chunks.append(chunk_bytes)
+            chunks.append(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
         return b"".join(chunks)
+
+    def _extract_zip(self, body: bytes) -> str:
+        # Never extract paths to disk or recursively unpack nested archives.
+        try:
+            with zipfile.ZipFile(io.BytesIO(body)) as archive:
+                entries = archive.infolist()
+                if len(entries) > self._MAX_ARCHIVE_ENTRIES:
+                    raise ToolError("ZIP exceeds the 200-entry limit.")
+                if sum(entry.file_size for entry in entries) > self._MAX_EXPANDED_BYTES:
+                    raise ToolError("ZIP exceeds the 8000000-byte expanded size limit.")
+                output = ["ZIP contents (text previews; binary files are listed only):"]
+                remaining = self._MAX_EXPANDED_BYTES
+                text_extensions = {
+                    "txt",
+                    "md",
+                    "csv",
+                    "json",
+                    "xml",
+                    "html",
+                    "htm",
+                    "py",
+                    "js",
+                    "ts",
+                    "yaml",
+                    "yml",
+                    "toml",
+                    "log",
+                    "rst",
+                }
+                for entry in entries:
+                    output.append(f"\nFile: {entry.filename!r} ({entry.file_size} bytes)")
+                    if entry.is_dir():
+                        continue
+                    if entry.flag_bits & 1:
+                        output.append("(encrypted; not read)")
+                        continue
+                    if entry.filename.rsplit(".", 1)[-1].lower() not in text_extensions:
+                        output.append("(binary or unsupported file; not read)")
+                        continue
+                    with archive.open(entry) as stream:
+                        data = stream.read(remaining + 1)
+                    remaining -= len(data)
+                    if remaining < 0:
+                        raise ToolError("ZIP exceeds the expanded size limit.")
+                    text = data.decode("utf-8-sig", errors="replace")
+                    if entry.filename.lower().endswith((".html", ".htm")):
+                        _, text = self._extract_content(text, "text/html")
+                    output.append(text)
+                return "\n".join(output)
+        except (zipfile.BadZipFile, NotImplementedError, RuntimeError, OSError, EOFError, zlib.error) as exc:
+            raise ToolError(f"Unable to read ZIP archive: {exc}") from exc
 
     def _extract_content(self, text: str, content_type: str) -> tuple[str | None, str]:
         if content_type == "text/html":
@@ -351,7 +407,7 @@ class SafeWebFetcher:
                 return None, json.dumps(json.loads(text), ensure_ascii=False, indent=2)
             except json.JSONDecodeError:
                 pass
-        return None, self._normalise_whitespace(text)
+        return None, text.strip()
 
     def _validate_max_chars(self, max_chars: Any) -> None:
         if isinstance(max_chars, bool) or not isinstance(max_chars, int):

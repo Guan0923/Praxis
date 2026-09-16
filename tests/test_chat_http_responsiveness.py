@@ -29,9 +29,7 @@ from backend.storage.message_queue import MemoryMessageQueue
 from backend.storage.sqlite import SQLiteSessionStore
 
 
-@pytest.mark.parametrize(
-    "benchmark", [False, True, "todo", "failure"], ids=["controls", "rich-stream", "todo", "failure"]
-)
+@pytest.mark.parametrize("benchmark", [True, "todo", "failure"], ids=["rich-stream", "todo", "failure"])
 def test_browser_with_real_memory_http_and_small_model_chunks(tmp_path, monkeypatch, local_sandbox_runtime, benchmark):
     root = Path(__file__).resolve().parents[1]
     if not (root / "frontend/dist/index.html").exists() or not shutil.which("node"):

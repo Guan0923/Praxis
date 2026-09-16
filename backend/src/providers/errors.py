@@ -1,5 +1,6 @@
 """Provider-specific failures, separate from UI and runtime implementations."""
 
+from collections.abc import Mapping
 from typing import Any
 
 from backend.domain import ModelOutputError, PlanningError
@@ -37,7 +38,24 @@ class ModelTransportError(ModelRequestError):
 
 
 class ModelResponseError(ModelRequestError):
-    """A terminal provider failure that must not enter output repair."""
+    """A provider failure that must not enter output repair."""
+
+    @property
+    def is_connection_interruption(self) -> bool:
+        codes = {
+            "upstream_stream_read_error",
+            "upstream_http2_stream_error",
+            "upstream_stream_truncated",
+        }
+        error = self.diagnostics.get("error")
+        provider_error = self.diagnostics.get("provider_error")
+        nested_error = provider_error.get("error") if isinstance(provider_error, Mapping) else None
+        return any(
+            isinstance(value, str) and value in codes
+            for detail in (error, provider_error, nested_error)
+            if isinstance(detail, Mapping)
+            for value in (detail.get("code"), detail.get("type"))
+        )
 
 
 class ProviderOutputError(ModelOutputError, ModelRequestError):

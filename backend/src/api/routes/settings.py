@@ -33,7 +33,7 @@ class AgentConfigPayload(BaseModel):
     verbosity: str = Field(default="balanced", max_length=40)
     initiative: str = Field(default="balanced", max_length=40)
     custom_instructions: str = Field(default="", max_length=4000)
-    display_mode: Literal["minimal", "medium", "verbose", "developer"] = "medium"
+    display_mode: Literal["minimal", "medium", "verbose"] = "medium"
     timezone: str = Field(default=DEFAULT_TIME_ZONE, max_length=80)
     location_enabled: StrictBool = False
 

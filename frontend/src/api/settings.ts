@@ -15,7 +15,7 @@ export interface AgentConfig {
   verbosity: string;
   initiative: string;
   custom_instructions: string;
-  display_mode: "minimal" | "medium" | "verbose" | "developer";
+  display_mode: "minimal" | "medium" | "verbose";
   timezone: string;
   location_enabled: boolean;
 }

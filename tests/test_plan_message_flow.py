@@ -26,7 +26,7 @@ def review_message(call_id: str = "review_1") -> AssistantMessage:
             ToolMessage(
                 name=REQUEST_PLAN_REVIEW_NAME,
                 call_id=call_id,
-                arguments={"plan": PLAN},
+                arguments={"plan_name": "test-plan", "plan": PLAN},
             )
         ]
     )
@@ -38,9 +38,9 @@ def completed_review_message(call_id: str = "review_1") -> AssistantMessage:
             ToolMessage(
                 name=REQUEST_PLAN_REVIEW_NAME,
                 call_id=call_id,
-                arguments={"plan": PLAN},
+                arguments={"plan_name": "test-plan", "plan": PLAN},
                 status="succeeded",
-                content="Plan submitted for review.",
+                content=PLAN,
                 retryable=False,
                 execution_stage="succeeded",
             )
@@ -76,7 +76,7 @@ class ConversationPlanner(PlanMessagePlanner):
 
 
 def build_service(tmp_path: Path, planner: PlanMessagePlanner) -> ConversationService:
-    runner = AgentRunner(planner, ToolRegistry(tmp_path))
+    runner = AgentRunner(planner, ToolRegistry(tmp_path), workspace_root=str(tmp_path))
     store = session_store(tmp_path / "store")
     return ConversationService(runner, store)
 
@@ -98,6 +98,31 @@ def test_plan_implement_keeps_control_call_as_ordinary_history(tmp_path: Path) -
         UserMessage(content=APPROVED_PLAN),
     ]
     assert all(message.role != "artifact" for message in service.runtime.state.messages)
+
+
+def test_edited_plan_updates_persisted_result_and_agent_input(tmp_path: Path) -> None:
+    from backend.domain.runtime_state import RuntimeState
+
+    planner = PlanMessagePlanner()
+    service = build_service(tmp_path, planner)
+    revised = "# Saved revision\n\nImplement this revision."
+
+    def decide(request):
+        (tmp_path / request.data["plan_path"]).write_text(revised, encoding="utf-8")
+        return InterruptDecision("implement")
+
+    service.run_task("Plan the change", mode="plan", interrupt=decide)
+    assert planner.agent_histories[-1][-1].content == f"<approved_plan>\n{revised}\n</approved_plan>"
+    nodes = session_store(tmp_path / "store").load_nodes(service.active_session.session_id)
+    results = [
+        item
+        for node in nodes
+        if isinstance(node, RuntimeState)
+        for item in node.assistant_items
+        if item.get("type") == "tool_result" and item.get("tool") == REQUEST_PLAN_REVIEW_NAME
+    ]
+    assert results[0]["content"] == revised
+    assert results[0]["plan_path"] == "plan/test-plan.md"
 
 
 def test_plan_implement_after_compaction_keeps_session_and_wraps_approved_plan(tmp_path: Path) -> None:

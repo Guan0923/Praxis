@@ -41,14 +41,9 @@ def test_atomic_operations_preserve_order_and_allow_duplicate_content_and_multip
 
 @pytest.mark.parametrize("source", ["pending", "in_progress", "completed"])
 @pytest.mark.parametrize("target", ["pending", "in_progress", "completed"])
-def test_every_status_transition_is_allowed_when_it_changes(source: str, target: str) -> None:
+def test_every_status_transition_is_allowed(source: str, target: str) -> None:
     snapshot = TodoSnapshot(1, (TodoItem(_id(1), "work", source),))  # type: ignore[arg-type]
     operation = {"op": "update", "id": _id(1), "status": target}
-
-    if source == target:
-        with pytest.raises(TodoStateError, match="does not change"):
-            apply_todo_operations(snapshot, [operation], generated_ids=[])
-        return
 
     updated, _applied = apply_todo_operations(snapshot, [operation], generated_ids=[])
     assert updated.todos[0].status == target

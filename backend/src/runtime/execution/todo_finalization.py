@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from backend.domain import AssistantMessage, TodoSnapshot, UserMessage
+from backend.domain import UserMessage
 
 from ..core.context import AgentRuntime
-from ..core.events import RuntimeEvent
 
 TODO_FINALIZATION_INSTRUCTION = (
     "The current Turn still has unfinished Todo items. This is the single finalization pass: update the Todo list "
@@ -28,12 +27,7 @@ def refresh_todo_finalization_context(runtime: AgentRuntime) -> None:
         runtime.services.context_suffix_messages = []
 
 
-def check_todo_finalization(
-    runtime: AgentRuntime,
-    message: AssistantMessage,
-    *,
-    content_streamed: bool,
-) -> bool:
+def check_todo_finalization(runtime: AgentRuntime) -> bool:
     """Return true when one extra model pass must run before completion."""
 
     store = runtime.services.todo_store
@@ -49,23 +43,8 @@ def check_todo_finalization(
         runtime.services.context_suffix_messages = [UserMessage(content=TODO_FINALIZATION_INSTRUCTION)]
         return True
 
-    snapshot = store.snapshot(session_id, turn_id)
-    if snapshot.unfinished:
-        disclosure = _unfinished_disclosure(snapshot)
-        message.content = f"{message.content or ''}{disclosure}"
-        if content_streamed:
-            publish = runtime.services.publish or (lambda _event: None)
-            publish(RuntimeEvent("response_start"))
-            publish(RuntimeEvent("response_delta", disclosure))
-            publish(RuntimeEvent("response_end"))
     runtime.services.context_suffix_messages = []
     return False
-
-
-def _unfinished_disclosure(snapshot: TodoSnapshot) -> str:
-    lines = ["", "", "Unfinished Todo items:"]
-    lines.extend(f"- {todo.id} [{todo.status}] {todo.content}" for todo in snapshot.unfinished)
-    return "\n".join(lines)
 
 
 __all__ = [

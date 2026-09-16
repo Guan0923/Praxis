@@ -2,8 +2,23 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import DecisionCard from "./DecisionCard";
+import { registerFilePanelSave } from "./rightPanel/filePanelLifecycle";
 
 describe("DecisionCard", () => {
+  it("blocks implementation until the session editor is saved", async () => {
+    const save = vi.fn().mockResolvedValue(false);
+    const release = registerFilePanelSave("file", "session", save);
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(<DecisionCard sessionId="session" request={{ decision_id: "p", kind: "plan", plan: "Plan" }} onSubmit={onSubmit} />);
+    await user.click(screen.getByRole("button", { name: "实施", exact: true }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent("保存失败");
+    save.mockResolvedValue(true);
+    await user.click(screen.getByRole("button", { name: "实施", exact: true }));
+    expect(onSubmit).toHaveBeenCalledWith("implement", {});
+    release();
+  });
   it("keeps plan decision choice protocol while using Card and Buttons", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();

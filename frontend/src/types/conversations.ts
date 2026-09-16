@@ -26,6 +26,7 @@ export interface Metrics {
 }
 
 export interface ChatMessage {
+  approvedPlanHandoff?: boolean;
   id: string;
   role: "user" | "assistant";
   content: string;

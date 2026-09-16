@@ -5,6 +5,7 @@ from __future__ import annotations
 from threading import RLock
 
 from backend.domain import AssistantMessage, ToolMessage, safe_error_message
+from backend.tools import ToolError
 
 from ...conversation.user_input import (
     format_user_input_answers,
@@ -14,7 +15,7 @@ from ...conversation.user_input import (
 from ...core.context import AgentRuntime
 from ...core.contracts import InterruptRequest
 from ...core.events import RuntimeEvent
-from ...planning.review import parse_plan_review
+from ...planning.review import save_plan_review
 from ..lifecycle.cancellation import cancel_if_requested
 from ..lifecycle.outcomes import cancel_run, fail_run
 from ..steps import ToolStepResult
@@ -40,14 +41,14 @@ class PlanControlMixin:
             _publish_tool_call(runtime, tool)
             runtime.save()
         try:
-            plan = parse_plan_review(tool.arguments)
-        except ValueError as exc:
+            plan = save_plan_review(tool.arguments, runtime.state.workspace_root)
+        except (ValueError, ToolError, OSError) as exc:
             error = safe_error_message(exc)
             PlanControlMixin._fail_control_tool(runtime, tool, error, retryable=True, commit_lock=commit_lock)
             return ToolStepResult(False, error=error, retryable=True), None
         with commit_lock:
             tool.status = "succeeded"
-            tool.content = "Plan submitted for review."
+            tool.content = plan
             tool.retryable = False
             tool.execution_stage = "succeeded"
             _publish_tool_result(runtime, tool)
@@ -164,8 +165,8 @@ class PlanControlMixin:
         tool = response.tool_messages[0]
         runtime.state.active_tool_index = 0
         try:
-            plan = parse_plan_review(tool.arguments)
-        except ValueError as exc:
+            plan = save_plan_review(tool.arguments, runtime.state.workspace_root)
+        except (ValueError, ToolError, OSError) as exc:
             tool.status = "failed"
             tool.content = safe_error_message(exc)
             tool.retryable = True
@@ -174,7 +175,7 @@ class PlanControlMixin:
             return None
 
         tool.status = "succeeded"
-        tool.content = "Plan submitted for review."
+        tool.content = plan
         tool.retryable = False
         _publish_tool_result(runtime, tool)
         _finish_assistant(runtime)

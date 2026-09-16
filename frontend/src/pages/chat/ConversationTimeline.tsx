@@ -17,6 +17,7 @@ import {
   type RefObject,
 } from "react";
 import type { ChatMessage } from "../../types";
+import { flushSync } from "react-dom";
 import css from "./TimelineTicks.module.css";
 import { useButtonTooltips } from "../../components/ButtonTooltipContext";
 
@@ -88,7 +89,7 @@ export function buildTimelineEntries(messages: readonly ChatMessage[]): Timeline
       key: message.id,
       fingerprint: JSON.stringify([message.id, message.content, message.deliveryId ?? ""]),
       time: Number.isFinite(message.timelineTime) ? Number(message.timelineTime) : 0,
-      text: message.timelineText || message.content || "",
+      text: message.approvedPlanHandoff ? "已批准计划，开始实施" : message.timelineText || message.content || "",
     });
   }
   return entries;
@@ -103,6 +104,7 @@ function hitTarget(key: string, container: HTMLDivElement | null, onNavigate?: (
   const target = [...container.querySelectorAll<HTMLElement>("[data-chat-anchor-key]")]
     .find((candidate) => candidate.dataset.chatAnchorKey === key);
   if (!target) return;
+  flushSync(() => container.dispatchEvent(new CustomEvent("chat-reveal", { detail: target })));
   const top = container.scrollTop + target.getBoundingClientRect().top
     - container.getBoundingClientRect().top - container.clientTop
     - Math.max(0, (container.clientHeight - target.getBoundingClientRect().height) / 2);

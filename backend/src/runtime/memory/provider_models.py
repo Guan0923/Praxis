@@ -120,8 +120,8 @@ class ProviderMemoryModel:
             )
             runtime = AgentRuntime(state, RuntimeServices(planner=None, tools=None))
             runtime.exchange.operation = "summarize"
-            runtime.exchange.output_mode = "json"
-            runtime.exchange.stream = False
+            runtime.exchange.output_mode = "text"
+            runtime.exchange.stream = True
             runtime.exchange.messages = [
                 SystemMessage(
                     content=(

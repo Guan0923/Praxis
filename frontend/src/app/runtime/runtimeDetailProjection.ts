@@ -69,6 +69,8 @@ function isHiddenChatError(item: TurnItem): boolean {
 }
 
 function displayAssistantItems(turn: RuntimeStateNode, items: TurnItem[]): TurnItem[] {
+  const planResults = items.filter((item) => item.type === "tool_result" && item.tool === "request_plan_review" && item.status === "success");
+  const plans = new Set(planResults.map((item) => text(item.content).trim()));
   const toolResults = new Map<string, TurnItem>();
   for (const item of items) {
     if (item.type === "tool_result" && typeof item.call_id === "string") toolResults.set(item.call_id, item);
@@ -77,6 +79,12 @@ function displayAssistantItems(turn: RuntimeStateNode, items: TurnItem[]): TurnI
   const displayed: TurnItem[] = [];
   for (let index = 0; index < items.length;) {
     const item = items[index];
+    // Plan lifecycle records remain in Trace; the editable result owns the chat body.
+    if (planResults.length && ((item.type === "plan" && ["plan", "handoff_created"].includes(String(item.event)))
+      || (item.type === "text" && plans.has(text(item.text).trim())))) {
+      index += 1;
+      continue;
+    }
     if (item.type === "skill_snapshot" || isHiddenChatError(item)) {
       index += 1;
       continue;
@@ -158,6 +166,7 @@ function pendingDecision(items: TurnItem[], status: RuntimeStateNode["status"]):
     tool: typeof latest.tool === "string" ? latest.tool : undefined,
     arguments: latest.arguments as DecisionRequest["arguments"],
     plan: typeof latest.plan === "string" ? latest.plan : undefined,
+    plan_path: typeof latest.plan_path === "string" ? latest.plan_path : undefined,
     goal: typeof latest.goal === "string" ? latest.goal : undefined,
     steps: Array.isArray(latest.steps) ? latest.steps.map(String) : undefined,
     details: typeof latest.details === "string" ? latest.details : undefined,
@@ -247,10 +256,15 @@ export function projectTurnPath(nodes: Map<string, RuntimeTreeNode>, activeTurnI
           continue;
         }
         const userItem = message.content[0];
+        const parent = nodes.get(turn.parent_session_id + ":" + turn.parent_id);
+        const handoff = parent && isRuntimeTurnNode(parent) && parent.data[parent.current_data_idx]?.some((entry) =>
+          entry.content.some((item) => item.type === "plan" && item.event === "handoff_created" && item.text === userItem?.text));
         result.push({
           id: `${turn.id}:message:${messageIdx}`,
           role: "user",
           content: text(userItem?.text),
+          approvedPlanHandoff: Boolean(handoff),
+          ...(handoff ? { timelineText: "已批准计划，开始实施" } : {}),
           events: [],
           nodeId: turn.id,
           sourceNodeId: turn.parent_id || undefined,
@@ -330,6 +344,7 @@ export function integrateRuntimeNodeUpdates(
   forcePathProjection: boolean,
 ): Conversation {
   const current = new Map((conversation.runtimeNodes ?? []).map((node) => [keyOf(node), node] as const));
+  const previousNodes = new Map(current);
   const pageBoundaries = new Set([...current.values()].filter(isRuntimeTurnNode)
     .filter((node) => node.parent_id && !current.has(`${node.parent_session_id}:${node.parent_id}`))
     .map((node) => `${node.parent_session_id}:${node.parent_id}`));
@@ -366,6 +381,18 @@ export function integrateRuntimeNodeUpdates(
   const latestRunEndsTurn = latestRun?.end === activeTurn.data[activeTurn.current_data_idx].length - 1;
   if (forcePathProjection || !latestRun || assistantIndex < 0 || !latestRunEndsTurn) {
     messages = projectTurnPath(current, activeTurnId, pageBoundaries);
+    const previousMessages = new Map(conversation.messages.map((message) => [message.id, message]));
+    const unchangedTurns = new Set<string>();
+    for (const [key, node] of current) {
+      if (node !== previousNodes.get(key) || !isRuntimeTurnNode(node)) continue;
+      const parentKey = node.parent_session_id + ":" + node.parent_id;
+      if (current.get(parentKey) === previousNodes.get(parentKey)) unchangedTurns.add(node.id);
+    }
+    messages = messages.map((message) => {
+      const previous = previousMessages.get(message.id);
+      const turnId = message.role === "user" ? message.nodeId : message.sourceNodeId;
+      return previous && turnId && unchangedTurns.has(turnId) ? previous : message;
+    });
     const delivered = new Set(messages.map((item) => item.deliveryId).filter(Boolean));
     const retained = conversation.messages.filter((item) =>
       item.role === "user" && (item.pending || item.error)

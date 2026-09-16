@@ -111,14 +111,14 @@ class PlanProposalPlanner:
                 ToolMessage(
                     name=REQUEST_PLAN_REVIEW_NAME,
                     call_id="review_1",
-                    arguments={"plan": "1. Inspect the project."},
+                    arguments={"plan_name": "test-plan", "plan": "1. Inspect the project."},
                 )
             ]
         )
 
 
-def test_plan_review_defaults_to_staying_in_plan_mode_without_an_interrupt_handler() -> None:
-    runner = AgentRunner(PlanProposalPlanner(), ToolRegistry())
+def test_plan_review_defaults_to_staying_in_plan_mode_without_an_interrupt_handler(tmp_path) -> None:
+    runner = AgentRunner(PlanProposalPlanner(), ToolRegistry(), workspace_root=str(tmp_path))
     events = []
     runtime = runner.new_runtime(
         task="prepare a plan",

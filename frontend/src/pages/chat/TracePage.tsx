@@ -15,9 +15,10 @@ interface TracePageProps {
   turns: RuntimeStateNode[];
 }
 
-type SemanticKind = "system" | "developer" | "skill" | "mcp" | "user" | "reasoning" | "assistant" | "retry" | "tool";
+type SemanticKind = "system" | "developer" | "skill" | "mcp" | "user" | "reasoning" | "assistant" | "retry" | "tool" | "runtime";
 
 const TRACE_TAGS: Record<SemanticKind, { label: string; color?: string }> = {
+  runtime: { label: "Runtime", color: "cyan" },
   system: { label: "System", color: "purple" },
   developer: { label: "Developer", color: "cyan" },
   skill: { label: "Skill", color: "cyan" },
@@ -94,10 +95,12 @@ function contextPanels(context: TurnTraceContext | null): NonNullable<CollapsePr
 }
 
 function itemValue(item: TurnItem): unknown {
+  if (item.type === "runtime_event") return item.event;
   return item.text ?? item.message ?? item.content ?? item.summary ?? item;
 }
 
 function itemKind(entry: TurnTraceItem): SemanticKind {
+  if (entry.role === "runtime") return "runtime";
   if (entry.role === "developer") return "developer";
   if (entry.role === "user") return "user";
   if (entry.item.type === "reasoning") return "reasoning";
@@ -124,7 +127,7 @@ function traceItemPanels(items: TurnTraceItem[]): NonNullable<CollapseProps["ite
         const related = groupEntries.filter((candidate) => candidate.item.call_id === callId);
         const terminal = related.find((candidate) => candidate.item.type === "tool_result") ?? call;
         const tool = String(call.item.name ?? terminal.item.tool ?? "工具");
-        return panel(`trace:${groupId}:${callId}`, "tool", `${tool} · ${callId}`, {
+        return panel(`trace:${call.sequence}`, "tool", `${tool} · ${callId}`, {
           status: terminal.item.status,
           timestamp: terminal.completed_at,
           body: <pre className="trace-value">{json(related.map((candidate) => candidate.item))}</pre>,
@@ -141,7 +144,7 @@ function traceItemPanels(items: TurnTraceItem[]): NonNullable<CollapseProps["ite
     }
     const value = itemValue(entry.item);
     result.push(panel(
-      `item:${entry.message_idx}:${entry.item_idx}`,
+      `item:${entry.sequence}`,
       itemKind(entry),
       value,
       {
@@ -149,7 +152,7 @@ function traceItemPanels(items: TurnTraceItem[]): NonNullable<CollapseProps["ite
         timestamp: entry.completed_at,
         body: (
           <pre className="trace-value">
-            {typeof value === "string" && entry.item.type !== "tool_call" ? text(value) : json(entry.item)}
+            {typeof value === "string" && !["tool_call", "runtime_event"].includes(entry.item.type) ? text(value) : json(entry.item)}
           </pre>
         ),
       },

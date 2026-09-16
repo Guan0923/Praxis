@@ -8,8 +8,13 @@ import {
 } from "@ant-design/icons";
 import type { DecisionRequest } from "../types";
 import MarkdownContent from "./MarkdownContent";
+import PlanFileContent from "./PlanFileContent";
+import { saveSessionFilePanels } from "./rightPanel/filePanelLifecycle";
 
 interface Props {
+  sessionId?: string;
+  threadId?: string;
+  showPlan?: boolean;
   request: DecisionRequest;
   onSubmit: (choice: string, options?: { supplement?: string; answers?: Record<string, string[]> }) => Promise<void>;
 }
@@ -19,13 +24,19 @@ interface Props {
  * strings intentionally stay identical to the backend contract; only the
  * presentation controls are provided by Ant Design.
  */
-export default function DecisionCard({ request, onSubmit }: Props) {
+export default function DecisionCard({ request, onSubmit, sessionId, threadId, showPlan = true }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
+  const [saveError, setSaveError] = useState("");
 
   async function submit(choice: string, options: { supplement?: string; answers?: Record<string, string[]> } = {}) {
     setSubmitting(true);
     try {
+      if (request.kind === "plan" && sessionId && !await saveSessionFilePanels(sessionId)) {
+        setSaveError("计划文件保存失败，请先处理右侧编辑器中的错误。");
+        return;
+      }
+      setSaveError("");
       await onSubmit(choice, options);
     } finally {
       setSubmitting(false);
@@ -36,7 +47,8 @@ export default function DecisionCard({ request, onSubmit }: Props) {
     const proposal = request.plan || (request.steps ?? []).map((step, index) => `${index + 1}. ${step}`).join("\n");
     return (
       <Card className="decision-card plan-decision" size="small" title={<><FileTextOutlined /> Plan Review</>}>
-        {proposal ? <MarkdownContent text={proposal} /> : <p>{request.message || "Agent 请求审核一个计划。"}</p>}
+        {showPlan ? sessionId && request.plan_path ? <PlanFileContent sessionId={sessionId} threadId={threadId} path={request.plan_path} /> : proposal ? <MarkdownContent text={proposal} /> : <p>{request.message || "Agent 请求审核一个计划。"}</p> : null}
+        {saveError ? <p role="alert">{saveError}</p> : null}
         <Space className="decision-actions" wrap>
           <Button autoInsertSpace={false} type="primary" loading={submitting} disabled={submitting} onClick={() => void submit("implement")}>实施</Button>
           <Button autoInsertSpace={false} type="primary" loading={submitting} disabled={submitting} onClick={() => void submit("implement_and_compaction")}>压缩后实施</Button>

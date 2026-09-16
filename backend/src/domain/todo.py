@@ -56,10 +56,15 @@ class TodoSnapshot:
 
 
 def todo_snapshot_context(source_turn_id: str, target_turn_id: str, snapshot: TodoSnapshot) -> str:
+    recent_completed = [todo.id for todo in snapshot.todos if todo.status == "completed"][-3:]
+    visible = TodoSnapshot(
+        revision=snapshot.revision,
+        todos=tuple(todo for todo in snapshot.todos if todo.status != "completed" or todo.id in recent_completed),
+    )
     payload = {
         "source_turn_id": source_turn_id,
         "target_turn_id": target_turn_id,
-        **snapshot.to_dict(),
+        **visible.to_dict(),
     }
     return "Current Todo list after automatic context compaction:\n" + json.dumps(
         payload,
@@ -219,8 +224,6 @@ def apply_todo_operations(
         status = operation.get("status", current.status)
         _validate_content(content, index)
         _validate_status(status, index)
-        if content == current.content and status == current.status:
-            raise TodoStateError("no_change", f"Update for Todo {todo_id!r} does not change its state.")
         todos[todo_index] = TodoItem(todo_id, content, status)
         normalized = {"op": "update", "id": todo_id}
         if has_content:

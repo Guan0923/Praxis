@@ -19,4 +19,5 @@ if __name__ == "__main__":
         create_app(WebAppState(Path(".praxis").resolve())),
         host="127.0.0.1",
         port=8000,
+        timeout_graceful_shutdown=5,
     )

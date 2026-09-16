@@ -160,6 +160,7 @@ def make_interactive_interrupt(
                         "arguments": request.data.get("arguments", {}),
                         "questions": questions,
                         "plan": request.data.get("plan"),
+                        "plan_path": request.data.get("plan_path"),
                         "goal": request.data.get("goal"),
                         "steps": request.data.get("steps", []),
                         "details": request.data.get("details"),

@@ -8,6 +8,7 @@ import {
   Input,
   List,
   Modal,
+  Pagination,
   Select,
   Space,
   Spin,
@@ -17,7 +18,6 @@ import {
 } from "antd";
 import { DeleteOutlined, ReloadOutlined } from "@ant-design/icons";
 import {
-  cancelMemoryJob,
   clearMemories,
   consolidateMemory,
   deleteMemory,
@@ -26,9 +26,7 @@ import {
   extractMemory,
   getSettings,
   listMemoryEvidence,
-  listMemoryInjectionHistory,
   listMemoryItems,
-  listMemoryJobs,
   listSidebarThreads,
   restoreMemory,
   setMemoryEnabled,
@@ -36,9 +34,7 @@ import {
   type MemoryConfig,
   type MemoryDryRunResult,
   type MemoryEvidence,
-  type MemoryInjectionRecord,
   type MemoryItem,
-  type MemoryJob,
   type ProviderConfig,
 } from "../api";
 import type { SidebarThread } from "../types";
@@ -67,11 +63,11 @@ export default function MemorySettingsSection() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<Error | string | null>(null);
   const [items, setItems] = useState<MemoryItem[]>([]);
-  const [jobs, setJobs] = useState<MemoryJob[]>([]);
   const [threads, setThreads] = useState<SidebarThread[]>([]);
-  const [injections, setInjections] = useState<MemoryInjectionRecord[]>([]);
   const [threadId, setThreadId] = useState<string>();
   const [projectFilter, setProjectFilter] = useState("all");
+  const [page, setPage] = useState(1);
+  const listViewport = useRef<HTMLDivElement>(null);
   const [diagnosticQuery, setDiagnosticQuery] = useState("");
   const [diagnostic, setDiagnostic] = useState<MemoryDryRunResult | null>(null);
   const [evidence, setEvidence] = useState<MemoryEvidence[]>([]);
@@ -90,21 +86,17 @@ export default function MemorySettingsSection() {
     setLoading(true);
     setError(null);
     try {
-      const [settings, memoryItems, memoryJobs, sessionItems, records] = await Promise.all([
+      const [settings, memoryItems, sessionItems] = await Promise.all([
         getSettings(),
         listMemoryItems(),
-        listMemoryJobs(),
         listSidebarThreads("active"),
-        listMemoryInjectionHistory(),
       ]);
       if (generation !== refreshGeneration.current) return;
       setConfig(settings.memory_config);
       setProvider(settings.provider_config);
       if (reloadModels) setModelRefresh((value) => value + 1);
       setItems(memoryItems);
-      setJobs(memoryJobs.slice().reverse());
       setThreads(sessionItems.filter((value) => !value.archived_at && !value.deleted_at));
-      setInjections(records);
     } catch (value) {
       if (generation === refreshGeneration.current) setError(value instanceof Error ? value : String(value));
     } finally {
@@ -161,6 +153,14 @@ export default function MemorySettingsSection() {
       : items.filter((item) => projectFilter === "global" ? item.project_id === null : item.project_id === projectFilter),
     [items, projectFilter],
   );
+
+  const currentPage = Math.min(page, Math.max(1, Math.ceil(visibleItems.length / 10)));
+  const pageItems = visibleItems.slice((currentPage - 1) * 10, currentPage * 10);
+
+  useEffect(() => {
+    setPage(currentPage);
+    if (listViewport.current) listViewport.current.scrollTop = 0;
+  }, [currentPage, projectFilter]);
 
   async function saveConfig(next: MemoryConfig) {
     setSaving(true);
@@ -269,7 +269,7 @@ export default function MemorySettingsSection() {
         <Card title={`Memory 条目（${visibleItems.length}）`} extra={
           <Select
             value={projectFilter}
-            onChange={setProjectFilter}
+            onChange={(value) => { setProjectFilter(value); setPage(1); }}
             style={{ minWidth: 180 }}
             options={[
               { value: "all", label: "全部范围" },
@@ -278,8 +278,9 @@ export default function MemorySettingsSection() {
             ]}
           />
         }>
+          <div ref={listViewport} style={{ maxHeight: "min(480px, 60vh)", overflowY: "auto", overflowWrap: "anywhere" }}>
           <List
-            dataSource={visibleItems}
+            dataSource={pageItems}
             locale={{ emptyText: <Empty description="暂无 Memory" /> }}
             renderItem={(item) => (
               <List.Item
@@ -297,6 +298,17 @@ export default function MemorySettingsSection() {
                 />
               </List.Item>
             )}
+          />
+          </div>
+          <Pagination
+            current={currentPage}
+            pageSize={10}
+            total={visibleItems.length}
+            onChange={setPage}
+            showSizeChanger={false}
+            size="small"
+            responsive
+            style={{ marginTop: 16 }}
           />
         </Card>
 
@@ -323,23 +335,7 @@ export default function MemorySettingsSection() {
           </Space>
         </Card>
 
-        <Card title={`任务（${jobs.length}）`}>
-          <List
-            size="small"
-            dataSource={jobs}
-            locale={{ emptyText: "暂无任务" }}
-            renderItem={(job) => <List.Item actions={job.status === "pending" || job.status === "running" ? [<Button key="cancel" type="link" danger onClick={() => void runAction(() => cancelMemoryJob(job.job_id), "任务已取消。")}>取消</Button>] : []}><Space wrap><Tag>{job.kind}</Tag><Tag color={STATUS_COLOR[job.status]}>{job.status}</Tag><Typography.Text>{job.source_id || "—"}</Typography.Text><Typography.Text type="secondary">尝试 {job.attempts}/{job.max_attempts}</Typography.Text>{job.last_error ? <Typography.Text type="secondary">{job.last_error}</Typography.Text> : null}</Space></List.Item>}
-          />
-        </Card>
 
-        <Card title="实际注入记录">
-          <List
-            size="small"
-            dataSource={injections}
-            locale={{ emptyText: "本进程尚无 Memory 注入记录" }}
-            renderItem={(record) => <List.Item><Space orientation="vertical" size={2}><Space><Tag color={record.injected ? "success" : "default"}>{record.injected ? "已注入" : "未注入"}</Tag><Typography.Text>{String(record.session_id || "未知会话")}</Typography.Text><Typography.Text type="secondary">{String(record.operation || "普通请求")}</Typography.Text></Space><Typography.Text code>{JSON.stringify(record.selected_ids || [])}</Typography.Text></Space></List.Item>}
-          />
-        </Card>
 
         <Card title="危险操作" styles={{ header: { color: "#cf1322" } }}>
           <Space orientation="vertical">

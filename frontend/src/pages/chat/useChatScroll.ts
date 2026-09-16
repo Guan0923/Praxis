@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../../types";
-import { patchView, useViewState } from "../../app/viewState";
+import { patchView, useViewState, viewSnapshot } from "../../app/viewState";
 
 const BOTTOM_THRESHOLD_PX = 24;
 
@@ -8,26 +8,56 @@ interface ReadingPosition {
   top: number;
   messageId?: string;
   offset: number;
+  blockId?: string;
+  blockOffset?: number;
 }
 
-function rememberPosition(container: HTMLDivElement): ReadingPosition {
+// Keep precise block anchors only while the corresponding loaded projection exists.
+const readingPositions = new WeakMap<ChatMessage[], ReadingPosition>();
+
+function rememberPosition(container: HTMLDivElement, previous: ReadingPosition | null): ReadingPosition {
   const top = container.getBoundingClientRect().top + container.clientTop;
-  const message = Array.from(container.querySelectorAll<HTMLElement>("[data-scroll-message-id]"))
-    .find((element) => element.getBoundingClientRect().bottom > top);
+  let message = previous?.messageId
+    ? container.querySelector<HTMLElement>('[data-scroll-message-id="' + CSS.escape(previous.messageId) + '"]') : null;
+  if (!message || message.getBoundingClientRect().bottom <= top || message.getBoundingClientRect().top > top) {
+    const messages = container.querySelectorAll<HTMLElement>("[data-scroll-message-id]");
+    let left = 0;
+    let right = messages.length;
+    while (left < right) {
+      const middle = (left + right) >>> 1;
+      if (messages[middle].getBoundingClientRect().bottom <= top) left = middle + 1;
+      else right = middle;
+    }
+    message = messages[left] ?? null;
+  }
+  const blocks = message?.querySelectorAll<HTMLElement>("[data-virtual-block]");
+  let block: HTMLElement | undefined;
+  if (blocks?.length) {
+    let left = 0;
+    let right = blocks.length;
+    while (left < right) {
+      const middle = (left + right) >>> 1;
+      if (blocks[middle].getBoundingClientRect().top <= top) left = middle + 1;
+      else right = middle;
+    }
+    block = blocks[Math.max(0, left - 1)];
+  }
   return {
     top: container.scrollTop,
     messageId: message?.dataset.scrollMessageId,
     offset: message ? message.getBoundingClientRect().top - top : 0,
+    blockId: block?.dataset.virtualBlock,
+    blockOffset: block ? block.getBoundingClientRect().top - top : undefined,
   };
 }
 
 function restorePosition(container: HTMLDivElement, position: ReadingPosition) {
-  const message = position.messageId === undefined ? undefined
-    : Array.from(container.querySelectorAll<HTMLElement>("[data-scroll-message-id]"))
-      .find((element) => element.dataset.scrollMessageId === position.messageId);
+  const block = position.blockId ? container.querySelector<HTMLElement>('[data-virtual-block="' + CSS.escape(position.blockId) + '"]') : null;
+  const message = block ?? (position.messageId === undefined ? undefined
+    : container.querySelector<HTMLElement>('[data-scroll-message-id="' + CSS.escape(position.messageId) + '"]'));
   const top = message
     ? container.scrollTop + message.getBoundingClientRect().top
-      - container.getBoundingClientRect().top - container.clientTop - position.offset
+      - container.getBoundingClientRect().top - container.clientTop - (block ? position.blockOffset ?? 0 : position.offset)
     : position.top;
   container.scrollTop = Math.max(0, Math.min(top, container.scrollHeight - container.clientHeight));
 }
@@ -38,7 +68,9 @@ function isAtBottom(scrollContainer: HTMLDivElement): boolean {
 
 export function useChatScroll(conversationId: string | undefined, messages: ChatMessage[], active = true,
   persistence?: { key: string; hasMore?: boolean; loadEarlier: () => Promise<void> }) {
-  const saved = useViewState(persistence?.key ?? "");
+  const saved = useViewState(persistence?.key ?? "", () => null);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const scrollConversationIdRef = useRef<string | undefined>(undefined);
@@ -55,7 +87,8 @@ export function useChatScroll(conversationId: string | undefined, messages: Chat
     if (scrollContainer.clientHeight === 0) return;
     const nextIsAtBottom = isAtBottom(scrollContainer);
     shouldStickToBottomRef.current = nextIsAtBottom;
-    positionRef.current = rememberPosition(scrollContainer);
+    positionRef.current = rememberPosition(scrollContainer, positionRef.current);
+    readingPositions.set(messagesRef.current, positionRef.current);
     setIsAtBottomState((current) => current === nextIsAtBottom ? current : nextIsAtBottom);
   }, []);
 
@@ -75,9 +108,11 @@ export function useChatScroll(conversationId: string | undefined, messages: Chat
     if (persistence?.key && !saved.loaded) return;
     if (persistence?.key && loadedKey.current !== persistence.key) {
       loadedKey.current = persistence.key;
-      const reading = saved.value.reading;
+      const reading = viewSnapshot(persistence.key).reading;
       if (reading) {
-        positionRef.current = { ...reading, messageId: reading.messageId ?? undefined };
+        const cached = readingPositions.get(messages);
+        positionRef.current = cached && cached.messageId === reading.messageId && cached.top === reading.top && cached.offset === reading.offset
+          ? cached : { ...reading, messageId: reading.messageId ?? undefined };
         shouldStickToBottomRef.current = reading.atBottom;
       }
     }
@@ -111,7 +146,7 @@ export function useChatScroll(conversationId: string | undefined, messages: Chat
       if (disposed || scrollContainer.clientHeight === 0) return;
       if (shouldStickToBottomRef.current) {
         scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      } else if (restoringRef.current && positionRef.current) {
+      } else if (positionRef.current) {
         restorePosition(scrollContainer, positionRef.current);
       }
       if (!restoringRef.current && !persistenceRef.current?.key) syncBottomState(scrollContainer);
@@ -146,31 +181,51 @@ export function useChatScroll(conversationId: string | undefined, messages: Chat
     };
   }, [conversationId, syncBottomState, active]);
 
+  const scrollFrame = useRef<number>();
+  useLayoutEffect(() => () => {
+    if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current);
+    scrollFrame.current = undefined;
+  }, [conversationId, active]);
   const handleScroll = useCallback(() => {
     const scrollContainer = chatScrollRef.current;
     if (active && scrollContainer && !restoringRef.current) {
       if (!interrupted.current && positionRef.current?.messageId && persistenceRef.current?.hasMore
         && !scrollContainer.querySelector(`[data-scroll-message-id="${CSS.escape(positionRef.current.messageId)}"]`)) return;
-      syncBottomState(scrollContainer);
-      if (persistenceRef.current?.key && positionRef.current) patchView(persistenceRef.current.key,
-        { reading: { ...positionRef.current, atBottom: shouldStickToBottomRef.current } }, 1000);
+      const atBottom = isAtBottom(scrollContainer);
+      const previous = positionRef.current;
+      if (previous) {
+        const delta = scrollContainer.scrollTop - previous.top;
+        positionRef.current = { ...previous, top: scrollContainer.scrollTop,
+          offset: previous.offset - delta,
+          blockOffset: previous.blockOffset === undefined ? undefined : previous.blockOffset - delta };
+      }
+      shouldStickToBottomRef.current = atBottom;
+      setIsAtBottomState((current) => current === atBottom ? current : atBottom);
+      if (scrollFrame.current !== undefined) return;
+      scrollFrame.current = requestAnimationFrame(() => {
+        scrollFrame.current = undefined;
+        syncBottomState(scrollContainer);
+        const position = positionRef.current;
+        if (persistenceRef.current?.key && position) patchView(persistenceRef.current.key,
+          { reading: { top: position.top, messageId: position.messageId, offset: position.offset, atBottom: shouldStickToBottomRef.current } }, 1000);
+      });
     }
   }, [syncBottomState, active]);
 
-  const scrollToPosition = useCallback((top: number) => {
+  const scrollToPosition = useCallback((top: number, behavior: ScrollBehavior = "instant") => {
     const scrollContainer = chatScrollRef.current;
     if (!scrollContainer) return;
     restoringRef.current = false;
     interrupted.current = true;
-    // Commit the new anchor before streaming renders or resize callbacks run.
-    scrollContainer.scrollTo({ top, behavior: "instant" });
+    // Smooth scrolling updates the reading position through scroll events.
+    scrollContainer.scrollTo({ top, behavior });
     syncBottomState(scrollContainer);
     handleScroll();
   }, [syncBottomState, handleScroll]);
 
   const scrollToBottom = useCallback(() => {
     const container = chatScrollRef.current;
-    if (container) scrollToPosition(container.scrollHeight);
+    if (container) scrollToPosition(container.scrollHeight, "smooth");
   }, [scrollToPosition]);
 
   return {

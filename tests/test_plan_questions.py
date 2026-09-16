@@ -99,7 +99,7 @@ class QuestionThenPlanPlanner:
                     ToolMessage(
                         name=REQUEST_PLAN_REVIEW_NAME,
                         call_id="review_1",
-                        arguments={"plan": PLAN},
+                        arguments={"plan_name": "test-plan", "plan": PLAN},
                     )
                 ]
             )
@@ -126,11 +126,11 @@ def question_call(call_id: str = "question_1") -> ToolMessage:
 
 
 def review_call(call_id: str = "review_1") -> ToolMessage:
-    return ToolMessage(name=REQUEST_PLAN_REVIEW_NAME, call_id=call_id, arguments={"plan": PLAN})
+    return ToolMessage(name=REQUEST_PLAN_REVIEW_NAME, call_id=call_id, arguments={"plan_name": "test-plan", "plan": PLAN})
 
 
 def build_service(tmp_path: Path, planner: QuestionThenPlanPlanner) -> ConversationService:
-    runner = AgentRunner(planner, ToolRegistry(tmp_path))
+    runner = AgentRunner(planner, ToolRegistry(tmp_path), workspace_root=str(tmp_path))
     store = session_store(tmp_path / "store")
     return ConversationService(runner, store)
 
@@ -165,7 +165,7 @@ def test_plan_question_answer_is_saved_once_then_plan_review_starts(tmp_path: Pa
     assert isinstance(review_message, AssistantMessage)
     assert result.final_answer == PLAN
     assert review_message.tool_messages[0].name == REQUEST_PLAN_REVIEW_NAME
-    assert review_message.tool_messages[0].arguments == {"plan": PLAN}
+    assert review_message.tool_messages[0].arguments == {"plan_name": "test-plan", "plan": PLAN}
     assert review_message.tool_messages[0].status == "succeeded"
     assert len([message for message in service.runtime.state.messages if message is question_message]) == 1
     assert [event.kind for event in events].count("user_input_requested") == 1

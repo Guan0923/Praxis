@@ -23,6 +23,7 @@ RuntimeEventKind = Literal[
     "skills_selected",
     "thinking_start",
     "thinking_delta",
+    "thinking_summary",
     "thinking_end",
     "response_start",
     "response_delta",

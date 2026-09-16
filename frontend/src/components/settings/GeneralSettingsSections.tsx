@@ -64,12 +64,12 @@ export function AgentSettingsSection({ state }: SectionProps) {
       <Form.Item label="运行信息详略">
         <Select
           aria-label="运行信息详略"
-          value={!import.meta.env.DEV && settings.agent_config.display_mode === "developer" ? "verbose" : settings.agent_config.display_mode}
+          value={settings.agent_config.display_mode}
           options={[
             { value: "minimal", label: "简洁" },
             { value: "medium", label: "标准" },
             { value: "verbose", label: "详细" },
-            ...(import.meta.env.DEV ? [{ value: "developer", label: "开发者" }] : []),
+
           ]}
           onChange={(display_mode) => state.updateSettings({ agent_config: { ...settings.agent_config, display_mode } })}
         />

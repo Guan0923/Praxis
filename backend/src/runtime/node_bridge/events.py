@@ -141,6 +141,16 @@ class _EventProjectionMixin:
             return
 
     def _model_retry(self, message: str, data: Mapping[str, Any]) -> None:
+        lengths = getattr(self, "_request_content_lengths", None)
+        if self.assistant is not None and lengths is not None:
+            self.assistant = self.writer.restore_message_content(self.assistant, lengths)
+            self.last_node = self.assistant
+            self._stream_item_index = None
+            self._stream_item_type = None
+            self._stream_text = ""
+            messages = self.assistant.data[self.assistant.current_data_idx]
+            self.assistant_message_idx = len(messages) - 1 if messages[-1]["role"] == "assistant" else None
+            self.assistant_blocks = messages[-1]["content"] if self.assistant_message_idx is not None else []
         attempt = data.get("attempt")
         if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
             attempt = 1
@@ -194,7 +204,7 @@ class _EventProjectionMixin:
             result["error_report"] = normalize_error_report(data["error_report"])
         if tool:
             result["tool"] = tool
-        for key in ("parallel_group_id", "parallel_index", "parallel_size", "execution_stage"):
+        for key in ("parallel_group_id", "parallel_index", "parallel_size", "execution_stage", "plan_path"):
             if data.get(key) is not None:
                 result[key] = self._json_value(data[key])
         if isinstance(data.get("failure_code"), str):
@@ -217,13 +227,31 @@ class _EventProjectionMixin:
             )
 
     def _handle_event(self, event: Any) -> None:
-        if self.closed or not self.started:
+        if not self.started:
             return
         kind = str(getattr(event, "kind", "") or "")
         message = str(getattr(event, "message", "") or "")
         data = getattr(event, "data", {})
         if not isinstance(data, Mapping):
             data = {}
+        if self.closed:
+            if self.runtime is not None and kind in {"run_finished", "run_terminated", "run_suspended", "cancelled"}:
+                self._audit_runtime_event(kind, message, data, str(getattr(event, "timestamp", "") or ""))
+            return
+        if self.runtime is not None:
+            self._audit_runtime_event(kind, message, data, str(getattr(event, "timestamp", "") or ""))
+        if kind == "plan_review_updated":
+            if self.assistant is not None:
+                for block in self.assistant.data[self.assistant.current_data_idx]:
+                    for item in block.get("content", []):
+                        if item.get("type") == "tool_result" and item.get("call_id") == data.get("call_id"):
+                            item["content"] = message
+                for item in self.assistant_blocks:
+                    if item.get("type") == "tool_result" and item.get("call_id") == data.get("call_id"):
+                        item["content"] = message
+                self.assistant = self.writer.persist(self.assistant)
+                self.last_node = self.assistant
+            return
         if kind in _HIDDEN_RECOVERABLE_EVENTS:
             return
         if isinstance(data.get("run_id"), str):
@@ -234,6 +262,10 @@ class _EventProjectionMixin:
         if kind == "model_request":
             self._model_request_active = True
             self._settle_running_retry()
+            self._request_content_lengths = (
+                [len(message["content"]) for message in self.assistant.data[self.assistant.current_data_idx]]
+                if self.assistant is not None else None
+            )
         elif kind == "model_retry":
             self._model_retry(message, data)
         elif kind == "thinking_start":
@@ -241,6 +273,8 @@ class _EventProjectionMixin:
             self._begin_stream_item("reasoning")
         elif kind == "thinking_delta":
             self._update_stream_item("reasoning", message)
+        elif kind == "thinking_summary":
+            self._update_reasoning_summary(str(data["summary_key"]), message)
         elif kind == "thinking_end":
             self._finish_stream_item("reasoning")
         elif kind == "response_start":

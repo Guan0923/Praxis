@@ -1,10 +1,10 @@
+import { showErrorMessage } from "../components/errorFeedback";
 import { deletedConversations } from "./conversationDeletion";
 import { useConversationNavigation } from "./conversationNavigation";
 import { subscribeApplicationEvents } from "../api/applicationSync";
 import { receiveVersion, overlayPendingVersions } from "./versionSelection";
 import { flushViews, receiveView, reloadViews } from "./viewState";
 import { trimConversationDetails } from "./conversationCache";
-import { ErrorDisplay } from "../components/ErrorDisplay";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { App as AntApp } from "antd";
 import {
@@ -110,7 +110,7 @@ function AgentApp() {
 
   useEffect(() => {
     if (!actionError) return;
-    void message.error({ content: <ErrorDisplay error={actionError} />, duration: 0, key: ACTION_ERROR_MESSAGE_KEY });
+    void showErrorMessage(message, actionError, ACTION_ERROR_MESSAGE_KEY);
     setActionError(null);
   }, [actionError, message]);
 

@@ -64,6 +64,7 @@ class RuntimeExchange:
     prepared_response: PreparedResponse | None = None
     context: dict[str, Any] = field(default_factory=dict)
     on_reasoning: Callable[[str], None] | None = None
+    on_reasoning_summary: Callable[[str, str], None] | None = None
     on_content: Callable[[str], None] | None = None
     required_tool_name: str | None = None
     continuation_pending: bool = False
@@ -84,6 +85,7 @@ class RuntimeExchange:
         self.prepared_response = None
         self.context = {}
         self.on_reasoning = None
+        self.on_reasoning_summary = None
         self.on_content = None
         self.required_tool_name = None
         self.continuation_pending = False
@@ -202,9 +204,23 @@ def _chat_messages_from_nodes(nodes: Sequence[RuntimeTreeNode]) -> list[ChatMess
                 )
             if checkpoint_parts:
                 result.append(UserMessage(content="\n\n".join(checkpoint_parts)))
-            text_parts = [str(item.get("text") or "") for item in blocks if item.get("type") in {"text", "bash"}]
-            reasoning_parts = [str(item.get("text") or "") for item in blocks if item.get("type") == "reasoning"]
+            text_parts: list[str] = []
+            reasoning_parts: list[str] = []
             calls: dict[str, ToolMessage] = {}
+            has_result = False
+
+            def flush_assistant() -> None:
+                assistant = AssistantMessage(
+                    content="".join(text_parts) or None,
+                    reasoning="".join(reasoning_parts) or None,
+                    tool_messages=list(calls.values()),
+                )
+                if assistant.content or assistant.reasoning or assistant.tool_messages:
+                    result.append(assistant)
+                text_parts.clear()
+                reasoning_parts.clear()
+                calls.clear()
+
             completed_call_ids = {
                 str(item.get("call_id") or "")
                 for item in blocks
@@ -213,7 +229,16 @@ def _chat_messages_from_nodes(nodes: Sequence[RuntimeTreeNode]) -> list[ChatMess
             for item in blocks:
                 kind = item.get("type")
                 call_id = str(item.get("call_id") or "")
-                if kind == "tool_call" and call_id in completed_call_ids:
+                # Later model output belongs after the preceding tool results,
+                # not inside the assistant message that requested those tools.
+                if has_result and kind in {"text", "bash", "reasoning", "tool_call", "subagent"}:
+                    flush_assistant()
+                    has_result = False
+                if kind in {"text", "bash"}:
+                    text_parts.append(str(item.get("text") or ""))
+                elif kind == "reasoning":
+                    reasoning_parts.append(str(item.get("text") or ""))
+                elif kind == "tool_call" and call_id in completed_call_ids:
                     calls[call_id] = ToolMessage(
                         name=str(item.get("name") or "unknown"),
                         call_id=call_id,
@@ -240,17 +265,13 @@ def _chat_messages_from_nodes(nodes: Sequence[RuntimeTreeNode]) -> list[ChatMess
                     tool.status = "succeeded" if item.get("status") == "success" else "failed"
                     tool.retryable = item.get("retryable") if isinstance(item.get("retryable"), bool) else None
                     tool.failure_code = item.get("failure_code") if isinstance(item.get("failure_code"), str) else None
+                    has_result = True
                 elif kind == "error":
                     text_parts.append(str(item.get("message") or "Execution failed."))
                 elif kind == "subagent" and item.get("event") == "agent_report":
                     report = str(item.get("text") or "")
                     if report:
+                        flush_assistant()
                         result.append(AssistantMessage(name="subagent_report", content=report))
-            assistant = AssistantMessage(
-                content="".join(text_parts) or None,
-                reasoning="".join(reasoning_parts) or None,
-                tool_messages=list(calls.values()),
-            )
-            if assistant.content or assistant.reasoning or assistant.tool_messages:
-                result.append(assistant)
+            flush_assistant()
     return result

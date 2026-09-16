@@ -204,7 +204,7 @@ describe("AgentShell right panel sizing", () => {
     });
   });
 
-  it("renders the controlled desktop Splitter at the persisted width", async () => {
+  it("opens the desktop Splitter at half the available width", async () => {
     const current = {
       id: "main",
       title: "main",
@@ -221,7 +221,7 @@ describe("AgentShell right panel sizing", () => {
     await waitFor(() => expect(container.querySelector(".ant-splitter")).toBeInTheDocument());
     const panels = container.querySelectorAll<HTMLElement>(".ant-splitter-panel");
     expect(panels).toHaveLength(2);
-    expect(panels[1].style.flexBasis).toBe("420px");
+    expect(panels[1].style.flexBasis).toBe("50%");
   });
 
   it("uses a full-width Drawer on mobile and hides the closed-edge launcher while open", async () => {

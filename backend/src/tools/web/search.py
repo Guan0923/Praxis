@@ -35,13 +35,13 @@ class _DuckDuckGoParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = dict(attrs)
         classes = set((attributes.get("class") or "").split())
-        if tag == "a" and "result__a" in classes:
+        if tag == "a" and classes.intersection({"result__a", "result-link"}):
             self.close_result()
             self._title_href = attributes.get("href")
             self._title_parts = []
             self._in_title = True
             return
-        if "result__snippet" in classes:
+        if classes.intersection({"result__snippet", "result-snippet"}):
             self._snippet_parts = []
             self._in_snippet = True
 
@@ -49,7 +49,7 @@ class _DuckDuckGoParser(HTMLParser):
         if tag == "a" and self._in_title:
             self._in_title = False
             return
-        if self._in_snippet and tag in {"div", "a", "p"}:
+        if self._in_snippet and tag in {"div", "a", "p", "td"}:
             self._in_snippet = False
 
     def handle_data(self, data: str) -> None:
@@ -105,10 +105,19 @@ class DuckDuckGoWebSearch:
 
     def search(self, query: str, max_results: int = 5) -> str:
         self._validate(query, max_results)
+        failures: list[str] = []
+        for endpoint in (self._ENDPOINT, "https://lite.duckduckgo.com/lite/"):
+            try:
+                return self._search_endpoint(endpoint, query, max_results)
+            except ToolError as exc:
+                failures.append(f"{urlsplit(endpoint).hostname}: {exc}")
+        raise ToolError("Web search failed across HTML and Lite endpoints. " + "; ".join(failures))
+
+    def _search_endpoint(self, endpoint: str, query: str, max_results: int) -> str:
         try:
             headers = {"Accept": "text/html", "User-Agent": self._USER_AGENT}
             response = self._session.get(
-                self._ENDPOINT,
+                endpoint,
                 params={"q": query.strip()},
                 headers=headers,
                 allow_redirects=False,
@@ -121,6 +130,11 @@ class DuckDuckGoWebSearch:
             raise ToolError(f"Unable to start web search: {exc}") from exc
 
         try:
+            if response.status_code in {202, 403, 429}:
+                raise ToolError(
+                    f"HTTP status {response.status_code}: search access may be challenged or restricted; "
+                    "this is not an empty search result."
+                )
             if response.status_code != 200:
                 raise ToolError(f"DuckDuckGo search failed with HTTP status {response.status_code}.")
             try:

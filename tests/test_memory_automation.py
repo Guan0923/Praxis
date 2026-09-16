@@ -124,6 +124,40 @@ def _service(tmp_path: Path, source: _Source, model: _Model | None = None):
     return state, service
 
 
+def test_memory_failure_persists_provider_details(tmp_path: Path, caplog) -> None:
+    from backend.providers import ModelTransportError
+
+    source = _Source([_conversation("thread_a", age=timedelta(hours=7))])
+    state, service = _service(tmp_path, source)
+    try:
+        queued = service.enqueue_extract("thread_a")
+        claimed = state.memory_store.claim_job(service._worker_id, now="2030-01-01T00:00:00+00:00")
+        error = ModelTransportError(
+            "Bad Request api_key=private-key",
+            retryable=False,
+            status_code=400,
+            diagnostics={
+                "response_detail": "unsupported response_format; token=private-token",
+                "request_id": "request-123",
+                "operation": "summarize",
+                "model": "test-model",
+            },
+        )
+        with caplog.at_level("WARNING"):
+            service._retry(claimed, error)
+        persisted = state.memory_store.get_job(queued.job_id)
+        assert "unsupported response_format" in persisted.last_error
+        assert "request_id=request-123" in persisted.last_error
+        assert "status_code=400" in persisted.last_error
+        assert "operation=summarize" in persisted.last_error
+        assert "private-key" not in persisted.last_error and "private-token" not in persisted.last_error
+        assert "[REDACTED]" in persisted.last_error
+        assert persisted.last_error in caplog.text
+        assert persisted.status is MemoryJobStatus.PENDING
+    finally:
+        state.job_registry.close_all(timeout=2)
+
+
 def test_six_hour_boundary_applies_to_manual_extraction(tmp_path: Path) -> None:
     source = _Source(
         [

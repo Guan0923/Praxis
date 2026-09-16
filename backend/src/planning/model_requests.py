@@ -91,7 +91,12 @@ class ModelRequestExecutor:
         exchange.allowed_tools = list(allowed_tools or [])
         exchange.operation_tools = list(operation_tools if operation_tools is not None else allowed_tools or [])
         exchange.stream = (
-            exchange.on_reasoning is not None or exchange.on_content is not None if stream is None else stream
+            any(
+                callback is not None
+                for callback in (exchange.on_reasoning, exchange.on_reasoning_summary, exchange.on_content)
+            )
+            if stream is None
+            else stream
         )
         exchange.exchange_id = runtime.next_exchange_id()
 
@@ -221,6 +226,8 @@ class ModelRequestExecutor:
         run = runtime.run
         exchange = runtime.exchange
         if not run.turn_id or exchange.operation != "decision":
+            return
+        if runtime.services.turn_trace_initialized:
             return
         store = runtime.services.runtime_store
         initialize = getattr(store, "initialize_turn_trace", None)

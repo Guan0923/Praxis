@@ -35,6 +35,62 @@ function turn(overrides: Partial<RuntimeStateNode> = {}): RuntimeStateNode {
 }
 
 describe("Turn protocol projection", () => {
+  it("appends within a summary and replaces the latest summary at a boundary", () => {
+    const node = turn({ status: "running", data: [[
+      { role: "user", content: [{ type: "text", text: "hello", status: "success" }] },
+      { role: "assistant", content: [{ type: "reasoning", text: "First", summary: "First", summary_key: "r:0", status: "running" }] },
+    ]] });
+    const accumulator = runtimeNodeAccumulator();
+    applyRuntimeNodeFrame(accumulator, { type: "turn.snapshot", revision: 0, turn: node });
+    const append = applyRuntimeNodeFrame(accumulator, {
+      type: "turn.delta", session_id: node.session_id, turn_id: node.id, revision: 1,
+      operations: [{ op: "append_text", data_idx: 0, message_idx: 1, item_idx: 0, delta: " summary" }],
+    });
+    expect(append.data[0][1].content[0]).toMatchObject({ text: "First summary", summary: "First summary" });
+    const replaced = applyRuntimeNodeFrame(accumulator, {
+      type: "turn.delta", session_id: node.session_id, turn_id: node.id, revision: 2,
+      operations: [{ op: "set_reasoning_summary", data_idx: 0, message_idx: 1, item_idx: 0,
+        text: "First summary\n\n**Second**", summary: "**Second**", summary_key: "r:1" }],
+    });
+    expect(replaced.data[0][1].content[0]).toMatchObject({ text: "First summary\n\n**Second**", summary: "**Second**" });
+    expect(append.data[0][1].content[0].summary).toBe("First summary");
+  });
+
+  it("retains historical message references when rebuilding a descendant path", () => {
+    const parent = turn();
+    const child = turn({ id: "child", parent_id: parent.id, parent_session_id: parent.session_id });
+    const conversation: Conversation = { id: "session_1", title: "fixture", messages: [] };
+    const before = integrateRuntimeNodeUpdates(conversation, [parent, child], child.id, true);
+    const after = integrateRuntimeNodeUpdates(before, [{ ...child, status: "running" }], child.id, true);
+    expect(after.messages[0]).toBe(before.messages[0]);
+    expect(after.messages[1]).toBe(before.messages[1]);
+    expect(after.messages[3]).not.toBe(before.messages[3]);
+  });
+  it("shows a reviewed plan once without changing canonical handoff content", () => {
+    const plan = "# Editable plan";
+    const approved = "<approved_plan>\n" + plan + "\n</approved_plan>";
+    const source = turn({ data: [[
+      { role: "user", content: [{ type: "text", text: "Make a plan", status: "success" }] },
+      { role: "assistant", content: [
+        { type: "tool_result", tool: "request_plan_review", call_id: "review", content: plan, plan_path: "plan/test.md", status: "success" },
+        { type: "plan", event: "handoff_created", text: approved, status: "success" },
+        { type: "plan", event: "plan", text: plan, status: "success" },
+        { type: "text", text: plan, status: "success" },
+        { type: "text", text: "Additional explanation", status: "success" },
+      ] },
+    ]] });
+    const child = turn({ id: "child", parent_id: source.id, parent_session_id: source.session_id, data: [[
+      { role: "user", content: [{ type: "text", text: approved, status: "success" }] },
+      { role: "assistant", content: [{ type: "text", text: "Implementing", status: "success" }] },
+    ]] });
+    const messages = projectTurnPath(new Map([["session_1:turn_1", source], ["session_1:child", child]]), child.id);
+    expect(messages[1].items?.map((item) => item.type)).toEqual(["tool_result", "text"]);
+    expect(messages[1].content).toBe("Additional explanation");
+    expect(messages[2]).toMatchObject({ approvedPlanHandoff: true, content: approved });
+    expect(source.data[0][1].content).toHaveLength(5);
+    const ordinary = projectTurnPath(new Map([["session_1:child", { ...child, parent_id: "", parent_session_id: "" }]]), child.id);
+    expect(ordinary[0].approvedPlanHandoff).toBe(false);
+  });
   it("accepts developer snapshots and deltas without exposing instructions as chat text", () => {
     const node = turn({ status: "running" });
     const accumulator = runtimeNodeAccumulator();

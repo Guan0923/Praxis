@@ -157,6 +157,8 @@ class TokenUsageTracker:
         if not runtime.exchange.stream:
             return
         reasoning_parts: list[str] = []
+        reasoning_summaries: dict[str, str] = {}
+        previous_summary = runtime.exchange.on_reasoning_summary
         content_parts: list[str] = []
 
         def refresh() -> None:
@@ -166,7 +168,7 @@ class TokenUsageTracker:
                 return
             message = AssistantMessage(
                 content="".join(content_parts) or None,
-                reasoning="".join(reasoning_parts) or None,
+                reasoning=("".join(reasoning_parts) + "\n\n".join(reasoning_summaries.values())) or None,
             )
             entry = self.requests(runtime).get(exchange_id)
             if entry is None:
@@ -186,7 +188,15 @@ class TokenUsageTracker:
             if previous_content is not None:
                 previous_content(chunk)
 
+        def on_summary(key: str, text: str) -> None:
+            reasoning_summaries[key] = text
+            refresh()
+            if previous_summary is not None:
+                previous_summary(key, text)
+
         runtime.exchange.on_reasoning = on_reasoning
+        if previous_summary is not None:
+            runtime.exchange.on_reasoning_summary = on_summary
         runtime.exchange.on_content = on_content
 
     def complete(

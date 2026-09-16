@@ -79,11 +79,22 @@ def _model_text_stream(
             content_streamed = True
         _publish(runtime, RuntimeEvent("response_delta", chunk))
 
+    def on_reasoning_summary(key: str, text: str) -> None:
+        nonlocal reasoning_open, reasoning_streamed
+        close_response()
+        if not reasoning_open:
+            _publish(runtime, RuntimeEvent("thinking_start"))
+            reasoning_open = True
+            reasoning_streamed = True
+        _publish(runtime, RuntimeEvent("thinking_summary", text, {"summary_key": key}))
+
     runtime.exchange.on_reasoning = on_reasoning
+    runtime.exchange.on_reasoning_summary = on_reasoning_summary
     runtime.exchange.on_content = on_content if stream_content else None
 
     def close() -> _TextStreamResult:
         runtime.exchange.on_reasoning = None
+        runtime.exchange.on_reasoning_summary = None
         runtime.exchange.on_content = None
         close_reasoning()
         close_response()
@@ -145,7 +156,12 @@ def _publish_tool_call(runtime: AgentRuntime, tool: ToolMessage) -> None:
 
 def _publish_tool_result(runtime: AgentRuntime, tool: ToolMessage) -> None:
     result = tool.content or ""
-    _publish(runtime, RuntimeEvent("tool_result", result, {"tool": tool.name, **_tool_event_metadata(tool)}))
+    metadata = {"tool": tool.name, **_tool_event_metadata(tool)}
+    if tool.name == "request_plan_review":
+        from ...planning.review import plan_review_path
+
+        metadata["plan_path"] = plan_review_path(tool.arguments)
+    _publish(runtime, RuntimeEvent("tool_result", result, metadata))
 
 
 def _publish_tool_failure(runtime: AgentRuntime, tool: ToolMessage, error: str) -> None:

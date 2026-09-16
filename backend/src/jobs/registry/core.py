@@ -6,6 +6,7 @@ import threading
 from collections import deque
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from ..base import TERMINAL_STATES, Job, JobState, JobStateListener
 from ..errors import JobNotFound, JobQueueFull, JobRegistrationError
@@ -34,7 +35,6 @@ class JobRegistry(_ScopeRegistryMixin, _AdmissionRegistryMixin, _LifecycleRegist
         self._session_history_limit = session_history_limit
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
-        self._id_seq = 0
         self._scope_seq = 0
         self._records: dict[str, _Record] = {}
         self._scopes: dict[str, JobScope] = {}
@@ -50,10 +50,8 @@ class JobRegistry(_ScopeRegistryMixin, _AdmissionRegistryMixin, _LifecycleRegist
     # -- identity -----------------------------------------------------------
 
     def new_job_id(self) -> str:
-        """Thread-safe sequential id, unique for this registry's lifetime."""
-        with self._lock:
-            self._id_seq += 1
-            return f"job-{self._id_seq}"
+        """Allocate a UUID independent of registry and process lifetimes."""
+        return str(uuid4())
 
     def root_scope(self) -> JobScope:
         return self._root
