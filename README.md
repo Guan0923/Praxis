@@ -45,7 +45,7 @@ Praxis does not require a Praxis account or a cloud-sync service. Application da
 
 The development workflow below targets **Windows**. Command isolation uses a Windows sandbox service; do not assume equivalent sandbox support on other operating systems.
 
-You will need **Python 3.11+**, **Node.js 22** (the version used in CI), and **uv**. If you use the project's Conda setup, run `conda activate dev` first. You also need a model service you are authorized to use.
+You will need **Python 3.11+**, **Node.js 22**, and **uv**. If you use the project's Conda setup, run `conda activate dev` first. You also need a model service you are authorized to use.
 
 From the repository root:
 

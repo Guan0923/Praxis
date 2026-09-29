@@ -12,7 +12,7 @@ Issues and pull requests are welcome in Chinese or English. This guide describes
 
 ## 准备开发环境
 
-本地应用开发面向 Windows，Windows Sandbox Broker 的支持范围不能由 Linux CI 结果推断。准备 Python 3.11+、Node.js 22（与 CI 一致）和 uv。使用 Conda 时先激活 `dev` 环境。
+本地应用开发面向 Windows，不代表其他系统具备相同的 Windows Sandbox Broker 支持。准备 Python 3.11+、Node.js 22 和 uv。使用 Conda 时先激活 `dev` 环境。
 
 Fork 仓库并克隆自己的副本，然后从仓库根目录执行：
 
@@ -60,7 +60,7 @@ npm test -- --run
 npm run build
 ```
 
-完整 CI 的环境和命令以 [ci.yml](.github/workflows/ci.yml) 为准。CI 另行准备 MCP v1 集成测试所需的独立 Python 环境；本地需要复现该检查时，参考其中的安装步骤及 `PRAXIS_MCP_V1_PYTHON` 设置。
+MCP v1 集成测试需要额外准备安装了 `mcp==1.29.1` 的独立 Python 环境，并将 `PRAXIS_MCP_V1_PYTHON` 指向该环境的 Python 可执行文件。
 
 纯文档修改可以核对链接、命令及描述与当前源码的一致性，不必为此运行完整业务测试。Windows pytest 临时目录出现 ACL 错误时，使用当前用户可写且此前不存在的唯一 `--basetemp` 路径，不删除其他任务的目录。
 
