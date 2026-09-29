@@ -45,7 +45,7 @@ Praxis does not require a Praxis account or a cloud-sync service. Application da
 
 The development workflow below targets **Windows**. Command isolation uses a Windows sandbox service; do not assume equivalent sandbox support on other operating systems.
 
-You will need **Python 3.11+**, **Node.js 20+**, **uv**,. If you use the project's Conda setup, run `conda activate dev` first. You also need a model service you are authorized to use.
+You will need **Python 3.11+**, **Node.js 22** (the version used in CI), and **uv**. If you use the project's Conda setup, run `conda activate dev` first. You also need a model service you are authorized to use.
 
 From the repository root:
 
@@ -91,4 +91,16 @@ For a single-server setup, build the frontend with `npm run build` inside `front
 | [Frontend](frontend/README.md) | Browser client structure and development scripts. |
 | [Benchmarks](benchmarks/README.md) | The task suite and the limits of its scores. |
 
-Have a workflow to improve? Open an issue with the task, what you expected, and what happened, with secrets and private files removed. For code changes, start with the development guide and include the checks you ran.
+## Contributing and community
+
+Bug reports, workflow suggestions, documentation fixes, and code contributions are welcome. You can write issues and pull requests in English or Chinese.
+
+- Read the [contributing guide](CONTRIBUTING.md) for setup, checks, and the pull request workflow.
+- Use the repository's **Issues → New issue** menu to report a bug or suggest a feature. Include a reproducible example and remove secrets and private files.
+- Follow the [code of conduct](CODE_OF_CONDUCT.md) in issues, pull requests, and other project spaces.
+
+For sensitive reports, follow the private-contact guidance in the code of conduct before sharing details publicly.
+
+## License
+
+Praxis is licensed under the [MIT License](LICENSE). Third-party dependencies retain their own licenses.

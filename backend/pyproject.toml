@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "praxis-backend"
 version = "0.0.1"
 description = "Praxis local Agent Runtime and loopback FastAPI backend."
+license = { text = "MIT" }
 keywords = ["agent", "mcp", "skills", "subagents"]
 requires-python = ">=3.11"
 dependencies = [
