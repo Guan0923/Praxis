@@ -96,20 +96,21 @@ def test_parallel_setting_one_is_serial_and_values_above_sixteen_apply() -> None
     assert not worker.is_alive()
 
 
-def test_serial_subqueue_stays_single_while_normal_tools_run() -> None:
+@pytest.mark.parametrize("serial_tool_name", ["todo_write", "delegate_task"])
+def test_serial_subqueue_stays_single_while_normal_tools_run(serial_tool_name: str) -> None:
     serial = ConcurrencyProbe()
     normal = ConcurrencyProbe(expected=2)
     tools = ToolRegistry(
         [
-            Tool("todo_write", "todo", serial.run),
+            Tool(serial_tool_name, "serial", serial.run),
             Tool("inspect", "inspect", normal.run),
         ]
     )
     runtime = runtime_for(tools, parallel=4)
     message = AssistantMessage(
         tool_messages=[
-            ToolMessage(name="todo_write", call_id="todo_1"),
-            ToolMessage(name="todo_write", call_id="todo_2"),
+            ToolMessage(name=serial_tool_name, call_id="serial_1"),
+            ToolMessage(name=serial_tool_name, call_id="serial_2"),
             ToolMessage(name="inspect", call_id="inspect_1"),
             ToolMessage(name="inspect", call_id="inspect_2"),
         ]

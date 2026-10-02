@@ -46,7 +46,7 @@ class _IdleTools:
 def test_persistent_subagent_tool_contract_exposes_only_the_read_query_in_plan_mode() -> None:
     tools = delegation_tools()
     assert [tool.name for tool in tools] == [
-        "delegate_tasks",
+        "delegate_task",
         "send_agent_message",
         "set_thread_node_status",
         "get_thread_node",

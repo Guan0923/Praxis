@@ -18,7 +18,7 @@ EXPECTED_LOCAL_TOOLS = [
     "file_operation",
     "run_command",
     "write_stdin",
-    "delegate_tasks",
+    "delegate_task",
     "send_agent_message",
     "set_thread_node_status",
     "get_thread_node",

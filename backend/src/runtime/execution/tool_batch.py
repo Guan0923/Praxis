@@ -25,7 +25,7 @@ _SERIAL_TOOLS = frozenset(
         "request_user_input",
         "request_plan_review",
         "todo_write",
-        "delegate_tasks",
+        "delegate_task",
         "send_agent_message",
         "set_thread_node_status",
         "get_thread_node",

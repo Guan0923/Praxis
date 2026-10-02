@@ -29,8 +29,9 @@ def delegation_tools() -> tuple[Tool, Tool, Tool, Tool, Tool]:
     }
     return (
         Tool(
-            "delegate_tasks",
-            "Creates one Agent at a new path and starts its assigned task.",
+            "delegate_task",
+            "Creates exactly one subagent at a new path and starts its task. "
+            "To create multiple subagents, call this tool once per subagent.",
             _runtime_only,
             object_schema(
                 {
