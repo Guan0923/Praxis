@@ -4,7 +4,7 @@
 
 - `contracts.py`：定义可注入的 `ChildRunner`、`AgentThreadEvents` Protocol，以及 Coordinator 内部使用的 Session、状态和 canonical store 适配器。
 - `execution.py`：`_SubagentExecutionMixin` 创建子 Thread/首个 Turn、调度 worker、恢复既有子任务并管理终态。
-- `tool_actions.py`：`_SubagentToolActionsMixin` 实现 `delegate_tasks`、`send_agent_message`、`wait_tasks`、`close_agent` 等工具动作和目标解析。
+- `tool_actions.py`：`_SubagentToolActionsMixin` 实现 `delegate_task`、`send_agent_message`、`set_thread_node_status`、`get_thread_node`、`pause_current_turn` 等工具动作和目标解析；`delegate_task` 每次只创建一个子 Agent。
 - `reports.py`：`_SubagentReportDeliveryMixin` 负责 内存队列 报告 claim、SQLite 幂等持久化、父线程通知和 ACK 顺序。
 - `parent_bridge.py`：`ParentRuntimeBridge` 将子 Runtime 的事件、审批与用户输入串行转发到父 Runtime；`BridgeEvent`、`BridgeApproval` 是桥接载荷。
 - `tool_executor.py`：`WorkspaceWriteLock` 对重叠路径加锁，`LockedToolExecutor` 在执行 workspace 写工具和命令时应用该锁。

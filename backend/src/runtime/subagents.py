@@ -25,7 +25,7 @@ class SubagentCoordinator(_SubagentToolActionsMixin, _SubagentReportDeliveryMixi
     """Process-owned coordinator backed by SQLite and in-memory rather than batch state."""
 
     _TOOLS = {
-        "delegate_tasks",
+        "delegate_task",
         "send_agent_message",
         "set_thread_node_status",
         "get_thread_node",
@@ -91,7 +91,7 @@ class SubagentCoordinator(_SubagentToolActionsMixin, _SubagentReportDeliveryMixi
 
     def invoke(self, runtime: AgentRuntime, name: str, arguments: dict[str, Any]) -> str:
         self._require_services()
-        if name == "delegate_tasks":
+        if name == "delegate_task":
             return self._delegate(runtime, arguments)
         if name == "send_agent_message":
             return self._send(runtime, arguments)

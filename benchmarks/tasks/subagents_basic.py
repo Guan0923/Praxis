@@ -18,7 +18,7 @@ TASKS = (
         description="Delegate two independent file reads and combine both facts.",
         capability="subagents",
         prompt=(
-            "Delegate two independent tasks with delegate_tasks: one child reads research/alpha.md and "
+            "Call delegate_task twice to create two independent children: one child reads research/alpha.md and "
             "one child reads research/beta.md, and each returns its key fact. After both children finish, "
             "write notes/combined.md containing both facts, including the ALPHA_FACT and BETA_FACT markers."
         ),
@@ -33,7 +33,7 @@ TASKS = (
             files_exist("notes/combined.md"),
             content_contains("notes/combined.md", "ALPHA_FACT"),
             content_contains("notes/combined.md", "BETA_FACT"),
-            tool_used("delegate_tasks"),
+            tool_used("delegate_task"),
             subagents_completed(2),
             subagents_failed(0),
         ),

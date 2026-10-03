@@ -71,7 +71,7 @@ class _DelegatingRootPlanner:
             if not isinstance(message, AssistantMessage):
                 continue
             for tool in message.tool_messages:
-                if tool.name != "delegate_tasks" or not tool.content:
+                if tool.name != "delegate_task" or not tool.content:
                     continue
                 try:
                     result = json.loads(tool.content)
@@ -92,7 +92,7 @@ class _DelegatingRootPlanner:
             return AssistantMessage(
                 tool_messages=[
                     ToolMessage(
-                        name="delegate_tasks",
+                        name="delegate_task",
                         call_id=f"delegate_http_{name}",
                         arguments={
                             "subagent_path": f"/root/{name}",
@@ -709,7 +709,7 @@ def test_fork_sidebar_root_can_delegate_its_own_subagent(tmp_path: Path) -> None
         delegated = json.loads(
             coordinator.invoke(
                 runtime,
-                "delegate_tasks",
+                "delegate_task",
                 {
                     "subagent_path": "/root/worker",
                     "subagent_task": "fork-only task",
@@ -765,7 +765,7 @@ def test_delegate_terminal_result_is_delivered_once_as_plain_text_assistant_repo
     try:
         coordinator.invoke(
             runtime,
-            "delegate_tasks",
+            "delegate_task",
             {
                 "subagent_path": "/root/reporter",
                 "subagent_task": "中文结果",
@@ -990,7 +990,7 @@ def test_failed_agent_report_uses_exact_single_newline_retry_text(tmp_path: Path
     try:
         coordinator.invoke(
             runtime,
-            "delegate_tasks",
+            "delegate_task",
             {
                 "subagent_path": "/root/failure",
                 "subagent_task": "fail",
@@ -1046,7 +1046,7 @@ def test_pause_current_turn_waits_for_child_report_and_resumes_the_same_turn(tmp
                 ]
                 return AssistantMessage(content="waiter resumed")
             delegated = any(
-                tool.name == "delegate_tasks" and tool.status == "succeeded"
+                tool.name == "delegate_task" and tool.status == "succeeded"
                 for message in messages
                 if isinstance(message, AssistantMessage)
                 for tool in message.tool_messages
@@ -1055,7 +1055,7 @@ def test_pause_current_turn_waits_for_child_report_and_resumes_the_same_turn(tmp
                 return AssistantMessage(
                     tool_messages=[
                         ToolMessage(
-                            name="delegate_tasks",
+                            name="delegate_task",
                             call_id="delegate_waited_child",
                             arguments={
                                 "subagent_path": "/root/waiter/worker",
@@ -1096,7 +1096,7 @@ def test_pause_current_turn_waits_for_child_report_and_resumes_the_same_turn(tmp
     try:
         coordinator.invoke(
             runtime,
-            "delegate_tasks",
+            "delegate_task",
             {
                 "subagent_path": "/root/waiter",
                 "subagent_task": "wait",
@@ -1191,7 +1191,7 @@ def test_send_agent_message_registers_reports_only_when_need_reply_is_true(tmp_p
     try:
         coordinator.invoke(
             runtime,
-            "delegate_tasks",
+            "delegate_task",
             {
                 "subagent_path": "/root/worker",
                 "subagent_task": "initial",
@@ -1422,7 +1422,7 @@ def test_persistent_delegate_reports_result_and_accepts_follow_up(tmp_path: Path
     delegated = json.loads(
         coordinator.invoke(
             runtime,
-            "delegate_tasks",
+            "delegate_task",
             {
                 "subagent_path": "/root/worker",
                 "subagent_task": "first",
@@ -1558,7 +1558,7 @@ def test_running_subagent_bridge_accepts_live_runtime_config(tmp_path: Path) -> 
         delegated = json.loads(
             coordinator.invoke(
                 runtime,
-                "delegate_tasks",
+                "delegate_task",
                 {
                     "subagent_path": "/root/worker",
                     "subagent_task": "wait for config",
@@ -1986,7 +1986,7 @@ def test_delegate_paths_source_auth_and_recursive_get_thread_node(tmp_path: Path
             result = json.loads(
                 coordinator.invoke(
                     runtime,
-                    "delegate_tasks",
+                    "delegate_task",
                     {
                         "subagent_path": path,
                         "subagent_task": path.rsplit("/", 1)[-1],
@@ -1999,7 +1999,7 @@ def test_delegate_paths_source_auth_and_recursive_get_thread_node(tmp_path: Path
         with pytest.raises(ToolError, match="already exists"):
             coordinator.invoke(
                 runtime,
-                "delegate_tasks",
+                "delegate_task",
                 {
                     "subagent_path": "/root/parent",
                     "subagent_task": "duplicate",
@@ -2009,7 +2009,7 @@ def test_delegate_paths_source_auth_and_recursive_get_thread_node(tmp_path: Path
         with pytest.raises(ToolError, match="parent path does not exist"):
             coordinator.invoke(
                 runtime,
-                "delegate_tasks",
+                "delegate_task",
                 {
                     "subagent_path": "/root/missing/leaf",
                     "subagent_task": "missing",
@@ -2019,7 +2019,7 @@ def test_delegate_paths_source_auth_and_recursive_get_thread_node(tmp_path: Path
         with pytest.raises(ToolError, match="does not match"):
             coordinator.invoke(
                 runtime,
-                "delegate_tasks",
+                "delegate_task",
                 {
                     "source_thread_id": "thread_spoofed",
                     "subagent_path": "/root/spoofed",
@@ -2255,7 +2255,7 @@ def test_status_control_transitions_are_direct_child_only_and_reuse_the_paused_t
     try:
         coordinator.invoke(
             runtime,
-            "delegate_tasks",
+            "delegate_task",
             {
                 "subagent_path": "/root/worker",
                 "subagent_task": "spin",
@@ -2486,7 +2486,7 @@ def test_running_message_uses_steering_without_creating_another_turn(tmp_path: P
     try:
         coordinator.invoke(
             runtime,
-            "delegate_tasks",
+            "delegate_task",
             {
                 "subagent_path": "/root/worker",
                 "subagent_task": "wait",
@@ -2562,7 +2562,7 @@ def test_failed_result_retry_and_success_without_text(tmp_path: Path) -> None:
         for path, task in (("/root/failing", "fail naturally"), ("/root/empty", "no text")):
             coordinator.invoke(
                 runtime,
-                "delegate_tasks",
+                "delegate_task",
                 {
                     "subagent_path": path,
                     "subagent_task": task,
