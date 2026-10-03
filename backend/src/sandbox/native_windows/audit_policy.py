@@ -67,6 +67,9 @@ def security_privilege():
 class WindowsAuditPolicy:
     def __init__(self) -> None:
         self.api = ctypes.WinDLL("advapi32", use_last_error=True)
+        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel.LocalFree.argtypes = [ctypes.c_void_p]
+        self.kernel.LocalFree.restype = ctypes.c_void_p
         self.api.AuditQueryPerUserPolicy.argtypes = [
             ctypes.c_void_p,
             ctypes.POINTER(_Guid),
@@ -151,8 +154,18 @@ class WindowsAuditPolicy:
     def _ensure_user_policy(self, sid) -> None:
         guids = (_Guid * 2)(_Guid.parse(_FILE_SYSTEM), _Guid.parse(_REGISTRY))
         existing = ctypes.POINTER(_Policy)()
-        self._check(self.api.AuditQueryPerUserPolicy(sid, guids, 2, ctypes.byref(existing)))
         try:
+            queried = self.api.AuditQueryPerUserPolicy(sid, guids, 2, ctypes.byref(existing))
+            if not queried:
+                error = ctypes.get_last_error()
+                # ERROR_FILE_NOT_FOUND means this account has no per-user policy yet.
+                # It is expected on first launch; every other error remains fatal.
+                if error != 2:
+                    raise SandboxAuditUnavailable(f"Windows audit API failed (code {error}).")
+                if existing:
+                    raise SandboxAuditUnavailable("Windows returned a buffer for a missing per-user audit policy.")
+            elif not existing:
+                raise SandboxAuditUnavailable("Windows returned no per-user audit policy.")
             updated = (_Policy * 2)()
             changed = False
             for index in range(2):
@@ -163,8 +176,17 @@ class WindowsAuditPolicy:
                 changed |= updated[index].flags != previous
             if changed:
                 self._check(self.api.AuditSetPerUserPolicy(sid, updated, 2))
+                verified = ctypes.POINTER(_Policy)()
+                try:
+                    self._check(self.api.AuditQueryPerUserPolicy(sid, guids, 2, ctypes.byref(verified)))
+                    if not verified or any(verified[index].flags != updated[index].flags for index in range(2)):
+                        raise SandboxAuditUnavailable("Required per-user audit policy did not take effect.")
+                finally:
+                    if verified:
+                        self.api.AuditFree(verified)
         finally:
-            self.api.AuditFree(existing)
+            if existing:
+                self.api.AuditFree(existing)
 
     def _ensure_system_policy(self) -> None:
         guids = (_Guid * 6)(
@@ -195,37 +217,71 @@ class WindowsAuditPolicy:
         finally:
             self.api.AuditFree(existing)
 
-    def _ensure_global_sacl(self, object_type: str, sid, mask: int) -> None:
+    def _query_global_sacl(self, object_type: str, *, allow_missing: bool = False) -> bytes:
         pointer = ctypes.c_void_p()
-        self._check(self.api.AuditQueryGlobalSaclW(object_type, ctypes.byref(pointer)))
         try:
-            old = (
-                ctypes.string_at(pointer, ctypes.c_ushort.from_address(pointer.value + 2).value)
-                if pointer.value
-                else b""
-            )
-            count = int.from_bytes(old[4:6], "little") if old else 0
-            offset = 8
-            sid_bytes = bytes(sid)[:-1]
-            for _ in range(count):
-                size = int.from_bytes(old[offset + 2 : offset + 4], "little")
-                ace = old[offset : offset + size]
-                if (
-                    ace[0] == 2
-                    and ace[1] & 0x80
-                    and ace[8:] == sid_bytes
-                    and int.from_bytes(ace[4:8], "little") & mask == mask
-                ):
-                    return
-                offset += size
-            # Copy every existing ACE, then add a failure-only ACE for this sandbox account.
-            buffer = ctypes.create_string_buffer(max(8, len(old)) + 8 + len(sid_bytes))
-            self._check(self.api.InitializeAcl(buffer, len(buffer), 4))
-            if count:
-                ace_bytes = ctypes.create_string_buffer(old[8:offset])
-                self._check(self.api.AddAce(buffer, 4, 0xFFFFFFFF, ace_bytes, offset - 8))
-            self._check(self.api.AddAuditAccessAceEx(buffer, 4, 0, mask, sid, False, True))
-            self._check(self.api.AuditSetGlobalSaclW(object_type, buffer))
+            queried = self.api.AuditQueryGlobalSaclW(object_type, ctypes.byref(pointer))
+            if not queried:
+                error = ctypes.get_last_error()
+                # An absent global SACL is an initialization case, not permission to skip auditing.
+                if allow_missing and error == 2 and not pointer.value:
+                    return b""
+                raise SandboxAuditUnavailable(f"Windows global {object_type} SACL query failed (code {error}).")
+            if not pointer.value:
+                return b""
+            size = ctypes.c_ushort.from_address(pointer.value + 2).value
+            if size < 8:
+                raise SandboxAuditUnavailable("Windows returned an invalid global SACL.")
+            return ctypes.string_at(pointer, size)
         finally:
             if pointer.value:
-                self.api.AuditFree(pointer)
+                # AuditQueryGlobalSaclW uses LocalAlloc, unlike the per-user policy APIs.
+                self.kernel.LocalFree(pointer)
+
+    @staticmethod
+    def _global_sacl_aces(raw: bytes) -> tuple[bytes, ...]:
+        if not raw:
+            return ()
+        if len(raw) < 8 or int.from_bytes(raw[2:4], "little") != len(raw):
+            raise SandboxAuditUnavailable("Windows returned an invalid global SACL.")
+        entries = []
+        offset = 8
+        for _ in range(int.from_bytes(raw[4:6], "little")):
+            if offset + 4 > len(raw):
+                raise SandboxAuditUnavailable("Windows returned an invalid global SACL entry.")
+            size = int.from_bytes(raw[offset + 2 : offset + 4], "little")
+            if size < 4 or offset + size > len(raw):
+                raise SandboxAuditUnavailable("Windows returned an invalid global SACL entry.")
+            entries.append(raw[offset : offset + size])
+            offset += size
+        return tuple(entries)
+
+    @staticmethod
+    def _has_failure_ace(entries: tuple[bytes, ...], sid: bytes, mask: int) -> bool:
+        return any(
+            len(ace) >= 8
+            and ace[0] == 2
+            and ace[1] & 0x80
+            and ace[8:] == sid
+            and int.from_bytes(ace[4:8], "little") & mask == mask
+            for ace in entries
+        )
+
+    def _ensure_global_sacl(self, object_type: str, sid, mask: int) -> None:
+        old = self._query_global_sacl(object_type, allow_missing=True)
+        entries = self._global_sacl_aces(old)
+        sid_bytes = bytes(sid)[:-1]
+        if self._has_failure_ace(entries, sid_bytes, mask):
+            return
+        # Copy every existing ACE, then add a failure-only ACE for this sandbox account.
+        buffer = ctypes.create_string_buffer(max(8, len(old)) + 8 + len(sid_bytes))
+        self._check(self.api.InitializeAcl(buffer, len(buffer), 4))
+        if entries:
+            previous_entries = b"".join(entries)
+            ace_bytes = ctypes.create_string_buffer(previous_entries)
+            self._check(self.api.AddAce(buffer, 4, 0xFFFFFFFF, ace_bytes, len(previous_entries)))
+        self._check(self.api.AddAuditAccessAceEx(buffer, 4, 0, mask, sid, False, True))
+        self._check(self.api.AuditSetGlobalSaclW(object_type, buffer))
+        verified = self._global_sacl_aces(self._query_global_sacl(object_type))
+        if not self._has_failure_ace(verified, sid_bytes, mask):
+            raise SandboxAuditUnavailable(f"Required global {object_type} SACL did not take effect.")
