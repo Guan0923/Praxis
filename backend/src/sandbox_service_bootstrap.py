@@ -3,8 +3,28 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
+
+if hasattr(os, "add_dll_directory"):
+    for dll_dir in (
+        Path(sys.base_prefix) / "Library" / "bin",
+        Path(sys.base_prefix) / "DLLs",
+        Path(sys.prefix) / "Library" / "bin",
+        Path(sys.prefix) / "DLLs",
+    ):
+        if dll_dir.is_dir():
+            try:
+                os.add_dll_directory(str(dll_dir))
+            except OSError:
+                pass
+
+try:
+    with open(r"C:\ProgramData\Praxis\SandboxBroker\bootstrap.log", "a", encoding="utf-8") as _f:
+        _f.write(f"Bootstrap invoked by {sys.executable}, args={sys.argv}\n")
+except Exception:
+    pass
 
 
 def _install_backend_package() -> None:

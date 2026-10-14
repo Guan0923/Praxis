@@ -351,9 +351,13 @@ class WindowsServiceInstaller:
         try:
             start_service(self.service_name)
         except Exception as exc:
-            if getattr(exc, "winerror", None) not in {5, 740}:
+            winerror = getattr(exc, "winerror", None)
+            if winerror is None and getattr(exc, "args", None):
+                first = exc.args[0]
+                winerror = first if isinstance(first, int) else None
+            if winerror not in {5, 740}:
                 raise
-            self._run_elevated_transaction("start", self._current_user_sid())
+            self._run_transaction("start")
 
     def service_installed(self) -> bool:
         """Return whether SCM contains this service, preserving other query failures."""
@@ -420,6 +424,15 @@ class WindowsServiceInstaller:
                 for name in ("python3.dll", "vcruntime140.dll", "vcruntime140_1.dll")
                 if (candidate := python_dll.parent / name).is_file()
             )
+            library_bin = base_prefix / "Library" / "bin"
+            # Conda's Python DLL imports zlib before any Python bootstrap can run.
+            for directory in (python_dll.parent, library_bin):
+                zlib_dll = directory / "zlib.dll"
+                if zlib_dll.is_file():
+                    runtime_binaries.append(zlib_dll)
+                    break
+            if library_bin.is_dir():
+                runtime_binaries.extend(library_bin.glob("ffi*.dll"))
             for source in runtime_binaries:
                 target = executable_path.parent / source.name
                 if not target.exists() or not filecmp.cmp(source, target, shallow=False):
@@ -461,6 +474,15 @@ class WindowsServiceInstaller:
         commands: list[list[str]] = []
         if self.backend_sid_path is not None and sid is not None:
             commands.append(_sid_acl_command(self.backend_sid_path, sid, None))
+        if operation == "start":
+            result = self.runner(["sc.exe", "start", self.service_name], check=False, capture_output=True)
+            returncode = int(getattr(result, "returncode", 1))
+            if returncode not in {0, 1056}:
+                raise BrokerInstallationError(
+                    BrokerInstallFailureCode.SERVICE_START_FAILED,
+                    "Broker Windows 服务启动失败。",
+                )
+            return
         if operation == "install":
             commands.extend(
                 [

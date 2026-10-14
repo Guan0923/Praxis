@@ -32,6 +32,11 @@ def status(request: Request) -> dict[str, object]:
     return _broker_payload(_broker(request).status())
 
 
+@router.post("/start", response_model=None)
+def start(request: Request) -> dict[str, object] | JSONResponse:
+    return repair(request)
+
+
 @router.post("/install", response_model=None)
 def install(request: Request) -> dict[str, object] | JSONResponse:
     return repair(request)

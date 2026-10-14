@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .installation.access_policy import (
+    _apply_acl_target,
     _apply_source_acl_grant,
     _directory_contains,
     _icacls_sid,
@@ -28,6 +29,7 @@ from .installation.access_policy import (
     _secure_source_code,
     _sensitive_file_acl_commands,
     _service_class_command,
+    _service_sid,
     _sid_acl_command,
 )
 from .installation.accounts import (
@@ -279,8 +281,24 @@ def _run_transaction(payload: Mapping[str, Any]) -> int:
     if operation == "start":
         from .control.service_state import start_service
 
-        start_service(service_name)
-        return EXIT_OK
+        try:
+            start_service(service_name)
+            return EXIT_OK
+        except Exception as exc:
+            winerror = getattr(exc, "winerror", None)
+            if winerror is None and getattr(exc, "args", None):
+                first = exc.args[0]
+                winerror = first if isinstance(first, int) else None
+            if winerror != 5:
+                raise
+            if service_command:
+                executable_path = Path(service_command[0])
+                if executable_path.is_file():
+                    _apply_acl_target(executable_path, _service_sid(service_name), "RX", inherit=False)
+                for grant in _runtime_acl_grants(runtime_paths, executable_path, service_name):
+                    _apply_source_acl_grant(grant)
+            start_service(service_name)
+            return EXIT_OK
     ready_path = data_path / "ready.json" if data_path is not None else None
     installed = _service_exists(service_name)
     if installed:
@@ -337,6 +355,10 @@ def _run_transaction(payload: Mapping[str, Any]) -> int:
         _, ready_marker = _provision_fixed_accounts(data_path, service_name, proxy_port)
     _secure_program_data(data_path, sid_path, service_name)
     _secure_source_code(code_path, code_boundary_path, service_name)
+    if service_command:
+        executable_path = Path(service_command[0])
+        if executable_path.is_file():
+            _apply_acl_target(executable_path, _service_sid(service_name), "RX", inherit=False)
     for grant in _runtime_acl_grants(runtime_paths, Path(service_command[0]), service_name):
         _apply_source_acl_grant(grant)
     if ready_path is not None and ready_marker is not None:

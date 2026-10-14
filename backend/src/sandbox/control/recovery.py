@@ -60,8 +60,16 @@ def recover(
             failed_start(state)
         if state["state"] not in {"stopped", "running", "missing"}:
             failed_start(state)
-        observed_start = was_starting or state["state"] == "stopped"
-        if state["state"] == "stopped":
+        config_checker = getattr(installer, "configuration_healthy", None)
+        can_attempt_start = True
+        if callable(config_checker):
+            try:
+                can_attempt_start = bool(config_checker())
+            except Exception:
+                can_attempt_start = False
+
+        observed_start = was_starting or (state["state"] == "stopped" and can_attempt_start)
+        if state["state"] == "stopped" and can_attempt_start:
             installer.start()
             deadline = clock() + 10
             while True:
@@ -88,7 +96,7 @@ def recover(
                 sleep(min(1, max(0, deadline - clock())))
             else:
                 return current
-        if not observed_start and state["state"] != "missing" and (current := health()).healthy:
+        if not observed_start and state["state"] == "running" and (current := health()).healthy:
             return current
     except Exception as exc:
         if not getattr(exc, "broker_recovery_code", None):

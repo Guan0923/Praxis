@@ -64,6 +64,31 @@ class BrokerStatus:
         }
 
 
+def _resolve_service_command(prefix: Path) -> tuple[str, ...]:
+    from ..broker_service.installer import _absolute_windows_path
+
+    for candidate in (
+        prefix / "pythonservice.exe",
+        prefix / "Lib" / "site-packages" / "win32" / "pythonservice.exe",
+        prefix / "Scripts" / "pythonservice.exe",
+    ):
+        if candidate.is_file():
+            return (_absolute_windows_path(candidate),)
+
+    try:
+        import win32serviceutil
+
+        located = win32serviceutil.LocatePythonServiceExe()
+        if located and Path(located).is_file():
+            located_path = Path(located)
+            if any(parent == prefix for parent in located_path.parents):
+                return (_absolute_windows_path(located),)
+    except Exception:
+        pass
+
+    return (_absolute_windows_path(prefix / "pythonservice.exe"),)
+
+
 class WindowsBrokerClient:
     """Small protocol client; all privileged operations stay in the Broker."""
 
@@ -129,7 +154,7 @@ class WindowsBrokerClient:
         runtime_prefix = Path(_absolute_windows_path(sys.prefix))
         runtime_base_prefix = Path(_absolute_windows_path(sys.base_prefix))
         installer = WindowsServiceInstaller(
-            (_absolute_windows_path(Path(sys.prefix) / "pythonservice.exe"),),
+            _resolve_service_command(runtime_prefix),
             service_class=(rf"{source_root}\sandbox_service_bootstrap.PraxisSandboxBrokerService"),
             backend_sid_path=configuration.backend_sid_path,
             program_data_path=configuration.program_data,
@@ -258,6 +283,9 @@ class WindowsBrokerClient:
                 service_state=service_state,
                 detail=detail,
             )
+
+    def start(self) -> BrokerStatus:
+        return self.repair()
 
     def install(self) -> BrokerStatus:
         return self.repair()

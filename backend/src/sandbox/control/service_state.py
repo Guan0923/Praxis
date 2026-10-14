@@ -30,6 +30,14 @@ def _service(name: str, access: int) -> Iterator[Any]:
         win32service.CloseServiceHandle(manager)
 
 
+def _extract_winerror(exc: Exception) -> int | None:
+    winerror = getattr(exc, "winerror", None)
+    if winerror is None and getattr(exc, "args", None):
+        first = exc.args[0]
+        winerror = first if isinstance(first, int) else None
+    return winerror
+
+
 def query_service(name: str) -> dict[str, str | int]:
     import win32service
 
@@ -37,7 +45,7 @@ def query_service(name: str) -> dict[str, str | int]:
         with _service(name, win32service.SERVICE_QUERY_STATUS) as handle:
             status = win32service.QueryServiceStatusEx(handle)
     except Exception as exc:
-        if getattr(exc, "winerror", None) == 1060:
+        if _extract_winerror(exc) == 1060:
             return {"state": "missing", "exit_code": 0, "service_exit_code": 0}
         raise
     return {
@@ -54,5 +62,5 @@ def start_service(name: str) -> None:
         try:
             win32service.StartService(handle, None)
         except Exception as exc:
-            if getattr(exc, "winerror", None) != 1056:
+            if _extract_winerror(exc) != 1056:
                 raise

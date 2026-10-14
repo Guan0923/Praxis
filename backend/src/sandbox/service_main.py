@@ -77,11 +77,25 @@ if win32serviceutil is not None:
             win32event.SetEvent(self.stop_event)
 
         def SvcDoRun(self) -> None:
-            servicemanager.LogInfoMsg("Praxis Sandbox Broker starting")
-            self.server = _server()
-            self.server.serve_forever(
-                stop=lambda: win32event.WaitForSingleObject(self.stop_event, 0) == win32event.WAIT_OBJECT_0
-            )
+            try:
+                servicemanager.LogInfoMsg("Praxis Sandbox Broker starting")
+                self.server = _server()
+                self.server.serve_forever(
+                    stop=lambda: win32event.WaitForSingleObject(self.stop_event, 0) == win32event.WAIT_OBJECT_0
+                )
+            except Exception:
+                import traceback
+
+                tb = traceback.format_exc()
+                try:
+                    servicemanager.LogErrorMsg(f"Praxis Sandbox Broker failed to start:\n{tb}")
+                except Exception:
+                    pass
+                try:
+                    Path(r"C:\ProgramData\Praxis\SandboxBroker\service_crash.log").write_text(tb, encoding="utf-8")
+                except Exception:
+                    pass
+                raise
 
 else:
 
