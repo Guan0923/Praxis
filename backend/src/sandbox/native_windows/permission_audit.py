@@ -6,7 +6,7 @@ import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
-from .audit_policy import SandboxAuditUnavailable, WindowsAuditPolicy
+from .audit_policy import SandboxAuditUnavailable, WindowsAuditPolicy, security_privilege
 from .network_audit import network_denial
 
 _NS = {"e": "http://schemas.microsoft.com/win/2004/08/events/event"}
@@ -60,6 +60,10 @@ class SecurityEventSource:
         self.api = win32evtlog
 
     def _events(self, query: str, *, reverse: bool = False, limit: int = 256) -> list[str]:
+        with security_privilege():
+            return self._read_events(query, reverse=reverse, limit=limit)
+
+    def _read_events(self, query: str, *, reverse: bool, limit: int) -> list[str]:
         api = self.api
         flags = api.EvtQueryChannelPath | (api.EvtQueryReverseDirection if reverse else api.EvtQueryForwardDirection)
         handle = None
@@ -237,16 +241,13 @@ class CommandAudit:
 
 
 class WindowsSecurityAudit:
-    def __init__(self) -> None:
+    def __init__(self, *, account_sids: tuple[str, ...]) -> None:
+        self._account_sids = account_sids
         self._accounts: set[str] = set()
 
     def prepare(self) -> None:
-        from ..broker_service import BrokerConfiguration, read_ready_marker
-
-        marker = read_ready_marker(BrokerConfiguration.create().ready_path)
         policy = WindowsAuditPolicy()
-        for role in ("offline", "online"):
-            account_sid = marker["accounts"][role]["sid"]
+        for account_sid in self._account_sids:
             policy.ensure(account_sid)
             self._accounts.add(account_sid)
         SecurityEventSource().latest_record()

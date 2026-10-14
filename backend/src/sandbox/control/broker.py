@@ -19,6 +19,7 @@ from typing import Any
 
 from backend.domain import error_report, normalize_error_report, redact_sensitive_text, safe_error_message
 
+from ..broker_service.protocol import BROKER_VERSION
 from ..errors import (
     BrokerInstallationError,
     BrokerInstallFailureCode,
@@ -244,7 +245,7 @@ class WindowsBrokerClient:
             failure_code = BrokerStatusFailureCode.STATUS_FAILED
             payload = self.request("status", {}, status_timeout=timeout)
             failure_code = BrokerStatusFailureCode.PROTOCOL_INCOMPATIBLE
-            if payload.get("version") != "3":
+            if payload.get("version") != BROKER_VERSION:
                 raise SandboxInitializationError("Broker protocol version requires repair")
             failure_code = BrokerStatusFailureCode.TOKEN_MODEL_INCOMPATIBLE
             if payload.get("token_model") != "capability_sid_v3":
@@ -548,6 +549,53 @@ class _BrokerWriteStream:
 
     def close(self) -> None:
         self._process._control("process_close_stdin", {})
+
+
+class BrokerCommandAudit:
+    """Receive authenticated command evidence without reading local Security logs."""
+
+    def __init__(self, client: WindowsBrokerClient, process: Any, *, job_id: str, user_id: str) -> None:
+        self._client = client
+        self._process = process
+        self.job_id = job_id
+        self.user_id = user_id
+        self.root_pid = process.pid
+        self.proxy_denials: tuple[dict, ...] = ()
+        self._denials: tuple[dict, ...] | None = None
+        self._error: Exception | None = None
+
+    def finish(self) -> None:
+        from ..native_windows.audit_policy import SandboxAuditUnavailable
+
+        if self._denials is not None or self._error is not None:
+            return
+        try:
+            response = self._process._control("process_audit", {"job_id": self.job_id, "user_id": self.user_id})
+            if (
+                response.get("process_id") != self._process._process_id
+                or type(response.get("pid")) is not int
+                or response["pid"] != self.root_pid
+                or response.get("backend_instance_id") != self._client.backend_instance_id
+                or response.get("job_id") != self.job_id
+                or response.get("user_id") != self.user_id
+            ):
+                raise SandboxAuditUnavailable("Broker returned mismatched command audit ownership.")
+            denials = response.get("denials")
+            if not isinstance(denials, list) or not all(isinstance(entry, dict) for entry in denials):
+                raise SandboxAuditUnavailable("Broker returned invalid command audit evidence.")
+            self._denials = tuple(denials)
+        except Exception as exc:
+            self._error = SandboxAuditUnavailable("Broker command permission auditing failed.")
+            self._error.__cause__ = exc
+
+    def collect(self, **_kwargs: Any) -> tuple[dict, ...]:
+        from ..native_windows.audit_policy import SandboxAuditUnavailable
+
+        if self._error is not None:
+            raise self._error
+        if self._denials is None:
+            raise SandboxAuditUnavailable("Broker command audit has not finished.")
+        return self._denials + self.proxy_denials
 
 
 class BrokerManagedProcess:

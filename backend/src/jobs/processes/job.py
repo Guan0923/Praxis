@@ -273,14 +273,11 @@ class SubprocessJob(Job):
                 except Exception as exc:
                     cleanup_errors.append(exc)
                 self.command_lease = None
-            if (
-                not cleanup_errors
-                and permission_audit is not None
-                and outcome[0] == "failed"
-                and outcome[1] not in (None, 0)
-            ):
+            if not cleanup_errors and permission_audit is not None:
                 try:
-                    self.sandbox_permission_denials = permission_audit.collect()
+                    denials = permission_audit.collect()
+                    if outcome[0] == "failed" and outcome[1] not in (None, 0):
+                        self.sandbox_permission_denials = denials
                 except Exception as exc:
                     audit_error = exc
             if audit_error is not None:

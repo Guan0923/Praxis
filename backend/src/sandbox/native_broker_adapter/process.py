@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import PureWindowsPath
 from typing import Any
 
@@ -52,6 +52,7 @@ class _NativeWindowsProcess:
         logon_sid: str,
         service_sid: str,
         desktop_name: str,
+        before_resume: Callable[[int, str], None],
     ) -> _NativeWindowsProcess:
         modules = _modules()
         pipe = modules["pipe"]
@@ -89,11 +90,12 @@ class _NativeWindowsProcess:
                 startup,
             )
             job.assign(process_handle)
+            before_resume(int(pid), logon_sid)
             process.ResumeThread(thread_handle)
         except Exception:
             job.terminate()
             job.close()
-            for handle in (thread_handle, process_handle):
+            for handle in (thread_handle, process_handle, parent_stdin, parent_stdout, parent_stderr):
                 if handle is not None:
                     try:
                         api.CloseHandle(handle)

@@ -131,7 +131,7 @@ def provision_fixed_accounts(
         accounts[role] = (sid_text, password)
 
     group_rights = ("SeBatchLogonRight", "SeDenyInteractiveLogonRight", "SeDenyRemoteInteractiveLogonRight")
-    service_rights = ("SeAssignPrimaryTokenPrivilege", "SeIncreaseQuotaPrivilege")
+    service_rights = ("SeAssignPrimaryTokenPrivilege", "SeIncreaseQuotaPrivilege", "SeSecurityPrivilege")
     try:
         group_sid, _, _ = win32security.LookupAccountName(None, group_name)
         policy_handle = win32security.LsaOpenPolicy(None, win32security.POLICY_ALL_ACCESS)

@@ -12,7 +12,7 @@ import time
 import uuid
 from base64 import b64decode, b64encode
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,7 @@ from ..native_windows import (
     WindowsSandboxAccount,
 )
 from ..native_windows.api import _modules
+from ..native_windows.permission_audit import CommandAudit, WindowsSecurityAudit
 from ..policy import FileAccessMode, NetworkMode, ResourceLimits
 from ..runtime.aggregate import AggregateResources
 from ..runtime.resources import ResourceMonitor, ResourceUsage
@@ -60,6 +61,9 @@ class _NativeLease:
     process: _NativeWindowsProcess
     desktop: WindowsPrivateDesktop
     resource_monitor: ResourceMonitor | None = None
+    command_audit: CommandAudit | None = None
+    audit_result: tuple[dict, ...] | None = None
+    audit_lock: Any = field(default_factory=threading.RLock)
     failure_code: str | None = None
     failure_message: str | None = None
     failure_report: dict | None = None
@@ -92,6 +96,7 @@ class WindowsNativeBrokerAdapter:
         credentials: BrokerCredentialPackage,
         service_sid: str,
         token_factory: WindowsRestrictedTokenFactory | None = None,
+        permission_auditor: WindowsSecurityAudit | None = None,
         desktop_factory=None,
         clock=None,
         reservation_ttl_seconds: int = 30,
@@ -101,6 +106,9 @@ class WindowsNativeBrokerAdapter:
         self.credentials = credentials
         self.service_sid = service_sid
         self.token_factory = token_factory or WindowsRestrictedTokenFactory(service_sid)
+        self._permission_auditor = permission_auditor or WindowsSecurityAudit(
+            account_sids=(credentials.offline_sid, credentials.online_sid)
+        )
         self.desktop_factory = desktop_factory or WindowsPrivateDesktop.create
         self._clock = clock or time.monotonic
         self._reservation_ttl_seconds = reservation_ttl_seconds
@@ -152,6 +160,7 @@ class WindowsNativeBrokerAdapter:
         file_mode = FileAccessMode(str(policy_value.get("file_mode") or FileAccessMode.READ_ONLY.value))
         network_mode = NetworkMode(str(policy_value.get("network_mode") or NetworkMode.NO_NETWORK.value))
         account = self._account(network_mode)
+        self._permission_auditor.prepare()
         reserved = self.token_factory.reserve(account, file_mode)
         reservation_id = f"reservation-{uuid.uuid4().hex}"
         workspaces = _required_absolute_paths(policy_value, "workspaces")
@@ -262,6 +271,7 @@ class WindowsNativeBrokerAdapter:
                 self._close_reservation(reservation)
                 raise SandboxInitializationError("Broker launch TEMP does not match the reservation")
         try:
+            command_audit = self._permission_auditor.start(reservation.account_sid)
             limits = ResourceLimits.from_mapping(
                 policy.get("limits") if isinstance(policy.get("limits"), Mapping) else None
             )
@@ -279,6 +289,7 @@ class WindowsNativeBrokerAdapter:
                 logon_sid=reservation.logon_sid,
                 service_sid=self.service_sid,
                 desktop_name=reservation.desktop.startup_name,
+                before_resume=command_audit.bind_process,
             )
         except Exception:
             reservation.desktop.close()
@@ -286,7 +297,15 @@ class WindowsNativeBrokerAdapter:
         finally:
             _close_handle(reservation.token)
         process_id = f"process-{uuid.uuid4().hex}"
-        lease = _NativeLease(process_id, backend_id, user_id, reservation.job_id, process, reservation.desktop)
+        lease = _NativeLease(
+            process_id,
+            backend_id,
+            user_id,
+            reservation.job_id,
+            process,
+            reservation.desktop,
+            command_audit=command_audit,
+        )
         monitor = ResourceMonitor(
             process.pid,
             limits,
@@ -359,6 +378,10 @@ class WindowsNativeBrokerAdapter:
             lease = self._processes.get(process_id)
         if lease is None or lease.backend_instance_id != backend_id:
             raise SandboxInitializationError("Broker process is unavailable")
+        if operation == "process_audit":
+            if _required_text(request, "user_id") != lease.user_id or _required_text(request, "job_id") != lease.job_id:
+                raise SandboxInitializationError("Broker audit ownership is invalid")
+            return self._finish_audit(lease)
         process = lease.process
         if lease.failure_code is not None and operation not in {"process_terminate", "process_kill"}:
             failure = SandboxResourceExceeded(
@@ -399,6 +422,35 @@ class WindowsNativeBrokerAdapter:
         if operation in {"process_terminate", "process_kill"}:
             return {"returncode": process.terminate()}
         raise SandboxInitializationError("Broker process operation is unsupported")
+
+    def _finish_audit(self, lease: _NativeLease) -> dict[str, Any]:
+        with lease.audit_lock:
+            return self._collect_audit(lease)
+
+    def _collect_audit(self, lease: _NativeLease) -> dict[str, Any]:
+        from ..native_windows.audit_policy import SandboxAuditUnavailable
+
+        if lease.command_audit is None:
+            raise SandboxAuditUnavailable("Broker command audit is unavailable.")
+        if lease.audit_result is None:
+            if lease.resource_monitor is not None:
+                lease.resource_monitor.stop()
+            self.aggregate.release(lease.process_id)
+            # Close process handles before waiting for the logoff audit event.
+            lease.process.close()
+            lease.desktop.close()
+            code = lease.process.returncode
+            if isinstance(code, bool) or not isinstance(code, int):
+                raise SandboxAuditUnavailable("Broker cannot verify the audited command exit code.")
+            lease.audit_result = lease.command_audit.collect() if code != 0 else ()
+        return {
+            "process_id": lease.process_id,
+            "pid": lease.process.pid,
+            "job_id": lease.job_id,
+            "user_id": lease.user_id,
+            "backend_instance_id": lease.backend_instance_id,
+            "denials": list(lease.audit_result),
+        }
 
     def release(self, request: Mapping[str, Any]) -> bool:
         backend_id = _required_text(request, "backend_instance_id")

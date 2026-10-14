@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from ..control.broker import WindowsBrokerClient
+from ..control.broker import BrokerCommandAudit, WindowsBrokerClient
 from ..control.maintenance import SandboxCommandLease, SandboxMaintenanceGate
 from ..errors import (
     SandboxError,
@@ -22,7 +22,6 @@ from ..errors import (
     SandboxPolicyError,
 )
 from ..native_windows import AclLeaseEntry, WindowsAclManager
-from ..native_windows.permission_audit import CommandAudit, WindowsSecurityAudit
 from ..policy import (
     FileAccessMode,
     NetworkMode,
@@ -94,7 +93,6 @@ class SandboxLauncher:
         lease_store_path: Path | None = None,
         proxy_factory=None,
         maintenance_gate: SandboxMaintenanceGate | None = None,
-        permission_auditor=None,
     ) -> None:
         self.broker = broker
         self.is_windows = os.name == "nt" if is_windows is None else is_windows
@@ -109,8 +107,7 @@ class SandboxLauncher:
         self._leases: dict[int, CommandLease] = {}
         self._proxies: dict[int, RunCommandProxy] = {}
         self._maintenance_leases: dict[int, SandboxCommandLease] = {}
-        self._permission_auditor = permission_auditor or WindowsSecurityAudit()
-        self._command_audits: dict[int, CommandAudit] = {}
+        self._command_audits: dict[int, BrokerCommandAudit] = {}
 
     def command_lease(self) -> SandboxCommandLease:
         return self.maintenance_gate.acquire_command()
@@ -170,7 +167,6 @@ class SandboxLauncher:
             maintenance_lease = self.command_lease()
             rollback.push(maintenance_lease.close)
             self._recover_once()
-            self._permission_auditor.prepare()
             policy_payload = {
                 **policy.to_dict(),
                 "workspaces": [str(path) for path in workspace_paths],
@@ -190,7 +186,6 @@ class SandboxLauncher:
             reservation_id = str(reservation["reservation_id"])
             logon_sid = str(reservation["logon_sid"])
             account_sid = str(reservation["account_sid"])
-            command_audit = self._permission_auditor.start(account_sid)
             service_sid = str(reservation["service_sid"])
             capability_sids = reservation["capability_sids"]
             if not isinstance(capability_sids, Mapping):
@@ -274,7 +269,7 @@ class SandboxLauncher:
                 service_sid=service_sid,
                 execute_paths=explicit_paths,
             )
-            command_audit.bind_process(process.pid, logon_sid)
+            command_audit = BrokerCommandAudit(self.broker, process, job_id=policy.job_id, user_id=job_context.user_id)
         except Exception as exc:
             if not rollback.run():
                 raise SandboxPathError(SandboxPathFailure.CLEANUP_FAILED, temp_dir) from exc
@@ -358,7 +353,7 @@ class SandboxLauncher:
                 cleaned = False
         return cleaned
 
-    def command_audit(self, process: Any) -> CommandAudit:
+    def command_audit(self, process: Any) -> BrokerCommandAudit:
         return self._command_audits[process.pid]
 
     def cleanup(self, process_or_pid: Any) -> bool:
@@ -373,6 +368,7 @@ class SandboxLauncher:
         cleaned = True
         broker_released = True
         if job_context is not None:
+            self._command_audits[pid].finish()
             try:
                 self.broker.release(job_context.policy.job_id, user_id=job_context.user_id)
             except Exception:

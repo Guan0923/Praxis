@@ -50,9 +50,13 @@ def security_privilege():
             win32api.GetCurrentProcess(), win32security.TOKEN_ADJUST_PRIVILEGES | win32security.TOKEN_QUERY
         )
         privilege = win32security.LookupPrivilegeValue(None, "SeSecurityPrivilege")
+        win32api.SetLastError(0)
         previous = win32security.AdjustTokenPrivileges(token, False, [(privilege, win32security.SE_PRIVILEGE_ENABLED)])
-        if win32api.GetLastError():
-            raise SandboxAuditUnavailable("Windows permission auditing requires SeSecurityPrivilege.")
+        error = win32api.GetLastError()
+        if error:
+            raise SandboxAuditUnavailable(
+                f"Windows permission auditing requires SeSecurityPrivilege (Windows error {error})."
+            )
         yield
     finally:
         if previous is not None:
@@ -116,37 +120,10 @@ class WindowsAuditPolicy:
         sid = win32security.ConvertStringSidToSid(account_sid)
         raw_sid = ctypes.create_string_buffer(bytes(sid))
         with security_privilege():
-            self._ensure_event_categories()
             self._ensure_system_policy()
             self._ensure_user_policy(raw_sid)
             self._ensure_global_sacl("File", raw_sid, 0x001F01FF)
             self._ensure_global_sacl("Key", raw_sid, 0x000F003F)
-
-    def _ensure_event_categories(self) -> None:
-        import win32security
-
-        handle = win32security.LsaOpenPolicy(
-            None, win32security.POLICY_VIEW_AUDIT_INFORMATION | win32security.POLICY_SET_AUDIT_REQUIREMENTS
-        )
-        try:
-            enabled, previous = win32security.LsaQueryInformationPolicy(
-                handle, win32security.PolicyAuditEventsInformation
-            )
-            updated = list(previous)
-            # Enable object failures, process creation and logoff records without disabling existing audits.
-            for category, flags in ((2, 2), (7, 1), (1, 1)):
-                updated[category] = (updated[category] & ~4) | flags
-            if not enabled or tuple(updated) != previous:
-                win32security.LsaSetInformationPolicy(
-                    handle, win32security.PolicyAuditEventsInformation, (True, tuple(updated))
-                )
-            enabled, actual = win32security.LsaQueryInformationPolicy(
-                handle, win32security.PolicyAuditEventsInformation
-            )
-            if not enabled or any(actual[category] & flags != flags for category, flags in ((2, 2), (7, 1), (1, 1))):
-                raise SandboxAuditUnavailable("Required Windows audit categories are not enabled.")
-        finally:
-            handle.Close()
 
     def _ensure_user_policy(self, sid) -> None:
         guids = (_Guid * 2)(_Guid.parse(_FILE_SYSTEM), _Guid.parse(_REGISTRY))
