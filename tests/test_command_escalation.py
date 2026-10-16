@@ -322,6 +322,30 @@ def test_native_windows_denial_then_approved_host_retry(tmp_path: Path, allow: b
         commands.close()
 
 
+def test_successful_exit_with_broker_audit_failure_is_not_success(tmp_path: Path) -> None:
+    from backend.sandbox.native_windows.audit_policy import SandboxAuditUnavailable
+
+    class UnavailableAudit:
+        def collect(self):
+            raise SandboxAuditUnavailable("Broker audit unavailable")
+
+    class Launcher(DirectTestSandboxLauncher):
+        def command_audit(self, _process):
+            return UnavailableAudit()
+
+    launcher = Launcher()
+    approvals = []
+    context = command_context(tmp_path, launcher, lambda *_args: approvals.append(True) or True)
+    commands = WorkspaceCommand(tmp_path)
+    try:
+        with pytest.raises(SandboxAuditUnavailable, match="Broker audit unavailable"):
+            commands.run_with_context(context, "echo audit-check")
+        assert approvals == []
+        assert not launcher._leases
+    finally:
+        commands.close()
+
+
 def test_second_permission_failure_is_final(tmp_path: Path) -> None:
     requests = []
     context = command_context(tmp_path, DenyingLauncher(), lambda *args: requests.append(args) or True)

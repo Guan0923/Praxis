@@ -1,8 +1,8 @@
 import requests
 
-from backend.providers.transport import _transport_error
 from backend.domain.input_message import InputMessage
 from backend.domain.runtime_state import InMemoryNodeStore
+from backend.providers.transport import _transport_error
 from backend.runtime.core.events import RuntimeEvent
 from backend.runtime.node_bridge import RuntimeEventNodeBridge
 

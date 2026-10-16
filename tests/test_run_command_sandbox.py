@@ -29,12 +29,15 @@ from backend.sandbox.native_windows import AclLeaseEntry, WindowsAclManager, ran
 from backend.sandbox.native_windows.desktop import _station_participant_rights
 from backend.sandbox.native_windows.wfp import build_static_filter_specs
 from backend.sandbox.runtime.proxy import ProxyCredential, RunCommandProxy
-from tests.testing_sandbox import FakeSecurityAudit
+from tests.testing_sandbox import FakeCommandAudit, FakeSecurityAudit
 
 
 @pytest.fixture(autouse=True)
 def fake_permission_audit(monkeypatch):
-    monkeypatch.setattr("backend.sandbox.runtime.launcher.WindowsSecurityAudit", FakeSecurityAudit)
+    monkeypatch.setattr(
+        "backend.sandbox.runtime.launcher.BrokerCommandAudit", lambda *_args, **_kwargs: FakeCommandAudit()
+    )
+    monkeypatch.setattr("backend.sandbox.native_broker_adapter.adapter.WindowsSecurityAudit", FakeSecurityAudit)
 
 
 @pytest.mark.parametrize("value", [0, 300, 600, 600.0, None])

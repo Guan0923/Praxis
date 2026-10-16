@@ -241,6 +241,7 @@ def test_existing_account_credentials_are_preserved(monkeypatch, tmp_path):
     assert marker["generation"] == package.generation
     assert writes == [(package.offline_name, 1008), (package.online_name, 1008)]
     assert network == [(package.offline_sid, package.online_sid, 17831)]
+    assert "SeSecurityPrivilege" in rights[accounts._service_sid("PraxisSandboxBroker")]
 
 
 def test_service_query_error_does_not_mean_missing(monkeypatch):

@@ -83,7 +83,7 @@ def _status_transport(key: bytes, **overrides: object):
             "nonce": request["nonce"],
             "installed": True,
             "healthy": True,
-            "version": "3",
+            "version": "4",
             "generation": "generation-1",
             "proxy_port": 17831,
             "token_model": "capability_sid_v3",
@@ -585,7 +585,10 @@ def test_injected_runner_executes_one_local_transaction() -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows service host test")
-def test_pywin32_service_host_overwrites_changed_binaries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("zlib_location", [None, "python", "library-bin", "both"])
+def test_pywin32_service_host_overwrites_changed_binaries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, zlib_location: str | None
+) -> None:
     host = tmp_path / "runtime" / "pythonservice.exe"
     host.parent.mkdir()
     host.write_bytes(b"host")
@@ -600,6 +603,14 @@ def test_pywin32_service_host_overwrites_changed_binaries(monkeypatch: pytest.Mo
     servicemanager_pyd.write_bytes(b"service-manager")
     base_prefix = tmp_path / "base runtime" / "python"
     environment_prefix = tmp_path / "environment runtime" / "venv"
+    if zlib_location in {"python", "both"}:
+        (python_dll.parent / "zlib.dll").write_bytes(b"python-zlib")
+    if zlib_location in {"library-bin", "both"}:
+        library_bin = base_prefix / "Library" / "bin"
+        library_bin.mkdir(parents=True)
+        (library_bin / "zlib.dll").write_bytes(b"library-zlib")
+    if zlib_location is not None:
+        (host.parent / "zlib.dll").write_bytes(b"outdated-zlib")
     monkeypatch.setattr(sys, "base_prefix", rf"\\?\{base_prefix}")
     monkeypatch.setattr(sys, "prefix", rf"\\?\{environment_prefix}")
     module = types.SimpleNamespace(LocatePythonServiceExe=lambda: rf"\\?\{host}")
@@ -623,6 +634,11 @@ def test_pywin32_service_host_overwrites_changed_binaries(monkeypatch: pytest.Mo
     assert (host.parent / python_dll.name).read_bytes() == b"python-runtime"
     assert (host.parent / pywintypes_dll.name).read_bytes() == b"pywin32-runtime"
     assert (host.parent / servicemanager_pyd.name).read_bytes() == b"service-manager"
+    if zlib_location is None:
+        assert not (host.parent / "zlib.dll").exists()
+    else:
+        expected_zlib = b"library-zlib" if zlib_location == "library-bin" else b"python-zlib"
+        assert (host.parent / "zlib.dll").read_bytes() == expected_zlib
     path_file = host.parent / f"python{sys.version_info.major}{sys.version_info.minor}._pth"
     assert "\\\\?\\" not in path_file.read_text(encoding="utf-8")
 

@@ -15,12 +15,19 @@ class FakeCommandAudit:
 
     def __init__(self, denials=()) -> None:
         self.denials = denials
+        self.proxy_denials = ()
+
+    def finish(self):
+        pass
 
     def collect(self, **_kwargs):
         return self.denials
 
 
 class FakeSecurityAudit:
+    def __init__(self, **_kwargs):
+        pass
+
     def prepare(self):
         pass
 

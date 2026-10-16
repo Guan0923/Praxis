@@ -18,6 +18,12 @@
 - Startup failure, service query failure, and UAC cancellation pause the current page. Polling continues read-only, retaining the original failure until health returns. Reloading the page allows a new observation cycle.
 - Recovery is labeled as recovery, not repair. The resource panel only polls a healthy sandbox; otherwise it states that usage is unavailable.
 
+## Windows service-host DLL dependencies
+
+- Installation and full repair prepare the DLLs beside `pythonservice.exe`. For Conda-based Python, this includes `zlib.dll`, preferring the directory containing the active Python DLL and falling back to the base environment's `Library\bin`. Changed DLLs are refreshed using the same content comparison as the other runtime binaries.
+- This dependency must be available before Python starts; Python bootstrap calls to `os.add_dll_directory()` cannot fix a native-loader failure. The service does not rely on an activated Conda shell or changes to the machine PATH.
+- Existing installations need their host binaries refreshed to receive this fix. The start-only recovery path intentionally does not prepare binaries. A missing native dependency can cause the host to exit with `0xC0000135`, followed by SCM error 1053; increasing the startup timeout does not resolve that failure.
+
 ## Verification and deployment
 
 - Worktree: mini_agent-delete-resource-usage; branch: codex/conversation-delete-resource-usage. Earlier uncommitted changes remain included.

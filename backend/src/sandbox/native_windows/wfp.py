@@ -1,8 +1,8 @@
 """Persistent Windows Filtering Platform policy for fixed sandbox accounts.
 
-The elevated installation helper is the only caller of this module.  The
-Broker never mutates WFP state at run time: filters are keyed by the fixed
-Offline/Online account identities and survive helper/service restarts.
+The elevated installation helper owns mutations in this module. The Broker
+only reads filter IDs at run time: filters are keyed by the fixed Offline/Online
+account identities and survive helper/service restarts.
 """
 
 from __future__ import annotations
@@ -16,6 +16,9 @@ from ctypes import wintypes
 from dataclasses import dataclass
 
 _RPC_C_AUTHN_WINNT = 10
+_FWPM_ACTRL_ENUM = 0x00000020
+_FWPM_ACTRL_READ = 0x00000080
+_DACL_SECURITY_INFORMATION = 0x00000004
 
 _FWP_EMPTY = 0
 _FWP_UINT8 = 1
@@ -287,6 +290,29 @@ class _WfpApi:
         self.library.FwpmFilterAdd0.restype = ctypes.c_uint32
         self.library.FwpmFilterDeleteByKey0.argtypes = [wintypes.HANDLE, ctypes.POINTER(_Guid)]
         self.library.FwpmFilterDeleteByKey0.restype = ctypes.c_uint32
+        self.library.FwpmFilterGetSecurityInfoByKey0.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(_Guid),
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self.library.FwpmFilterGetSecurityInfoByKey0.restype = wintypes.DWORD
+        self.library.FwpmFilterSetSecurityInfoByKey0.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(_Guid),
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
+        self.library.FwpmFilterSetSecurityInfoByKey0.restype = wintypes.DWORD
+        self.advapi.GetSecurityDescriptorLength.argtypes = [ctypes.c_void_p]
+        self.advapi.GetSecurityDescriptorLength.restype = wintypes.DWORD
         self.library.FwpmFilterCreateEnumHandle0.argtypes = [
             wintypes.HANDLE,
             ctypes.c_void_p,
@@ -378,9 +404,11 @@ def sandbox_block_filter_ids() -> frozenset[int]:
         api.library.FwpmEngineClose0(engine)
 
 
-def configure_static_wfp(offline_sid: str, online_sid: str, proxy_port: int) -> None:
-    """Atomically replace Praxis's persistent WFP filters."""
+def configure_static_wfp(offline_sid: str, online_sid: str, proxy_port: int, *, service_sid: str) -> None:
+    """Replace persistent filters, then grant the Broker read-only audit access."""
 
+    if not service_sid.startswith("S-1-5-80-") or not _SID_PATTERN.fullmatch(service_sid):
+        raise ValueError("Broker WFP reader must be a service SID")
     specs = build_static_filter_specs(offline_sid, online_sid, proxy_port)
     api = _WfpApi()
     handle = wintypes.HANDLE()
@@ -424,12 +452,90 @@ def configure_static_wfp(offline_sid: str, online_sid: str, proxy_port: int) -> 
             _add_filter(api, handle, provider_key, sublayer_key, spec)
         api.check(api.library.FwpmTransactionCommit0(handle), "transaction commit")
         transaction_started = False
+        # WFP security updates are forbidden inside a transaction.
+        _grant_filter_access(api, handle, None, service_sid, _FWPM_ACTRL_ENUM)
+        for spec in specs:
+            key = _Guid.from_uuid(spec.key)
+            _grant_filter_access(api, handle, ctypes.byref(key), service_sid, _FWPM_ACTRL_READ)
     except Exception:
         if transaction_started:
             api.library.FwpmTransactionAbort0(handle)
         raise
     finally:
         api.library.FwpmEngineClose0(handle)
+
+
+def _read_filter_dacl(api: _WfpApi, engine: wintypes.HANDLE, key):
+    import win32security
+
+    descriptor = ctypes.c_void_p()
+    api.check(
+        api.library.FwpmFilterGetSecurityInfoByKey0(
+            engine, key, _DACL_SECURITY_INFORMATION, None, None, None, None, ctypes.byref(descriptor)
+        ),
+        "filter security read",
+    )
+    try:
+        size = api.advapi.GetSecurityDescriptorLength(descriptor)
+        if not size:
+            raise OSError("WFP returned an invalid filter security descriptor")
+        copied = win32security.SECURITY_DESCRIPTOR(ctypes.string_at(descriptor, size))
+        dacl = copied.GetSecurityDescriptorDacl()
+        if dacl is None:
+            raise OSError("WFP filter security descriptor has a null DACL")
+        return dacl
+    finally:
+        api.library.FwpmFreeMemory0(ctypes.byref(descriptor))
+
+
+def _has_filter_access(dacl, sid, rights: int) -> bool:
+    import win32security
+
+    granted = 0
+    for index in range(dacl.GetAceCount()):
+        ace = dacl.GetAce(index)
+        if ace[0][0] == win32security.ACCESS_ALLOWED_ACE_TYPE and not ace[0][1] & 0x08 and ace[-1] == sid:
+            granted |= ace[1]
+    return granted & rights == rights
+
+
+def _grant_filter_access(api: _WfpApi, engine: wintypes.HANDLE, key, service_sid: str, rights: int) -> None:
+    import win32security
+
+    sid = win32security.ConvertStringSidToSid(service_sid)
+    dacl = _read_filter_dacl(api, engine, key)
+    if _has_filter_access(dacl, sid, rights):
+        return
+    dacl.SetEntriesInAcl(
+        [
+            {
+                "AccessPermissions": rights,
+                "AccessMode": win32security.GRANT_ACCESS,
+                "Inheritance": 0,
+                "Trustee": {
+                    "TrusteeForm": win32security.TRUSTEE_IS_SID,
+                    "TrusteeType": win32security.TRUSTEE_IS_USER,
+                    "Identifier": sid,
+                },
+            }
+        ]
+    )
+    descriptor = win32security.SECURITY_DESCRIPTOR()
+    descriptor.SetSecurityDescriptorDacl(1, dacl, 0)
+    # PyACL has no buffer protocol; extract its DACL from the self-relative SD.
+    raw = bytes(descriptor)
+    offset = int.from_bytes(raw[16:20], "little")
+    if not 20 <= offset < len(raw):
+        raise OSError("Invalid WFP grant security descriptor")
+    buffer = ctypes.create_string_buffer(raw)
+    api.check(
+        api.library.FwpmFilterSetSecurityInfoByKey0(
+            engine, key, _DACL_SECURITY_INFORMATION, None, None, ctypes.byref(buffer, offset), None
+        ),
+        "filter security grant",
+    )
+    if not _has_filter_access(_read_filter_dacl(api, engine, key), sid, rights):
+        raise OSError("Broker WFP read access could not be verified")
 
 
 def _delete_owned_filters(api: _WfpApi, engine: wintypes.HANDLE) -> None:

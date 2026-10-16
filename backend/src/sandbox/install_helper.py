@@ -221,14 +221,16 @@ def _provision_fixed_accounts(data_path: Path, service_name: str, proxy_port: in
         data_path,
         service_name,
         proxy_port,
-        configure_network=_configure_static_network,
+        configure_network=lambda offline_sid, online_sid, port: _configure_static_network(
+            offline_sid, online_sid, port, service_name=service_name
+        ),
     )
 
 
-def _configure_static_network(offline_sid: str, online_sid: str, proxy_port: int) -> None:
+def _configure_static_network(offline_sid: str, online_sid: str, proxy_port: int, *, service_name: str) -> None:
     from .native_windows.wfp import configure_static_wfp
 
-    configure_static_wfp(offline_sid, online_sid, proxy_port)
+    configure_static_wfp(offline_sid, online_sid, proxy_port, service_sid=_service_sid(service_name))
 
 
 def _initialize_installation_key(data_path: Path) -> None:

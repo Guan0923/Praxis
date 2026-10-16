@@ -142,7 +142,8 @@ def test_authorization_grant_uses_local_repository_after_restart() -> None:
     )
 
 
-def test_broker_request_authenticates_nonce() -> None:
+@pytest.mark.parametrize("version", ["3", "4"])
+def test_broker_request_authenticates_nonce(version: str) -> None:
     key = b"test-installation-key"
 
     def transport(payload: bytes) -> bytes:
@@ -151,7 +152,7 @@ def test_broker_request_authenticates_nonce() -> None:
             "nonce": request["nonce"],
             "installed": True,
             "healthy": True,
-            "version": "3",
+            "version": version,
             "generation": "test-generation",
             "proxy_port": 17831,
             "token_model": "capability_sid_v3",
@@ -164,7 +165,7 @@ def test_broker_request_authenticates_nonce() -> None:
         return json.dumps(response, separators=(",", ":")).encode()
 
     client = WindowsBrokerClient(installation_key=key, transport=transport, is_windows=True)
-    assert client.status().healthy
+    assert client.status().healthy is (version == "4")
 
 
 def test_broker_managed_process_proxies_communicate() -> None:
@@ -634,6 +635,7 @@ def test_launcher_releases_broker_before_removing_temp_dir(tmp_path: Path) -> No
     )
     launcher._temp_dirs[1234] = temp_dir
     launcher._job_contexts[1234] = SandboxJobContext("user-1", policy)
+    launcher._command_audits[1234] = types.SimpleNamespace(finish=lambda: None)
     lease = CommandLease(
         "job",
         "reservation",
@@ -705,6 +707,7 @@ def test_cleanup_keeps_acl_and_temp_until_broker_release_is_confirmed(tmp_path: 
     launcher.lease_store.add(lease)
     launcher._temp_dirs[1234] = temp_dir
     launcher._job_contexts[1234] = SandboxJobContext("user-1", SandboxPolicy((workspace,), "session", "job"))
+    launcher._command_audits[1234] = types.SimpleNamespace(finish=lambda: None)
     launcher._leases[1234] = lease
 
     assert not launcher.cleanup(1234)

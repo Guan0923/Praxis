@@ -258,6 +258,34 @@ def test_start_helper_does_not_run_installation_steps(monkeypatch):
     assert result == 0 and started == ["test-service"]
 
 
+def test_start_helper_retries_after_acl_on_access_denied(monkeypatch, tmp_path):
+    from backend.sandbox import install_helper
+    from backend.sandbox.control import service_state
+
+    started = []
+    applied = []
+
+    def mock_start(svc):
+        started.append(svc)
+        if len(started) == 1:
+            err = OSError(5, "Access is denied")
+            err.winerror = 5
+            raise err
+
+    test_exe = tmp_path / "pythonservice.exe"
+    test_exe.write_text("bin", encoding="utf-8")
+
+    monkeypatch.setattr(service_state, "start_service", mock_start)
+    monkeypatch.setattr(install_helper, "_apply_acl_target", lambda path, sid, rights, inherit: applied.append(path))
+
+    result = install_helper._run_transaction(
+        {"operation": "start", "service_name": "test-service", "service_command": [str(test_exe)]}
+    )
+    assert result == 0
+    assert started == ["test-service", "test-service"]
+    assert applied == [test_exe]
+
+
 def test_health_query_failure_never_falls_through_to_repair():
     client = Controller("running")
     client.status = lambda **_: BrokerStatus(
@@ -394,3 +422,72 @@ def test_missing_controller_preserves_initialization_error_and_pauses():
         client.repair()
     assert caught.value is original
     assert original.broker_recovery_code == "broker_service_state_failed"
+
+
+def test_installer_start_elevates_on_access_denied(monkeypatch):
+    from backend.sandbox.broker_service.installer import WindowsServiceInstaller
+    from backend.sandbox.control import service_state
+
+    executed = []
+
+    def mock_runner(cmd, **_):
+        executed.append(cmd)
+        return SimpleNamespace(returncode=0)
+
+    installer = WindowsServiceInstaller(
+        ("dummy.exe",),
+        service_name="TestBrokerService",
+        runner=mock_runner,
+        is_windows=True,
+    )
+
+    def fail_start(_):
+        err = OSError(5, "Access is denied")
+        err.winerror = 5
+        raise err
+
+    monkeypatch.setattr(service_state, "start_service", fail_start)
+    installer.start()
+
+    assert ["sc.exe", "start", "TestBrokerService"] in executed
+
+
+def test_broker_client_start_delegates_to_repair():
+    client = Controller("stopped")
+    broker = WindowsBrokerClient(installer=client, is_windows=True)
+    broker.status = client.status
+    result = broker.start()
+    assert result.healthy
+    assert client.calls == ["start"]
+
+
+def test_http_start_endpoint(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.api.routes import sandbox
+    from backend.sandbox.control.maintenance import SandboxMaintenanceGate
+
+    controller = Controller("stopped")
+    broker = WindowsBrokerClient(installer=controller, is_windows=True)
+    broker.status = controller.status
+    app = FastAPI()
+    app.include_router(sandbox.router)
+    app.state.web = SimpleNamespace(
+        sandbox_broker=broker,
+        sandbox_maintenance=SandboxMaintenanceGate(),
+        sandbox_manifest_path=tmp_path / "manifest.json",
+    )
+    monkeypatch.setattr(sandbox, "_manifest_has_records", lambda _: False)
+    with TestClient(app) as client:
+        response = client.post("/api/sandbox/start")
+        assert response.status_code == 200
+        assert controller.calls == ["start"]
+
+
+def test_stopped_service_with_unhealthy_configuration_repairs_without_blind_start():
+    client = Controller("stopped")
+    client.configuration_healthy = lambda: False
+    client.start = lambda: pytest.fail("blind start executed on unhealthy configuration")
+    run(client)
+    assert client.calls == ["repair"]

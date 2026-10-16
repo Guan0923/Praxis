@@ -53,6 +53,49 @@ def test_accepts_root_and_child_processes_only_in_the_reserved_logon():
     assert [entry["process_id"] for entry in results] == [123, 456]
 
 
+def test_security_log_reads_enable_broker_audit_privilege(monkeypatch):
+    from contextlib import contextmanager
+
+    from backend.sandbox.native_windows import permission_audit as implementation
+
+    events = []
+
+    @contextmanager
+    def privilege():
+        events.append("enabled")
+        yield
+        events.append("restored")
+
+    monkeypatch.setattr(implementation, "security_privilege", privilege)
+    source = object.__new__(implementation.SecurityEventSource)
+
+    def read(*_args, **_kwargs):
+        assert events == ["enabled"]
+        return ["event"]
+
+    source._read_events = read
+    assert source._events("*") == ["event"]
+    assert events == ["enabled", "restored"]
+
+
+def test_policy_uses_advanced_audit_api_without_lsa_write_access(monkeypatch):
+    import sys
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from backend.sandbox.native_windows import audit_policy as implementation
+
+    monkeypatch.setitem(sys.modules, "win32security", SimpleNamespace(ConvertStringSidToSid=lambda _sid: b"sid"))
+    monkeypatch.setattr(implementation, "security_privilege", nullcontext)
+    policy = object.__new__(implementation.WindowsAuditPolicy)
+    calls = []
+    policy._ensure_system_policy = lambda: calls.append("system")
+    policy._ensure_user_policy = lambda _sid: calls.append("user")
+    policy._ensure_global_sacl = lambda kind, *_args: calls.append(kind)
+    policy.ensure(SID)
+    assert calls == ["system", "user", "File", "Key"]
+
+
 def test_audit_source_failure_is_not_treated_as_no_permission_denial():
     class Unavailable:
         def latest_record(self):
