@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import AppSidebar from "./AppSidebar";
@@ -54,6 +54,51 @@ function renderSidebar(archivedCount = 0, conversations: Conversation[] = [conve
 }
 
 describe("AppSidebar utility navigation", () => {
+  it("separates icon navigation from the workspace explorer and keeps rail actions functional", async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    const onOpenSettings = vi.fn();
+    render(
+      <AppSidebar
+        profile={{ display_name: "本地用户", agent_preferences: "" }}
+        conversations={[conversation]}
+        archivedCount={3}
+        currentId={conversation.id}
+        page="benchmark"
+        onNew={vi.fn()}
+        onSelect={vi.fn()}
+        onNavigate={onNavigate}
+        onRename={vi.fn()}
+        onArchive={vi.fn()}
+        onDelete={vi.fn()}
+        onOpenSettings={onOpenSettings}
+      />,
+    );
+
+    const rail = screen.getByRole("navigation", { name: "工作台导航" });
+    const explorer = screen.getByRole("region", { name: "工作空间" });
+    expect(rail.parentElement).toBe(explorer.parentElement);
+    expect(within(rail).getByRole("img", { name: "Praxis" })).toBeInTheDocument();
+    expect(within(explorer).getByRole("button", { name: "新建对话" })).toBeInTheDocument();
+    expect(within(explorer).getByRole("button", { name: "新建项目" })).toBeInTheDocument();
+    expect(within(rail).queryByRole("button", { name: "新建对话" })).not.toBeInTheDocument();
+    expect(within(explorer).queryByRole("button", { name: "Benchmark" })).not.toBeInTheDocument();
+    for (const name of ["对话工作台", "Benchmark", "回收站 (3)"]) {
+      const action = within(rail).getByRole("button", { name });
+      expect(action).toHaveClass("sidebar-rail-action");
+      expect(action.textContent?.trim()).toBe("");
+      expect(action).toHaveAttribute("title");
+    }
+    const chat = within(rail).getByRole("button", { name: "对话工作台" });
+    expect(chat).not.toHaveAttribute("aria-current");
+    expect(within(rail).getByRole("button", { name: "Benchmark" })).toHaveAttribute("aria-current", "page");
+    chat.focus();
+    await user.keyboard("{Enter}");
+    expect(onNavigate).toHaveBeenCalledWith("chat");
+    await user.click(within(rail).getByRole("button", { name: "个人简介：本地用户" }));
+    expect(onOpenSettings).toHaveBeenCalledOnce();
+  });
+
   it("keeps sidebar content and its animation class across page navigation", () => {
     const props = {
       profile: { display_name: "Local", agent_preferences: "" },
@@ -99,14 +144,15 @@ describe("AppSidebar utility navigation", () => {
 
     const header = document.querySelector(".sidebar-header");
     expect(header).not.toBeNull();
-    expect(screen.getByText("Praxis", { selector: ".sidebar-project-title" })).toBeInTheDocument();
+    expect(within(header as HTMLElement).getByText("Praxis")).toBeInTheDocument();
+    expect(within(header as HTMLElement).getByText("工作空间")).toHaveClass("sidebar-project-title");
     expect(screen.getByRole("button", { name: "折叠侧边栏" })).toHaveAttribute("aria-expanded", "true");
     expect(document.querySelectorAll(".sidebar-reveal-item")).toHaveLength(6);
     await user.click(screen.getByRole("button", { name: "折叠侧边栏" }));
     expect(onToggleCollapse).toHaveBeenCalledOnce();
   });
 
-  it("uses expand semantics when the sidebar is collapsed", () => {
+  it("keeps the rail available while hiding only the explorer when collapsed", () => {
     render(
       <AppSidebar
         profile={{ display_name: "账户名称", agent_preferences: "" }}
@@ -125,7 +171,41 @@ describe("AppSidebar utility navigation", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "展开侧边栏" })).toHaveAttribute("aria-expanded", "false");
+    const rail = screen.getByRole("navigation", { name: "工作台导航" });
+    const chat = within(rail).getByRole("button", { name: "对话工作台" });
+    expect(chat).toHaveAttribute("aria-expanded", "false");
+    expect(document.getElementById(chat.getAttribute("aria-controls")!)).toHaveAttribute("hidden");
+    expect(screen.queryByRole("region", { name: "工作空间" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "展开侧边栏" })).not.toBeInTheDocument();
+  });
+
+  it("reuses the rail chat button to toggle the explorer and return from other pages", () => {
+    const onToggleCollapse = vi.fn();
+    const onNavigate = vi.fn();
+    const props = {
+      profile: { display_name: "Local", agent_preferences: "" },
+      conversations: [conversation], archivedCount: 0, currentId: conversation.id,
+      onNew: vi.fn(), onSelect: vi.fn(), onNavigate,
+      onRename: vi.fn(), onArchive: vi.fn(), onDelete: vi.fn(), onToggleCollapse,
+    };
+    const { rerender } = render(<AppSidebar {...props} page="chat" />);
+    const rail = screen.getByRole("navigation", { name: "工作台导航" });
+    const chat = within(rail).getByRole("button", { name: "对话工作台" });
+    fireEvent.click(chat);
+    expect(onToggleCollapse).toHaveBeenCalledTimes(1);
+    expect(onNavigate).not.toHaveBeenCalled();
+    rerender(<AppSidebar {...props} page="chat" collapsed />);
+    expect(screen.getByRole("navigation", { name: "工作台导航" })).toBe(rail);
+    fireEvent.click(chat);
+    expect(onToggleCollapse).toHaveBeenCalledTimes(2);
+    rerender(<AppSidebar {...props} page="benchmark" />);
+    fireEvent.click(chat);
+    expect(onNavigate).toHaveBeenLastCalledWith("chat");
+    expect(onToggleCollapse).toHaveBeenCalledTimes(2);
+    rerender(<AppSidebar {...props} page="trash" collapsed />);
+    fireEvent.click(chat);
+    expect(onNavigate).toHaveBeenLastCalledWith("chat");
+    expect(onToggleCollapse).toHaveBeenCalledTimes(3);
   });
 
   it("uses the shared create-button style for new conversations and projects", async () => {
@@ -174,6 +254,32 @@ describe("AppSidebar utility navigation", () => {
     await user.click(screen.getByRole("button", { name: "Benchmark" }));
     expect(onNavigate).toHaveBeenNthCalledWith(1, "trash");
     expect(onNavigate).toHaveBeenNthCalledWith(2, "benchmark");
+  });
+
+  it("marks the active utility destination without changing navigation", async () => {
+    const { view, onNavigate } = renderSidebar();
+    const props = {
+      profile: { display_name: "本地用户", agent_preferences: "" },
+      conversations: [conversation], archivedCount: 0, currentId: conversation.id,
+      onNew: vi.fn(), onSelect: vi.fn(), onNavigate,
+      onRename: vi.fn(), onArchive: vi.fn(), onDelete: vi.fn(),
+    };
+
+    for (const page of ["trash", "benchmark", "chat"] as const) {
+      view.rerender(<AppSidebar {...props} page={page} />);
+      for (const [destination, name] of [["chat", "对话工作台"], ["trash", "回收站"], ["benchmark", "Benchmark"]] as const) {
+        const button = screen.getByRole("button", { name });
+        if (page === destination) {
+          expect(button).toHaveAttribute("aria-current", "page");
+          expect(button).toHaveClass("sidebar-nav-active");
+        } else {
+          expect(button).not.toHaveAttribute("aria-current");
+          expect(button).not.toHaveClass("sidebar-nav-active");
+        }
+      }
+    }
+    await userEvent.click(screen.getByRole("button", { name: "Benchmark" }));
+    expect(onNavigate).toHaveBeenCalledWith("benchmark");
   });
 
   it("renders project history above ordinary history and keeps the selected project collapsible", async () => {

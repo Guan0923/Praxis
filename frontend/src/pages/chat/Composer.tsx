@@ -47,6 +47,7 @@ export interface ComposerProps {
   permissionPending?: boolean;
   reasoningPending?: boolean;
   todos: TodoItem[] | null;
+  home?: boolean;
   todoClosable?: boolean;
   onTodoClose?: () => void;
   usagePercent?: number;
@@ -147,11 +148,11 @@ export default function Composer(props: ComposerProps) {
   );
   const settingsControls = (
     <Space className="composer-settings-controls" size={[6, 6]} wrap>
-      <Select virtual={false} className="mode-picker" placement="topLeft" open={props.openSettingsSelect === "mode"} aria-label="运行模式" loading={props.modePending} disabled={props.disabled || props.modePending} value={props.mode} options={[{ value: "agent", label: "⚙ Agent" }, { value: "plan", label: "📋 Plan" }]} onChange={props.onModeChange} onOpenChange={(open) => props.onSettingsSelectChange(open ? "mode" : null)} />
-      <Select virtual={false} className="composer-picker" placement="topLeft" open={props.openSettingsSelect === "permission"} aria-label="权限模式" loading={props.permissionPending} disabled={props.disabled || props.permissionPending} value={props.permissionMode} options={[{ value: "read_only", label: "只读" }, { value: "workspace_write", label: "工作区读写" }, { value: "full_access", label: "完全访问" }]} onChange={props.onPermissionChange} onOpenChange={(open) => props.onSettingsSelectChange(open ? "permission" : null)} />
+      <Select virtual={false} variant="borderless" className="mode-picker" placement="topLeft" open={props.openSettingsSelect === "mode"} aria-label="运行模式" loading={props.modePending} disabled={props.disabled || props.modePending} value={props.mode} options={[{ value: "agent", label: <><RobotOutlined /> Agent</> }, { value: "plan", label: <><BulbOutlined /> Plan</> }]} onChange={props.onModeChange} onOpenChange={(open) => props.onSettingsSelectChange(open ? "mode" : null)} />
+      <Select virtual={false} variant="borderless" className="composer-picker" placement="topLeft" open={props.openSettingsSelect === "permission"} aria-label="权限模式" loading={props.permissionPending} disabled={props.disabled || props.permissionPending} value={props.permissionMode} options={[{ value: "read_only", label: "只读" }, { value: "workspace_write", label: "工作区读写" }, { value: "full_access", label: "完全访问" }]} onChange={props.onPermissionChange} onOpenChange={(open) => props.onSettingsSelectChange(open ? "permission" : null)} />
       <Space size={4} align="center">
         {usageIndicator}
-        <Select virtual={false} className="composer-picker" placement="topLeft" open={props.openSettingsSelect === "reasoning"} aria-label="思考等级" loading={props.reasoningPending} disabled={props.disabled || props.reasoningPending} value={props.reasoningEffort} options={(Object.keys(REASONING_LABELS) as ReasoningEffort[]).map((level) => ({ value: level, label: `${level}` }))} onChange={props.onReasoningChange} onOpenChange={(open) => props.onSettingsSelectChange(open ? "reasoning" : null)} />
+        <Select virtual={false} variant="borderless" className="composer-picker" placement="topLeft" open={props.openSettingsSelect === "reasoning"} aria-label="思考等级" loading={props.reasoningPending} disabled={props.disabled || props.reasoningPending} value={props.reasoningEffort} options={(Object.keys(REASONING_LABELS) as ReasoningEffort[]).map((level) => ({ value: level, label: `${level}` }))} onChange={props.onReasoningChange} onOpenChange={(open) => props.onSettingsSelectChange(open ? "reasoning" : null)} />
       </Space>
     </Space>
   );
@@ -285,7 +286,7 @@ export default function Composer(props: ComposerProps) {
           <FileMentionEditor
             ref={props.editorRef}
             disabled={props.disabled || props.inputDisabled}
-            placeholder={props.disabledReason || "输入任务，按 Enter 发送"}
+            placeholder={props.disabledReason || (props.home ? "描述你的想法，或用 @ 引用项目文件…" : "继续对话，或用 / 执行命令…")}
             onChange={props.onEditorChange}
             onPasteFiles={handlePaste}
           />
@@ -306,6 +307,7 @@ export default function Composer(props: ComposerProps) {
           </button>
         </div>
       </div>
+      <p className="composer-hint">Enter 发送 · Shift + Enter 换行 · @ 引用文件 · / 使用命令</p>
     </div>
   );
 }

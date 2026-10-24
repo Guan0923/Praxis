@@ -1,12 +1,12 @@
 /* ---------- Chat page ---------- */
 .chat-page {
-  --chat-content-width: 900px;
-  --chat-gutter: 32px;
+  --chat-content-width: 960px;
+  --chat-gutter: 36px;
   flex: 1;
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--surface);
+  background: var(--bg);
 }
 
 /* ---------- Message file references ---------- */
@@ -96,31 +96,120 @@
   min-width: 0;
 }
 
-.welcome {
+/* A single centered task surface replaces the old landing-card layout. */
+.chat-page--home {
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: clamp(24px, 10vh, 100px);
+}
+
+.chat-page--home .trace-toolbar { margin-bottom: auto; }
+.chat-page--home .chat-content { flex: 0 0 auto; min-height: 0; }
+.chat-page--home .chat-scroll { height: auto; overflow: visible; padding: 0; }
+.chat-page--home .chat-scroll-content { min-height: 0; }
+.chat-page--home .composer { flex: 0 0 auto; max-width: 820px; padding-top: 26px; padding-bottom: 0; }
+
+.workbench-welcome {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 44px var(--chat-gutter) 0;
   text-align: center;
-  padding: 12vh 20px 20px;
 }
 
-.logo {
-  font-size: 42px;
-  font-weight: 700;
-  color: var(--accent);
-  letter-spacing: -0.5px;
-}
-
-.welcome-sub {
+.workbench-eyebrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin-bottom: 24px;
   color: var(--muted);
-  margin-top: 12px;
-  font-size: 15px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+}
+
+.workbench-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.workbench-title-dot { color: var(--accent); }
+.workbench-welcome-heading.ant-welcome { justify-content: center; padding: 0; }
+.workbench-welcome-heading .ant-welcome-title {
+  color: var(--text);
+  font-size: clamp(28px, 3.5vw, 46px);
+  font-weight: 550;
+  letter-spacing: -0.055em;
+  line-height: 1.35;
+}
+.workbench-welcome-heading .ant-welcome-description {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+
+.workbench-starters {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 820px;
+  margin: 20px auto auto;
+  padding: 0 var(--chat-gutter);
+}
+.workbench-prompts .ant-prompts-list { justify-content: center; gap: 8px; overflow: visible; }
+.workbench-prompts .ant-prompts-item {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0;
+  border-color: var(--border);
+  border-radius: 24px;
+  background: transparent;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+.workbench-prompts .ant-prompts-item:not(.ant-prompts-item-disabled):hover {
+  border-color: var(--border-strong);
+  background: var(--surface-subtle);
+}
+.workbench-prompts .ant-prompts-label { width: 100%; margin: 0; }
+.workbench-prompt-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 15px;
+  border: 0;
+  border-radius: 24px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.workbench-prompt-button:focus-visible { outline-offset: 3px; }
+.workbench-prompt-button:disabled { cursor: not-allowed; }
+.workbench-prompt-icon { display: flex; color: var(--muted); font-size: 14px; }
+.workbench-prompt-label { color: var(--text); font-size: 12px; font-weight: 450; white-space: nowrap; }
+.workbench-prompt-description { display: none; }
+.workbench-welcome-note { margin: 16px 0 0; color: var(--muted); font-size: 11px; text-align: center; }
+.workbench-user-message.ant-bubble { max-width: 100%; }
+.workbench-user-message .ant-bubble-body { min-width: 0; }
+
+.chat-page--compact.chat-page--home { padding-bottom: 32px; }
+.chat-page--compact .workbench-welcome { padding-top: 36px; }
+
+@media (max-width: 600px) {
+  .workbench-welcome { padding-top: 30px; }
+  .workbench-eyebrow { margin-bottom: 20px; font-size: 9px; }
+  .workbench-starters { margin-top: 16px; }
+  .workbench-prompt-button { min-height: 44px; padding: 8px 12px; }
+  .chat-page--home .composer { padding-top: 22px; }
+  .chat-page--home .composer-hint { display: none; }
 }
 
 .message {
   display: flex;
   gap: 12px;
   max-width: var(--chat-content-width);
-  margin: 0 auto 24px;
+  margin: 0 auto 28px;
   padding: 0 var(--chat-gutter);
-  font-size: 17px;
+  font-size: 15px;
 }
 
 .message.user {
@@ -144,8 +233,8 @@
 
 .message.user .bubble {
   background: var(--user-bubble);
-  border-radius: 8px;
-  padding: 12px 16px;
+  border-radius: 16px 16px 5px 16px;
+  padding: 12px 18px;
   max-width: 100%;
   line-height: 1.6;
   word-break: break-word;
@@ -252,7 +341,7 @@
   padding: 0 0 8px;
   border: 0;
   border-radius: 0;
-  background: var(--surface);
+  background: transparent;
 }
 
 .assistant-name {

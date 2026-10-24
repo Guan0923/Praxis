@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.2",
+    "@ant-design/x": "^2.9.0",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-html": "^6.4.12",
     "@codemirror/lang-javascript": "^6.2.5",

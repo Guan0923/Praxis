@@ -523,6 +523,27 @@ function mockScrollContainer(scrollContainer: HTMLDivElement, metrics: ScrollMet
   return scrollTo;
 }
 
+describe("ChatPage workbench starters", () => {
+  it("inserts a suggestion into the existing editor without creating a session or sending", async () => {
+    const user = userEvent.setup();
+    const onNew = vi.fn();
+    const onRun = vi.fn();
+    render(<AntApp><ChatPage conversation={null} onUpdate={vi.fn()} onNew={onNew} onNavigate={vi.fn()} onRun={onRun} /></AntApp>);
+    const editor = screen.getByRole("textbox");
+    expect(editor.closest(".chat-page")).toHaveClass("chat-page--home");
+    const starters = screen.getByRole("button", { name: /了解项目/ }).closest(".workbench-starters")!;
+    expect(editor.compareDocumentPosition(starters) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.click(editor);
+    await user.keyboard("现有草稿：");
+    await user.click(screen.getByRole("button", { name: /了解项目/ }));
+    await waitFor(() => expect(editor).toHaveTextContent("现有草稿：请先阅读当前项目"));
+    await waitFor(() => expect(editor).toHaveFocus());
+    expect(onNew).not.toHaveBeenCalled();
+    expect(onRun).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
+  });
+});
+
 describe("ChatPage bottom anchoring", () => {
   it("shows the return button only beyond the 24px bottom threshold and scrolls smoothly on click", () => {
     render(<ScrollHarness messages={[scrollMessage("assistant-1", "assistant", "answer")]} />);

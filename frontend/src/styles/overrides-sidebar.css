@@ -21,58 +21,358 @@
   border-bottom: 1px solid var(--border);
 }
 
-.app-sidebar {
-  color: var(--text);
-}
-
-.sidebar-create-button.ant-btn {
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  color: var(--text) !important;
-  background: var(--surface) !important;
-  border-color: var(--border) !important;
-  min-height: 40px;
+.app-sidebar .icon-action,
+.icon-action {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 7px;
   border-radius: 8px;
-  box-shadow: none !important;
-  transition: color 350ms ease, border-color 350ms ease;
 }
 
-.sidebar-create-button.ant-btn-text {
-  justify-content: flex-start;
-  background: transparent !important;
-  border-color: transparent !important;
+.message-actions .icon-action {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 7px;
+  border: 0;
 }
 
-.sidebar-utility-links > .ant-btn {
-  grid-row: 1;
+.message-actions .icon-action:hover,
+.message-actions .icon-action:focus-visible {
+  border: 0;
+  background: var(--accent-soft);
+  color: var(--accent-dark);
 }
 
-.sidebar-utility-links .sidebar-create-button {
-  justify-content: flex-start;
+/* Navigation rail + workspace explorer share the existing 280px Sider. */
+.app-sidebar {
+  height: 100%;
+  min-height: 0;
+  color: var(--text);
+  background: var(--sidebar-bg, var(--surface));
+  font-size: 12px;
 }
 
-.sidebar-create-button.ant-btn::before {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  display: block;
+.app-sidebar .sidebar-reveal-shell {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.app-sidebar--collapsed .sidebar-reveal-shell { grid-template-columns: 54px; }
+.sidebar-workspace-explorer[hidden] { display: none; }
+
+.app-sidebar .sidebar-reveal-item {
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.sidebar-nav-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-height: 0;
+  padding: 16px 0 12px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.sidebar-brand-mark {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 15px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 10px;
+}
+
+.sidebar-brand-mark svg {
+  width: 30px;
+  height: 30px;
+}
+
+.app-sidebar .sidebar-rail-action.ant-btn,
+.app-sidebar .profile-trigger.ant-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--muted);
+  border: 0;
+  border-radius: 9px;
+  box-shadow: none;
+  font-size: 17px;
+}
+
+.app-sidebar .sidebar-rail-action.ant-btn:not(:disabled):hover,
+.app-sidebar .profile-trigger.ant-btn:not(:disabled):hover {
+  color: var(--text);
   background: var(--hover);
-  content: "";
-  pointer-events: none;
-  transform: scaleX(0);
-  transform-origin: left center;
-  transition: transform 350ms ease;
 }
 
-.sidebar-create-button.ant-btn:not(:disabled):hover::before {
-  transform: scaleX(1);
-  transform-origin: left center;
+.app-sidebar .sidebar-rail-action.sidebar-nav-active {
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
-.sidebar-create-button.ant-btn > * {
-  position: relative;
-  z-index: 1;
+.sidebar-utility-section {
+  margin-top: auto;
+  padding-top: 20px;
+}
+
+.sidebar-utility-links {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-utility-badge .ant-badge-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  color: var(--text);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--surface);
+  font-size: 9px;
+  line-height: 16px;
+}
+
+.sidebar-footer {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-profile-row {
+  display: flex;
+}
+
+/* Preserve the shared profile editor and accessible name without a rail text row. */
+.app-sidebar .sidebar-nav-rail .profile-trigger-label-viewport {
+  position: absolute;
+  flex: 0 0 auto;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.sidebar-workspace-explorer {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 19px 10px 0;
+}
+
+.app-sidebar .sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 40px;
+  margin-bottom: 18px;
+  padding: 0 3px;
+}
+
+.sidebar-workbench-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sidebar-workbench-caption {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+}
+
+.app-sidebar .sidebar-project-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.app-sidebar .sidebar-collapse-button.ant-btn,
+.app-sidebar .sidebar-section-heading > .ant-btn {
+  color: var(--muted);
+}
+
+.sidebar-primary-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding-bottom: 20px;
+}
+
+.app-sidebar .sidebar-create-button.ant-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 6px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: none;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.app-sidebar .sidebar-create-button.ant-btn:first-child {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.app-sidebar .sidebar-create-button.ant-btn:not(:disabled):hover {
+  color: var(--accent);
+  background: var(--hover);
+  border-color: var(--accent);
+}
+
+.sidebar-history-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  padding-bottom: 16px;
+}
+
+.sidebar-project-history {
+  margin-bottom: 18px;
+}
+
+.sidebar-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  margin-bottom: 5px;
+}
+
+.app-sidebar .sidebar-section-toggle.ant-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  height: 28px;
+  padding: 3px 5px;
+  border-radius: 5px;
+}
+
+.sidebar-section-toggle .ant-typography {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.sidebar-section-toggle .anticon {
+  font-size: 9px;
+}
+
+.app-sidebar .project-history-list .ant-collapse {
+  background: transparent;
+  border: 0;
+}
+
+.app-sidebar .project-history-list .ant-collapse-item {
+  border: 0;
+  margin-bottom: 4px;
+}
+
+.app-sidebar .project-history-list .ant-collapse-header {
+  align-items: center;
+  gap: 2px;
+  min-height: 32px;
+  padding: 2px 0 2px 3px;
+  border-radius: 5px;
+}
+
+.app-sidebar .project-history-list .ant-collapse-header:hover {
+  background: var(--hover);
+}
+
+.app-sidebar .project-history-list .ant-collapse-expand-icon {
+  height: auto;
+  padding-inline-end: 3px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.app-sidebar .project-history-list .ant-collapse-title,
+.app-sidebar .project-history-list .ant-collapse-header-text {
+  min-width: 0;
+}
+
+.sidebar-project-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.sidebar-project-icon {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.sidebar-project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-project-warning {
+  color: var(--accent);
+}
+
+.sidebar-project-actions {
+  display: inline-flex;
+  align-items: center;
+}
+
+.app-sidebar .sidebar-project-actions .ant-btn {
+  width: 24px;
+  min-width: 24px;
+  height: 28px;
+  padding: 0;
+  color: var(--muted);
+  border-radius: 5px;
+  font-size: 11px;
+}
+
+.app-sidebar .project-history-list .ant-collapse-content {
+  background: transparent;
+  border: 0;
+}
+
+.app-sidebar .project-history-list .ant-collapse-content-box,
+.app-sidebar .project-history-list .ant-collapse-body {
+  margin-left: 10px;
+  padding: 2px 0 3px 5px;
+  border-left: 1px solid var(--border);
 }
 
 .history-list {
@@ -94,17 +394,54 @@
 .history-item {
   display: flex;
   align-items: stretch;
-  gap: 2px;
   width: 100%;
   min-width: 0;
+  border-radius: 5px;
   cursor: grab;
   touch-action: manipulation;
 }
 
-.history-list-item:focus-visible .history-item {
-  outline: 2px solid var(--brand);
-  outline-offset: 1px;
-  border-radius: 8px;
+.app-sidebar .history-item:hover,
+.app-sidebar .history-item:focus-within {
+  background: var(--hover);
+}
+
+.app-sidebar .history-item:has(.history-entry-button.selected) {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 var(--accent);
+}
+
+.app-sidebar .history-entry-button.ant-btn {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 0;
+  min-width: 0;
+  min-height: 42px;
+  height: auto;
+  padding: 5px 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text);
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+  font-size: 11px;
+  line-height: 1.5;
+  font-weight: 400;
+  cursor: grab;
+}
+
+.app-sidebar .history-entry-button.ant-btn:not(:disabled):hover {
+  color: var(--text);
+  background: transparent;
+}
+
+.app-sidebar .history-entry-button.selected,
+.app-sidebar .history-entry-button.selected:not(:disabled):hover {
+  color: var(--accent);
 }
 
 .history-list-item.is-dragging .history-item,
@@ -112,38 +449,18 @@
   cursor: grabbing;
 }
 
-.history-entry-button {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: flex-start;
-  justify-content: flex-start;
-  min-width: 0;
-  min-height: 42px;
-  width: auto;
-  padding: 5px 8px;
-  overflow: hidden;
-  text-align: left;
-  cursor: grab;
-}
-
-.sidebar-section-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 32px;
-  margin: 8px 4px 4px 8px;
-}
-
-.history-entry-button.selected {
-  background: var(--accent-soft);
-}
-
 .history-entry-icon {
   display: flex;
-  flex: 0 0 18px;
+  flex: 0 0 13px;
   align-items: center;
-  min-height: 31px;
-  margin-right: 7px;
+  min-height: 17px;
+  margin: 1px 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.history-entry-button.selected .history-entry-icon {
+  color: var(--accent);
 }
 
 .history-entry-copy {
@@ -184,41 +501,61 @@
 
 .history-meta {
   color: var(--muted);
-  font-size: 11px;
-  line-height: 1.25;
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.4;
   white-space: nowrap;
 }
 
 .history-actions {
   display: flex;
-  flex: 0 0 32px;
+  flex: 0 0 26px;
   align-items: center;
 }
 
-.history-actions .icon-action {
-  min-width: 32px;
-  min-height: 32px;
-  padding: 0 7px;
+.app-sidebar .history-actions .icon-action {
+  min-width: 26px;
+  min-height: 28px;
+  width: 26px;
+  height: 28px;
+  padding: 0;
+  color: var(--muted);
 }
 
-.app-sidebar .icon-action,
-.icon-action {
-  min-width: 32px;
-  min-height: 32px;
-  padding: 0 7px;
-  border-radius: 8px;
+.app-sidebar .ant-empty {
+  margin: 12px 4px 16px;
+  color: var(--muted);
 }
 
-.message-actions .icon-action {
-  min-width: 32px;
-  min-height: 32px;
-  padding: 0 7px;
-  border: 0;
+.app-sidebar .ant-empty-image {
+  height: 24px;
+  margin-bottom: 4px;
+  opacity: 0.65;
 }
 
-.message-actions .icon-action:hover,
-.message-actions .icon-action:focus-visible {
-  border: 0;
-  background: var(--accent-soft);
-  color: var(--accent-dark);
+.app-sidebar .ant-empty-description {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.app-sidebar .ant-btn:focus-visible,
+.app-sidebar .ant-collapse-header:focus-visible,
+.app-sidebar .history-list-item:focus-visible .history-item {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar *,
+  .app-sidebar *::before,
+  .app-sidebar *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .app-sidebar .history-summary-viewport.is-scrolling .history-summary-text {
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }

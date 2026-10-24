@@ -18,6 +18,7 @@ import {
 } from "../../commands/completion";
 import { fileKeyAction } from "../../commands/fileCompletion";
 import Composer from "./Composer";
+import { WorkbenchStarters } from "./WorkbenchWelcome";
 import { latestTodoList } from "./todoPanel";
 import { messagesBeforeRewind, projectTurnPath, pruneTurnDescendants } from "../../app/runtime/runtimeDetailProjection";
 import { isRuntimeTurnNode } from "../../app/runtime/runtimeNodeNormalization";
@@ -684,13 +685,12 @@ export default function ChatPage({
   return (
     <ViewStateContext.Provider value={savedKey}>
     <ButtonTooltipContext.Provider value={showButtonTooltips}>
-    <div ref={chatPageRef} className={`chat-page${compact ? " chat-page--compact" : ""}`}>
+    <div ref={chatPageRef} className={`chat-page${compact ? " chat-page--compact" : ""}${messages.length === 0 && visibleMainView === "chat" ? " chat-page--home" : ""}`}>
       {savedView.error ? <div role="alert" className="chat-state-error">界面状态尚未保存：{savedView.error.message}</div> : null}
       {agentThreadView.streamError ? <div role="alert" className="chat-state-error"><ErrorDisplay error={agentThreadView.streamError} /></div> : null}
-      {currentThreadId ? (
-        <ChatToolbar
+      <ChatToolbar
           visible={hasTurnTree || agentThreadView.isSubagent}
-          currentThreadId={currentThreadId}
+          currentThreadId={currentThreadId ?? ""}
           conversationTitle={conversation?.title || "新对话"}
           compact={compact}
           mainView={visibleMainView}
@@ -703,7 +703,6 @@ export default function ChatPage({
           } : undefined}
           onMainViewChange={setMainView}
         />
-      ) : null}
       {visibleMainView === "trace" ? <TracePage key={currentThreadId} turns={traceTurns} /> : <>
       <div className="chat-content">
         <ChatMessageList
@@ -754,6 +753,7 @@ export default function ChatPage({
         ) : null}
       </div>
       <Composer
+        home={messages.length === 0}
         input={input}
         busy={interactionBusy}
         compact={compact}
@@ -818,6 +818,10 @@ export default function ChatPage({
           }
         }}
       />
+      {messages.length === 0 ? <WorkbenchStarters
+        disabled={sandboxBlocked || projectUnavailable || sessionReadOnly || rewindPending || queuedMessageFlow.takingOutMessage}
+        onSelectPrompt={(prompt) => { editorRef.current?.insertText(prompt); editorRef.current?.focus(); }}
+      /> : null}
       </>}
     </div>
     </ButtonTooltipContext.Provider>

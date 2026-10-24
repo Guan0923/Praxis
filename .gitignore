@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.*.example
 .python-version
 
 # Python bytecode, tooling and test artifacts
@@ -45,6 +46,8 @@ pip-wheel-metadata/
 # JavaScript, Vite and package-manager artifacts
 node_modules/
 .vite/
+.vite-temp/
+.vitest/
 .cache/
 .npm/
 .npm-cache/
@@ -63,7 +66,8 @@ playwright-report/
 test-results/
 blob-report/
 playwright/.cache/
-frontend/.review-*.png
+/frontend/.review-*.png
+/frontend/.screenshots/
 
 # Local databases, runtime state and logs
 *.db
@@ -71,6 +75,7 @@ frontend/.review-*.png
 *.sqlite
 *.sqlite-*
 *.sqlite3
+*.sqlite3-*
 *.log
 *.jsonl
 logs/

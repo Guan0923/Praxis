@@ -27,6 +27,8 @@ vi.mock("../api", async (importOriginal) => ({
 vi.mock("../components/AppSidebar", () => ({
   default: (props: { collapsed?: boolean; onToggleCollapse?: () => void; onNew?: () => Promise<string>; onOpenSettings?: () => void }) => (
     <div data-testid="mock-sidebar">
+      <nav aria-label="工作台导航"><button type="button" aria-label="对话工作台" aria-expanded={!props.collapsed} onClick={props.onToggleCollapse}>对话</button></nav>
+      <section hidden={props.collapsed}>工作空间</section>
       {!props.collapsed ? <button type="button" aria-label="折叠侧边栏" onClick={props.onToggleCollapse}>侧边栏</button> : null}
       <button type="button" aria-label="测试新建对话" onClick={() => void props.onNew?.()}>新建</button>
       <button type="button" onClick={props.onOpenSettings}>用户设置</button>
@@ -141,7 +143,7 @@ describe("AgentShell sidebar collapse", () => {
     await waitFor(() => expect(props.onNew).toHaveBeenCalledTimes(1));
   });
 
-  it("collapses the desktop sidebar to zero width and restores it", () => {
+  it("collapses only the explorer to a 54px rail and restores it through the rail chat button", () => {
     const { container } = render(<AgentShell {...makeProps()} />);
     const sider = container.querySelector(".ant-layout-sider");
 
@@ -151,10 +153,15 @@ describe("AgentShell sidebar collapse", () => {
 
     expect(container.querySelector(".app-shell--sidebar-collapsed")).toBeInTheDocument();
     expect(container.querySelector(".ant-layout-sider")).toHaveClass("ant-layout-sider-collapsed");
-    expect(screen.getByRole("button", { name: "展开侧边栏" })).toBeInTheDocument();
+    expect(sider).toHaveStyle({ width: "54px" });
+    expect(screen.getByRole("navigation", { name: "工作台导航" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "对话工作台" })).toHaveAttribute("aria-expanded", "false");
+    expect(container.querySelector(".sidebar-reopen-button")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "展开侧边栏" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "展开侧边栏" }));
+    fireEvent.click(screen.getByRole("button", { name: "对话工作台" }));
     expect(container.querySelector(".app-shell--sidebar-collapsed")).not.toBeInTheDocument();
+    expect(sider).toHaveStyle({ width: "280px" });
   });
 
   it("does not persist collapse state in browser storage", () => {

@@ -5,12 +5,12 @@ export const systemFontStack =
   '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
 
 const light = {
-  accent: "#262626", "accent-dark": "#444444", "on-accent": "#ffffff",
-  bg: "#f7f7f7", surface: "#ffffff", "sidebar-bg": "#f7f7f7",
-  border: "#e3e3e3", "border-strong": "#c8c8c8", text: "#242424", muted: "#707070",
-  disabled: "#999999", selected: "#eaeaea", hover: "#f0f0f0", "surface-subtle": "#f5f5f5",
-  "user-bubble": "#f1f1f1", focus: "#595959", "accent-soft": "#ededed",
-  "accent-border": "#b7b7b7", "accent-glow": "rgba(38, 38, 38, 0.16)",
+  accent: "#a84421", "accent-dark": "#8c361a", "on-accent": "#ffffff",
+  bg: "#ffffff", surface: "#ffffff", "sidebar-bg": "#ffffff",
+  border: "#e7e7e7", "border-strong": "#c9c9c9", text: "#252525", muted: "#676767",
+  disabled: "#979797", selected: "#ededed", hover: "#f3f3f3", "surface-subtle": "#f7f7f7",
+  "user-bubble": "#f1f1f1", focus: "#a84421", "accent-soft": "#f6e9e1",
+  "accent-border": "#dfbca9", "accent-glow": "rgba(168, 68, 33, 0.10)",
   success: "#16803d", "success-bg": "#edf8f0", warning: "#a96408",
   error: "#c52b32", "error-bg": "#fff1f0", "error-border": "#efb7b9",
   info: "#246899", "info-bg": "#edf5fa", "info-border": "#b5d3e6",
@@ -22,16 +22,16 @@ const light = {
 export const palettes: Record<AppearanceMode, typeof light> = {
   light,
   dark: {
-    accent: "#aad9bc", "accent-dark": "#c2e8cf", "on-accent": "#18271d",
-    bg: "#191a1b", surface: "#202122", "sidebar-bg": "#191a1b",
-    border: "#383a3b", "border-strong": "#535657", text: "#e5e5e5", muted: "#a3a5a6",
-    disabled: "#737779", selected: "#303334", hover: "#2b2d2e", "surface-subtle": "#27292a",
-    "user-bubble": "#2e3031", focus: "#aad9bc", "accent-soft": "#293c30",
-    "accent-border": "#587761", "accent-glow": "rgba(170, 217, 188, 0.18)",
+    accent: "#e9a07d", "accent-dark": "#f2ba9d", "on-accent": "#2a1911",
+    bg: "#1c1c1a", surface: "#262623", "sidebar-bg": "#171715",
+    border: "#3b3b35", "border-strong": "#59584e", text: "#efeee8", muted: "#aeaba1",
+    disabled: "#78766d", selected: "#36362f", hover: "#2d2d28", "surface-subtle": "#30302a",
+    "user-bubble": "#33332c", focus: "#e9a07d", "accent-soft": "#3b2b23",
+    "accent-border": "#7b5743", "accent-glow": "rgba(233, 160, 125, 0.12)",
     success: "#87d9a2", "success-bg": "#233a2c", warning: "#ecc17c",
     error: "#ff9da1", "error-bg": "#40272a", "error-border": "#79464b",
     info: "#96c9ed", "info-bg": "#273640", "info-border": "#496879",
-    "surface-overlay": "rgba(32, 33, 34, 0.96)",
+    "surface-overlay": "rgba(38, 38, 35, 0.96)",
     shadow: "rgba(0, 0, 0, 0.28)", "shadow-soft": "rgba(0, 0, 0, 0.18)",
     "shadow-strong": "rgba(0, 0, 0, 0.4)", "shimmer-highlight": "#e5e5e5",
   },
@@ -57,7 +57,8 @@ export function appearanceTheme(mode: AppearanceMode): ThemeConfig {
       colorBgBase: p.surface, colorBgLayout: p.bg, colorBgContainer: p.surface,
       colorBgElevated: p.surface, colorBorder: p.border, colorBorderSecondary: p.border,
       controlItemBgActive: p.selected, controlItemBgHover: p.hover,
-      borderRadius: 10, fontFamily: systemFontStack,
+      borderRadius: 10, controlHeight: 34, fontFamily: systemFontStack,
+      fontSize: 14, wireframe: false,
     },
   };
 }

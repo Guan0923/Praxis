@@ -1,6 +1,7 @@
 import { ErrorDisplay } from "../../components/ErrorDisplay";
 import { LeftOutlined, ReloadOutlined, RightOutlined } from "@ant-design/icons";
 import { Button, Input } from "antd";
+import Bubble from "@ant-design/x/es/bubble";
 import type { TextAreaRef } from "antd/es/input/TextArea";
 import type { MouseEvent as ReactMouseEvent, RefObject, UIEventHandler, WheelEventHandler } from "react";
 import MarkdownContent from "../../components/MarkdownContent";
@@ -11,6 +12,7 @@ import { AssistantMessage, MessageActions, MessageReferenceChip } from "./messag
 import { ChatViewportProvider, VirtualBlock } from "./ChatViewport";
 import { useLatestCallback } from "./useLatestCallback";
 import { memo } from "react";
+import WorkbenchWelcome from "./WorkbenchWelcome";
 
 interface ChatMessageListProps {
   messages: ChatMessage[];
@@ -92,10 +94,7 @@ function MessageList({
       <div className="chat-scroll-content">
         <div className="chat-messages">
           {messages.length === 0 ? (
-            <div className="welcome">
-              <div className="logo">Praxis</div>
-              <p className="welcome-sub">向你的智能体提问，它会调用文件、Shell、Web 等工具完成任务</p>
-            </div>
+            <WorkbenchWelcome heroOnly />
           ) : messages.map((message) => {
             const version = message.role === "user" ? messageVersion(message) : undefined;
             return message.role === "user" ? (
@@ -187,11 +186,14 @@ const UserMessage = memo(function UserMessage({
             </div>
           </div>
         ) : (
-          <div
-            className="bubble user-bubble"
+          <Bubble
+            className="workbench-user-message"
+            classNames={{ content: "bubble user-bubble" }}
+            placement="end"
+            variant="filled"
             onClick={(event) => handleUserBubbleClick(event, message)}
             title={canEdit && !interactionBusy ? "点击编辑此消息" : undefined}
-          >
+            content={<>
             {message.approvedPlanHandoff ? <span className="plan-handoff-summary">已批准计划，开始实施</span> : <MarkdownContent text={message.content} />}
             {message.references && message.references.length > 0 ? (
               <div className="message-references" aria-label="消息引用">
@@ -207,7 +209,8 @@ const UserMessage = memo(function UserMessage({
                 <Button type="text" size="small" icon={<ReloadOutlined />} title="重试发送" aria-label="重试发送" disabled={interactionBusy} onClick={(event) => { event.stopPropagation(); onRetrySend?.(message); }} />
               </span>
             ) : null}
-          </div>
+            </>}
+          />
         )}
         {editingMessageId !== message.id ? (
           <MessageTools

@@ -1,6 +1,8 @@
 # Praxis Web
 
-`praxis-web` 是 Praxis 的 React 18、Vite 5、TypeScript 本地客户端。它只通过 HTTP/SSE 调用本机 backend，不直接访问 Python 实现或本地数据库。
+`praxis-web` 是 Praxis 的 React 18、Vite 5、TypeScript 本地客户端，使用 Ant Design 6 与 Ant Design X 2 构建本地 Agent 工作台。它只通过 HTTP/SSE 调用本机 backend，不直接访问 Python 实现或本地数据库。
+
+工作台浅色模式使用纯白背景与中性灰，深色模式保留暖灰，使用陶土强调色及双区导航轨/工作空间侧栏；桌面折叠只收起工作空间，54px 导航轨始终保留，点击轨道对话图标可重新展开；新会话以居中任务输入为主，轻量起始建议位于输入框下方，进入对话后切回固定底部输入。Ant Design X 提供欢迎区、建议和用户消息气泡，建议只填入草稿，确认后才发送。Composer 保留 Lexical 文件引用编辑器、上传、命令补全与队列语义，不接入 X 的模型请求或会话状态管理。
 
 应用包含 Chat、Turn 运行状态、项目与对话管理、本地设置、文件引用和 Benchmark 页面；访问 `/` 直接进入 Chat，不包含登录、注册、设备授权或云同步页面。
 

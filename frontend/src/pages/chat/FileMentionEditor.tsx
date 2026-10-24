@@ -274,7 +274,7 @@ function EditorBridge({ handleRef, disabled, placeholder, onChange, onPasteFiles
   const changeRef = useRef<FileMentionChange | null>(null);
 
   useImperativeHandle(handleRef, () => ({
-    focus: () => editor.focus(),
+    focus: () => { contentEditableRef.current?.focus(); editor.focus(); },
     clear: () => editor.update(() => {
       const root = $getRoot();
       root.clear();

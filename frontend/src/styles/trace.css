@@ -14,12 +14,27 @@
   min-width: 0;
   margin: 0 auto;
   gap: 12px;
-  min-height: 56px;
-  padding: 8px var(--chat-gutter);
+  min-height: 60px;
+  padding: 12px 28px;
   padding-right: 56px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  border-bottom: 0;
+  background: var(--bg);
 }
+
+.chat-toolbar-breadcrumb {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.chat-toolbar-workspace { flex: 0 0 auto; color: var(--muted); font-size: 12px; }
+.chat-toolbar-breadcrumb > .anticon { color: var(--muted); font-size: 8px; }
+.chat-toolbar-local { display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0; color: var(--muted); font-size: 9px; letter-spacing: 0.12em; }
+.chat-toolbar-local > span { width: 5px; height: 5px; background: var(--success); border-radius: 50%; }
+.chat-page--compact .chat-toolbar-workspace,
+.chat-page--compact .chat-toolbar-breadcrumb > .anticon { display: none; }
+.chat-page--compact .trace-toolbar { padding-inline: 16px; }
 
 .chat-toolbar-actions {
   display: flex;
@@ -38,6 +53,8 @@
 
 .trace-toolbar .ant-btn[aria-pressed="true"] {
   color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 8px;
   font-weight: 600;
 }
 
@@ -61,10 +78,6 @@
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.app-shell--sidebar-collapsed .trace-toolbar {
-  padding-left: 60px;
 }
 
 .agent-thread-popover {

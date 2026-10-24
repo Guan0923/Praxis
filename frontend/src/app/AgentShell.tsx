@@ -273,10 +273,9 @@ export default function AgentShell(props: AgentShellProps) {
   const rightPanel = <RightPanel active={props.page === "chat" && panelOpen} controller={panel} sourceAvailable={sourceAvailable} terminalAvailable={terminalAvailable} terminalReason={terminalReason} renderSideChat={renderSideChat} />;
   return (
     <Layout className={`app-shell${sidebarCollapsed && !isMobile ? " app-shell--sidebar-collapsed" : ""}`} style={{ minHeight: "100vh", height: "100vh" }}>
-      {!isMobile && <Layout.Sider id="chat-sidebar" width={280} collapsed={sidebarCollapsed} collapsedWidth={0} trigger={null} style={{ background: "var(--sidebar-bg)", borderRight: "1px solid var(--border)", zIndex: 1 }}>{sidebar}</Layout.Sider>}
+      {!isMobile && <Layout.Sider id="chat-sidebar" width={280} collapsed={sidebarCollapsed} collapsedWidth={54} trigger={null} style={{ background: "var(--sidebar-bg)", borderRight: "1px solid var(--border)", zIndex: 1 }}>{sidebar}</Layout.Sider>}
       {isMobile && <Drawer title="会话列表" placement="left" size={280} open={mobileSidebarOpen} onClose={closeMobile} styles={{ body: { padding: 0 } }}>{sidebar}</Drawer>}
       <Layout style={{ minWidth: 0, minHeight: 0 }}>
-        {sidebarCollapsed && !isMobile ? <Button className="sidebar-reopen-button" type="default" size="small" onClick={() => setSidebarCollapsed(false)} aria-label="展开侧边栏" aria-expanded={false} aria-controls="chat-sidebar" icon={<MenuOutlined />} /> : null}
         {isMobile && <div className="mobile-sidebar-bar"><Button type="text" icon={<MenuOutlined />} onClick={() => setMobileSidebarOpen(true)} aria-label="打开会话列表">会话列表</Button></div>}
         <Layout.Content className="main" style={{ minHeight: 0 }}>
           {props.synchronized === false ? <div role="status" className="sync-status">正在同步后端状态</div> : null}

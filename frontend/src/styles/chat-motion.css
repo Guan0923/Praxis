@@ -137,29 +137,6 @@
   will-change: auto;
 }
 
-.sidebar-reopen-button {
-  position: fixed;
-  top: 14px;
-  left: 14px;
-  z-index: 30;
-  min-width: 34px;
-  min-height: 34px;
-  border-color: var(--border);
-  border-radius: 10px;
-  box-shadow: 0 4px 14px var(--shadow);
-}
-
-.sidebar-reopen-button:hover,
-.sidebar-reopen-button:focus-visible {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.app-shell--sidebar-collapsed > .ant-layout {
-  width: 100%;
-  min-width: 0;
-}
-
 .app-shell--sidebar-collapsed .chat-page,
 .app-shell--sidebar-collapsed .chat-content,
 .app-shell--sidebar-collapsed .chat-scroll,
@@ -185,10 +162,6 @@
 }
 
 @media (max-width: 767px) {
-  .sidebar-reopen-button {
-    display: none;
-  }
-
   .sidebar-header {
     margin-bottom: 12px;
   }

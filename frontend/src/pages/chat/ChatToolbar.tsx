@@ -1,4 +1,4 @@
-import { BranchesOutlined, CommentOutlined, NodeIndexOutlined } from "@ant-design/icons";
+import { BranchesOutlined, CommentOutlined, NodeIndexOutlined, RightOutlined } from "@ant-design/icons";
 import { Button, Dropdown, Tooltip } from "antd";
 import AgentThreadPicker from "./AgentThreadPicker";
 import { useState } from "react";
@@ -38,7 +38,11 @@ export function ChatToolbar({
   const [menuOpen, setMenuOpen] = useState(false);
   return (
     <header className="trace-toolbar">
-      <span className="chat-toolbar-title" title={conversationTitle}>{conversationTitle}</span>
+      <div className="chat-toolbar-breadcrumb">
+        <span className="chat-toolbar-workspace">工作台</span>
+        <RightOutlined aria-hidden="true" />
+        <span className="chat-toolbar-title" title={conversationTitle}>{conversationTitle}</span>
+      </div>
       {visible ? <nav className="chat-toolbar-actions" aria-label="主内容视图">
       {agentThread ? (
         <AgentThreadPicker
@@ -71,7 +75,7 @@ export function ChatToolbar({
         <Button
           type="text"
           aria-label="Chat"
-          icon={compact ? <CommentOutlined /> : undefined}
+          icon={<CommentOutlined />}
           aria-pressed={mainView === "chat"}
           onClick={() => onMainViewChange("chat")}
         >
@@ -82,14 +86,14 @@ export function ChatToolbar({
         <Button
           type="text"
           aria-label="Trace"
-          icon={compact ? <NodeIndexOutlined /> : undefined}
+          icon={<NodeIndexOutlined />}
           aria-pressed={mainView === "trace"}
           onClick={() => onMainViewChange("trace")}
         >
           {compact ? null : "Trace"}
         </Button>
       </Tooltip>
-      </nav> : null}
+      </nav> : <span className="chat-toolbar-local"><span /> LOCAL SESSION</span>}
     </header>
   );
 }
